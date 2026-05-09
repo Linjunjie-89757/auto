@@ -1,0 +1,171 @@
+package com.company.autoplatform.casecenter;
+
+import com.company.autoplatform.ai.AiCaseService;
+import com.company.autoplatform.ai.AiReviewResult;
+import com.company.autoplatform.common.ApiResponse;
+import com.company.autoplatform.common.PageResponse;
+import com.company.autoplatform.workspace.WorkspaceScope;
+import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/cases")
+public class CaseController {
+
+    private final CaseService caseService;
+    private final AiCaseService aiCaseService;
+
+    public CaseController(CaseService caseService, AiCaseService aiCaseService) {
+        this.caseService = caseService;
+        this.aiCaseService = aiCaseService;
+    }
+
+    @GetMapping
+    public ApiResponse<PageResponse<CaseSummaryResponse>> listCases(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestParam(value = "pageNo", required = false) Integer pageNo,
+            @RequestParam(value = "pageSize", required = false) Integer pageSize,
+            @RequestParam(value = "directoryId", required = false) Long directoryId
+    ) {
+        return ApiResponse.ok(caseService.listCases(workspaceCode, pageNo, pageSize, directoryId));
+    }
+
+    @GetMapping("/directories")
+    public ApiResponse<List<CaseDirectoryWorkspaceResponse>> listDirectories(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(caseService.listDirectories(workspaceCode));
+    }
+
+    @GetMapping("/{id}")
+    public ApiResponse<CaseDetailResponse> getCase(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(caseService.getCase(id, workspaceCode));
+    }
+
+    @PostMapping
+    public ApiResponse<CaseSummaryResponse> createCase(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody CreateCaseRequest request
+    ) {
+        return ApiResponse.ok(caseService.createCase(workspaceCode, request), "用例创建成功");
+    }
+
+    @PostMapping("/directories")
+    public ApiResponse<CaseDirectoryNodeResponse> createDirectory(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody CreateCaseDirectoryRequest request
+    ) {
+        return ApiResponse.ok(caseService.createDirectory(workspaceCode, request), "目录创建成功");
+    }
+
+    @PutMapping("/{id}")
+    public ApiResponse<CaseSummaryResponse> updateCase(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody CreateCaseRequest request
+    ) {
+        return ApiResponse.ok(caseService.updateCase(id, workspaceCode, request), "用例更新成功");
+    }
+
+    @PutMapping("/directories/{id}")
+    public ApiResponse<CaseDirectoryNodeResponse> renameDirectory(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody RenameCaseDirectoryRequest request
+    ) {
+        return ApiResponse.ok(caseService.renameDirectory(id, workspaceCode, request), "目录更新成功");
+    }
+
+    @PostMapping("/directories/{id}/move")
+    public ApiResponse<CaseDirectoryNodeResponse> moveDirectory(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestBody MoveCaseDirectoryRequest request
+    ) {
+        return ApiResponse.ok(caseService.moveDirectory(id, workspaceCode, request), "目录移动成功");
+    }
+
+    @PostMapping("/{id}/review")
+    public ApiResponse<CaseDetailResponse> reviewCase(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody ReviewCaseRequest request
+    ) {
+        return ApiResponse.ok(caseService.reviewCase(id, workspaceCode, request), "用例评审已更新");
+    }
+
+    @PostMapping("/{id}/ai-review")
+    public ApiResponse<AiReviewResult> aiReviewCase(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        CaseDetailResponse detail = caseService.getCase(id, workspaceCode);
+        return ApiResponse.ok(aiCaseService.reviewSavedCase(workspaceCode, detail), "AI 用例评审已完成");
+    }
+
+    @PostMapping("/{id}/execute")
+    public ApiResponse<CaseDetailResponse> executeCase(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody ExecuteCaseRequest request
+    ) {
+        return ApiResponse.ok(caseService.executeCase(id, workspaceCode, request), "用例执行结果已更新");
+    }
+
+    @PostMapping("/batch/move")
+    public ApiResponse<PageResponse<CaseSummaryResponse>> batchMoveCases(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody BatchMoveCasesRequest request
+    ) {
+        return ApiResponse.ok(caseService.batchMoveCases(workspaceCode, request), "批量移动成功");
+    }
+
+    @PostMapping("/batch/update")
+    public ApiResponse<PageResponse<CaseSummaryResponse>> batchUpdateCases(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody BatchUpdateCasesRequest request
+    ) {
+        return ApiResponse.ok(caseService.batchUpdateCases(workspaceCode, request), "批量更新成功");
+    }
+
+    @PostMapping("/batch/delete")
+    public ApiResponse<Void> batchDeleteCases(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody BatchDeleteCasesRequest request
+    ) {
+        caseService.batchDeleteCases(workspaceCode, request);
+        return ApiResponse.ok(null, "批量删除成功");
+    }
+
+    @DeleteMapping("/{id}")
+    public ApiResponse<Void> deleteCase(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        caseService.deleteCase(id, workspaceCode);
+        return ApiResponse.ok(null, "用例删除成功");
+    }
+
+    @DeleteMapping("/directories/{id}")
+    public ApiResponse<Void> deleteDirectory(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        caseService.deleteDirectory(id, workspaceCode);
+        return ApiResponse.ok(null, "目录删除成功");
+    }
+}

@@ -1,0 +1,37 @@
+package com.company.autoplatform.casecenter;
+
+public record CaseDetailResponse(
+        Long id,
+        String caseNo,
+        String title,
+        String caseType,
+        String priority,
+        String sourceType,
+        String status,
+        Long ownerId,
+        String ownerName,
+        String executionStatus,
+        Long executorId,
+        String executorName,
+        String executionComment,
+        String executedAt,
+        String workspaceCode,
+        String workspaceName,
+        Long directoryId,
+        String directoryName,
+        Long createdBy,
+        String createdByName,
+        String createdAt,
+        Long updatedBy,
+        String updatedByName,
+        String updatedAt,
+        String reviewStatus,
+        String reviewComment,
+        Long reviewedBy,
+        String reviewedByName,
+        String reviewedAt,
+        String precondition,
+        String steps,
+        String expectedResult
+) {
+}

@@ -1,0 +1,50 @@
+package com.company.autoplatform.bug;
+
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableName;
+import com.company.autoplatform.common.BaseEntity;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+
+@Data
+@EqualsAndHashCode(callSuper = true)
+@TableName("tb_bug_info")
+public class BugEntity extends BaseEntity {
+
+    @TableField("workspace_id")
+    private Long workspaceId;
+
+    @TableField("bug_no")
+    private String bugNo;
+
+    private String title;
+
+    private String description;
+
+    private String priority;
+
+    private String severity;
+
+    private String status;
+
+    @TableField("source_type")
+    private String sourceType;
+
+    @TableField("assignee_id")
+    private Long assigneeId;
+
+    @TableField("reporter_id")
+    private Long reporterId;
+
+    @TableField("related_case_id")
+    private Long relatedCaseId;
+
+    @TableField("related_report_id")
+    private Long relatedReportId;
+
+    @TableField("related_task_id")
+    private Long relatedTaskId;
+
+    @TableField("tags_json")
+    private String tagsJson;
+}

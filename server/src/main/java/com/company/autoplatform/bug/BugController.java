@@ -1,0 +1,119 @@
+package com.company.autoplatform.bug;
+
+import com.company.autoplatform.common.ApiResponse;
+import com.company.autoplatform.common.PageResponse;
+import com.company.autoplatform.workspace.WorkspaceScope;
+import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api")
+public class BugController {
+
+    private final BugService bugService;
+
+    public BugController(BugService bugService) {
+        this.bugService = bugService;
+    }
+
+    @GetMapping("/bugs")
+    public ApiResponse<PageResponse<BugSummaryResponse>> listBugs(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(bugService.listBugs(workspaceCode));
+    }
+
+    @PostMapping("/bugs")
+    public ApiResponse<BugDetailResponse> createBug(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody CreateBugRequest request
+    ) {
+        return ApiResponse.ok(bugService.createBug(workspaceCode, request, BugSourceType.MANUAL), "缺陷创建成功");
+    }
+
+    @GetMapping("/bugs/{id}")
+    public ApiResponse<BugDetailResponse> getBug(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(bugService.getBug(id, workspaceCode));
+    }
+
+    @PutMapping("/bugs/{id}")
+    public ApiResponse<BugDetailResponse> updateBug(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody UpdateBugRequest request
+    ) {
+        return ApiResponse.ok(bugService.updateBug(id, workspaceCode, request), "缺陷更新成功");
+    }
+
+    @PostMapping("/bugs/{id}/assign")
+    public ApiResponse<BugDetailResponse> assignBug(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody AssignBugRequest request
+    ) {
+        return ApiResponse.ok(bugService.assignBug(id, workspaceCode, request), "负责人更新成功");
+    }
+
+    @PostMapping("/bugs/{id}/transition")
+    public ApiResponse<BugDetailResponse> transitionBug(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody TransitionBugRequest request
+    ) {
+        return ApiResponse.ok(bugService.transitionBug(id, workspaceCode, request), "缺陷状态已流转");
+    }
+
+    @GetMapping("/bugs/{id}/comments")
+    public ApiResponse<List<BugCommentResponse>> listComments(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(bugService.listComments(id, workspaceCode));
+    }
+
+    @PostMapping("/bugs/{id}/comments")
+    public ApiResponse<BugCommentResponse> addComment(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody CreateBugCommentRequest request
+    ) {
+        return ApiResponse.ok(bugService.addComment(id, workspaceCode, request), "评论添加成功");
+    }
+
+    @GetMapping("/bugs/statistics")
+    public ApiResponse<BugStatisticsResponse> statistics(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(bugService.statistics(workspaceCode));
+    }
+
+    @PostMapping("/cases/{id}/bugs")
+    public ApiResponse<BugDetailResponse> createBugFromCase(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody CreateBugRequest request
+    ) {
+        return ApiResponse.ok(bugService.createBugFromCase(id, workspaceCode, request), "已从用例创建缺陷");
+    }
+
+    @PostMapping("/reports/{id}/bugs")
+    public ApiResponse<BugDetailResponse> createBugFromReport(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody CreateBugRequest request
+    ) {
+        return ApiResponse.ok(bugService.createBugFromReport(id, workspaceCode, request), "已从报告创建缺陷");
+    }
+}

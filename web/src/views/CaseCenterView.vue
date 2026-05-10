@@ -12,6 +12,9 @@ const tabMeta: Record<string, { title: string }> = {
   'ai-generate': {
     title: 'AI 用例生成',
   },
+  'ai-records': {
+    title: 'AI 生成用例记录',
+  },
   'ai-config': {
     title: 'AI 配置',
   },
@@ -22,6 +25,9 @@ const activeTab = computed({
     if (route.path.startsWith('/cases/ai-generate')) {
       return 'ai-generate'
     }
+    if (route.path.startsWith('/cases/ai-records')) {
+      return 'ai-records'
+    }
     if (route.path.startsWith('/cases/ai-config')) {
       return 'ai-config'
     }
@@ -31,6 +37,7 @@ const activeTab = computed({
     const pathMap: Record<string, string> = {
       manage: '/cases/manage',
       'ai-generate': '/cases/ai-generate',
+      'ai-records': '/cases/ai-records',
       'ai-config': '/cases/ai-config',
     }
     router.replace({
@@ -55,6 +62,7 @@ const activeMeta = computed(() => tabMeta[activeTab.value] ?? tabMeta.manage)
       <el-tabs v-model="activeTab" class="case-tabs">
         <el-tab-pane label="用例管理" name="manage" />
         <el-tab-pane label="AI 用例生成" name="ai-generate" />
+        <el-tab-pane label="AI 生成用例记录" name="ai-records" />
         <el-tab-pane label="AI 配置" name="ai-config" />
       </el-tabs>
     </div>

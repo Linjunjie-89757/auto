@@ -5,6 +5,8 @@ import DashboardView from '../views/DashboardView.vue'
 import CaseCenterView from '../views/CaseCenterView.vue'
 import CaseAiConfigView from '../views/CaseAiConfigView.vue'
 import CaseAiGenerateView from '../views/CaseAiGenerateView.vue'
+import CaseAiRecordDetailView from '../views/CaseAiRecordDetailView.vue'
+import CaseAiRecordsView from '../views/CaseAiRecordsView.vue'
 import CaseManagementView from '../views/CaseManagementView.vue'
 import AutomationView from '../views/AutomationView.vue'
 import BugManagementView from '../views/BugManagementView.vue'
@@ -51,6 +53,16 @@ const router = createRouter({
           path: 'ai-config',
           name: 'cases-ai-config',
           component: CaseAiConfigView,
+        },
+        {
+          path: 'ai-records',
+          name: 'cases-ai-records',
+          component: CaseAiRecordsView,
+        },
+        {
+          path: 'ai-records/:taskId',
+          name: 'cases-ai-record-detail',
+          component: CaseAiRecordDetailView,
         },
       ],
     },

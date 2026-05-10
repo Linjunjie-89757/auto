@@ -25,9 +25,17 @@ import org.springframework.web.multipart.MultipartFile;
 public class AiCaseController {
 
     private final AiCaseService aiCaseService;
+    private final AiGenerationTaskService aiGenerationTaskService;
+    private final AiGenerationTaskRunner aiGenerationTaskRunner;
 
-    public AiCaseController(AiCaseService aiCaseService) {
+    public AiCaseController(
+            AiCaseService aiCaseService,
+            AiGenerationTaskService aiGenerationTaskService,
+            AiGenerationTaskRunner aiGenerationTaskRunner
+    ) {
         this.aiCaseService = aiCaseService;
+        this.aiGenerationTaskService = aiGenerationTaskService;
+        this.aiGenerationTaskRunner = aiGenerationTaskRunner;
     }
 
     @GetMapping("/config")
@@ -85,6 +93,67 @@ public class AiCaseController {
             @Valid @RequestBody GenerateAiCasesRequest request
     ) {
         return ApiResponse.ok(aiCaseService.generateCases(workspaceCode, request), "AI cases generated");
+    }
+
+    @PostMapping("/tasks")
+    public ApiResponse<AiGenerationTaskResponse> createTask(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody CreateAiGenerationTaskRequest request
+    ) {
+        AiGenerationTaskResponse response = aiGenerationTaskService.createTask(workspaceCode, request);
+        aiGenerationTaskRunner.runTask(response.taskId(), response.workspaceCode());
+        return ApiResponse.ok(response, "AI generation task created");
+    }
+
+    @GetMapping("/tasks")
+    public ApiResponse<java.util.List<AiGenerationTaskResponse>> listTasks(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(aiGenerationTaskService.listTasks(workspaceCode));
+    }
+
+    @GetMapping("/tasks/{taskId}")
+    public ApiResponse<AiGenerationTaskResponse> getTask(
+            @PathVariable String taskId,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(aiGenerationTaskService.getTask(taskId, workspaceCode));
+    }
+
+    @PutMapping("/tasks/{taskId}")
+    public ApiResponse<AiGenerationTaskResponse> updateTask(
+            @PathVariable String taskId,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestBody UpdateAiGenerationTaskRequest request
+    ) {
+        return ApiResponse.ok(aiGenerationTaskService.updateTask(taskId, workspaceCode, request), "AI generation task updated");
+    }
+
+    @DeleteMapping("/tasks/{taskId}")
+    public ApiResponse<Void> deleteTask(
+            @PathVariable String taskId,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        aiGenerationTaskService.deleteTask(taskId, workspaceCode);
+        return ApiResponse.ok(null, "AI generation task deleted");
+    }
+
+    @PostMapping("/tasks/{taskId}/cancel")
+    public ApiResponse<AiGenerationTaskResponse> cancelTask(
+            @PathVariable String taskId,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(aiGenerationTaskService.cancelTask(taskId, workspaceCode), "AI generation task canceled");
+    }
+
+    @PostMapping("/tasks/{taskId}/retry")
+    public ApiResponse<AiGenerationTaskResponse> retryTask(
+            @PathVariable String taskId,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        AiGenerationTaskResponse response = aiGenerationTaskService.retryTask(taskId, workspaceCode);
+        aiGenerationTaskRunner.runTask(response.taskId(), response.workspaceCode());
+        return ApiResponse.ok(response, "AI generation task retried");
     }
 
     @PostMapping("/requirement-import")

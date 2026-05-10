@@ -257,6 +257,57 @@ export interface TestAiCaseConfigResponse {
   message: string
 }
 
+export type AiGenerationOutputMode = 'STREAM' | 'COMPLETE'
+export type AiGenerationTaskStatus = 'PENDING' | 'GENERATING' | 'REVIEWING' | 'COMPLETED' | 'FAILED' | 'CANCELED'
+
+export interface AiGenerationTask {
+  taskId: string
+  workspaceCode: string
+  workspaceName: string
+  requirementTitle: string
+  requirementContent: string
+  outputMode: AiGenerationOutputMode
+  status: AiGenerationTaskStatus
+  currentStep: 1 | 2 | 3 | 4
+  stepMessage: string
+  errorMessage: string | null
+  directoryId: number | null
+  directoryName: string | null
+  provider: string | null
+  model: string | null
+  generatedCount: number
+  savedCaseCount: number
+  warnings: string[]
+  invalidCases: AiInvalidCaseItem[]
+  generatedCases: AiGeneratedCase[]
+  reviewResult: AiReviewResult | null
+  adoptedCaseIndexes: number[]
+  deletedCaseIndexes: number[]
+  cancelRequested: boolean
+  sourceTaskId: string | null
+  createdAt: string | null
+  updatedAt: string | null
+  finishedAt: string | null
+}
+
+export interface CreateAiGenerationTaskPayload {
+  workspaceCode?: string
+  requirementTitle: string
+  requirementContent: string
+  outputMode: AiGenerationOutputMode
+  directoryId?: number | null
+  directoryName?: string | null
+  assetIds?: number[]
+}
+
+export interface UpdateAiGenerationTaskPayload {
+  directoryId?: number | null
+  directoryName?: string | null
+  adoptedCaseIndexes?: number[]
+  deletedCaseIndexes?: number[]
+  savedCaseCount?: number
+}
+
 export interface CaseDirectoryNode {
   id: number
   name: string

@@ -3,6 +3,7 @@ import type {
   AiCaseConfig,
   AiCaseConfigResponse,
   AiCaseConfigSecretResponse,
+  AiGenerationTask,
   AiGenerateResponse,
   AiRequirementAsset,
   ImportRequirementDocumentResponse,
@@ -30,6 +31,7 @@ import type {
   CreateWorkspaceMemberPayload,
   CreateWorkspacePayload,
   CurrentUser,
+  CreateAiGenerationTaskPayload,
   DashboardSummary,
   EnvConfigItem,
   GenerateAiCasesPayload,
@@ -45,6 +47,7 @@ import type {
   TaskItem,
   TaskTransitionPayload,
   TestAiCaseConfigResponse,
+  UpdateAiGenerationTaskPayload,
   MoveCaseDirectoryPayload,
   RenameCaseDirectoryPayload,
   UpdateReportContentPayload,
@@ -250,6 +253,44 @@ export const platformApi = {
       method: 'POST',
       workspaceCode,
       body: JSON.stringify(payload),
+    })
+  },
+  createAiGenerationTask(workspaceCode: string, payload: CreateAiGenerationTaskPayload) {
+    return request<AiGenerationTask>('/cases/ai/tasks', {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  listAiGenerationTasks(workspaceCode: string) {
+    return request<AiGenerationTask[]>('/cases/ai/tasks', { workspaceCode })
+  },
+  getAiGenerationTask(workspaceCode: string, taskId: string) {
+    return request<AiGenerationTask>(`/cases/ai/tasks/${encodeURIComponent(taskId)}`, { workspaceCode })
+  },
+  updateAiGenerationTask(workspaceCode: string, taskId: string, payload: UpdateAiGenerationTaskPayload) {
+    return request<AiGenerationTask>(`/cases/ai/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'PUT',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  deleteAiGenerationTask(workspaceCode: string, taskId: string) {
+    return request<void>(`/cases/ai/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'DELETE',
+      workspaceCode,
+    })
+  },
+  cancelAiGenerationTask(workspaceCode: string, taskId: string) {
+    return request<AiGenerationTask>(`/cases/ai/tasks/${encodeURIComponent(taskId)}/cancel`, {
+      method: 'POST',
+      workspaceCode,
+    })
+  },
+  retryAiGenerationTask(workspaceCode: string, taskId: string) {
+    return request<AiGenerationTask>(`/cases/ai/tasks/${encodeURIComponent(taskId)}/retry`, {
+      method: 'POST',
+      workspaceCode,
     })
   },
   getCaseDetail(workspaceCode: string, id: number) {

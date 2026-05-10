@@ -1,512 +1,351 @@
 ﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { MagicStick, Plus, RefreshRight, Upload } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
-import { platformApi, resolveApiUrl } from '../api/platform'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import {
+  CircleClose,
+  DocumentAdd,
+  MagicStick,
+  RefreshRight,
+  View,
+} from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { platformApi } from '../api/platform'
 import { useCaseCenterShared } from '../composables/useCaseCenterShared'
 import type {
   AiCaseConfig,
-  AiGeneratedCase,
-  AiInvalidCaseItem,
   AiRequirementAsset,
-  AiReviewResult,
   CaseDirectoryNode,
-  CaseDirectoryWorkspace,
-  CreateCasePayload,
 } from '../types/api'
-
-type EditableGeneratedCase = AiGeneratedCase & {
-  selected: boolean
-}
+import type {
+  AiGenerationOutputMode,
+  AiGenerationTaskRecord,
+} from '../utils/caseAiGenerationRecords'
+import {
+  cancelAiGenerationRecord,
+  createAiGenerationRecord,
+  getAiGenerationRecord,
+  listAiGenerationRecords,
+} from '../utils/caseAiGenerationRecords'
 
 type RequirementAssetView = AiRequirementAsset & {
   selected: boolean
 }
 
-type ModuleOption = {
-  value: number | null
+type DirectoryOption = {
+  value: string
   label: string
+  directoryId: number | null
 }
 
-type ReviewExecutionSource = 'AUTO' | 'MANUAL'
-
-const CASE_TYPE_LABELS: Record<string, string> = {
-  FUNCTION: '功能',
-  BOUNDARY: '边界',
-  EXCEPTION: '异常',
-  REGRESSION: '回归',
-}
-
-const REVIEW_RESULT_LABELS: Record<string, string> = {
-  APPROVE: '建议通过',
-  REJECT: '建议驳回',
-  SUGGEST: '建议补充',
-}
-
-type AiGenerateDraft = {
-  activeTab: 'requirement' | 'generate'
-  autoReviewEnabled: boolean
-  selectedWorkspaceCode: string
-  form: {
-    requirementTitle: string
-    requirementContent: string
-    maxCases: number
-    directoryId: number | null
-  }
-  generatedCases: EditableGeneratedCase[]
-  generationWarnings: string[]
-  invalidCases: AiInvalidCaseItem[]
-  aiReviewResult: AiReviewResult | null
-  selectedSuggestions: string[]
-  supplementNotes: string
-  requirementAssets: RequirementAssetView[]
-  generationMeta: {
-    systemMaxCases: number
-    requestedMaxCases: number
-    effectiveMaxCases: number
-    actualGeneratedCount: number
-  }
-  reviewSource: ReviewExecutionSource | null
-}
-
-const AI_GENERATE_DRAFT_STORAGE_PREFIX = 'case-ai-generate-draft-v3'
-const AI_GENERATE_TAB_STORAGE_KEY = 'case-ai-generate-active-tab-v1'
-
+const router = useRouter()
 const { workspaceCode, isAllScope, writableWorkspaces, loadSharedBase } = useCaseCenterShared()
 
 const loadingConfig = ref(false)
 const loadingDirectories = ref(false)
-const generating = ref(false)
-const saving = ref(false)
-const reviewing = ref(false)
-const supplementing = ref(false)
-const regeneratingIndex = ref<number | null>(null)
 const importingRequirement = ref(false)
-const uploadingAssets = ref(false)
-const hydratingDraft = ref(false)
+const generating = ref(false)
+const processDialogVisible = ref(false)
 
 const selectedWorkspaceCode = ref(workspaceCode.value === 'ALL' ? '' : workspaceCode.value)
 const activeConfig = ref<AiCaseConfig | null>(null)
-const generatedCases = ref<EditableGeneratedCase[]>([])
-const generationWarnings = ref<string[]>([])
-const invalidCases = ref<AiInvalidCaseItem[]>([])
-const aiReviewResult = ref<AiReviewResult | null>(null)
-const selectedSuggestions = ref<string[]>([])
-const directoryWorkspace = ref<CaseDirectoryWorkspace | null>(null)
-const moduleOptions = ref<ModuleOption[]>([])
+const reviewerConfig = ref<AiCaseConfig | null>(null)
 const requirementAssets = ref<RequirementAssetView[]>([])
-const requirementFileInput = ref<HTMLInputElement | null>(null)
-const requirementAssetInput = ref<HTMLInputElement | null>(null)
-const detailDrawerVisible = ref(false)
-const reviewDrawerVisible = ref(false)
-const candidateEditDrawerVisible = ref(false)
-const candidateEditIndex = ref<number | null>(null)
-const candidateEditDraft = ref<EditableGeneratedCase | null>(null)
-const autoReviewEnabled = ref(true)
-const lastReviewSource = ref<ReviewExecutionSource | null>(null)
-const lastGenerationProvider = ref('')
-const lastGenerationModel = ref('')
-const lastGenerationWorkspaceName = ref('')
-const lastGenerationRawContent = ref('')
+const latestTaskRecord = ref<AiGenerationTaskRecord | null>(null)
+const manualTaskRecordId = ref('')
+const documentTaskRecordId = ref('')
+const taskRecords = ref<AiGenerationTaskRecord[]>([])
+const uploadedDocument = ref<{
+  fileName: string
+  fileSize: number
+} | null>(null)
+const uploadedRequirementTitle = ref('')
+const uploadedRequirementContent = ref('')
 
-const generationMeta = reactive({
-  systemMaxCases: 0,
-  requestedMaxCases: 0,
-  effectiveMaxCases: 0,
-  actualGeneratedCount: 0,
-})
+const requirementFileInput = ref<HTMLInputElement | null>(null)
+const titleInputRef = ref<HTMLElement | null>(null)
+const textareaFieldRef = ref<HTMLElement | null>(null)
+const uploadPanelBodyRef = ref<HTMLElement | null>(null)
+const uploadBoxOffset = ref(0)
+const uploadBoxHeight = ref(320)
+const directoryOptions = ref<DirectoryOption[]>([])
+const directoryTree = ref<CaseDirectoryNode[]>([])
+const manualDirectoryBasePath = ref('')
+const documentDirectoryBasePath = ref('')
+let syncingManualDirectoryPath = false
+let syncingDocumentDirectoryPath = false
+let layoutObserver: ResizeObserver | null = null
+let taskPollingTimer: number | null = null
 
 const form = reactive({
   requirementTitle: '',
   requirementContent: '',
-  maxCases: 12,
-  directoryId: null as number | null,
+  manualDirectoryPath: '',
+  outputMode: 'STREAM' as AiGenerationOutputMode,
 })
 
-const supplementNotes = ref('')
-const activeTab = ref<'requirement' | 'generate'>('requirement')
+const documentForm = reactive({
+  directoryPath: '',
+})
+
+const processSteps = [
+  {
+    index: 1 as const,
+    title: '任务已创建',
+    description: '已记录需求内容、目标空间和输出模式。',
+  },
+  {
+    index: 2 as const,
+    title: 'AI 生成用例',
+    description: '正在根据需求描述和附件生成候选测试用例。',
+  },
+  {
+    index: 3 as const,
+    title: 'AI 自动评审',
+    description: '正在自动完成用例评审和建议汇总。',
+  },
+  {
+    index: 4 as const,
+    title: '任务完成',
+    description: '生成结果已进入 AI 生成用例记录页。',
+  },
+]
 
 const targetWorkspaceCode = computed(() => (isAllScope.value ? selectedWorkspaceCode.value : workspaceCode.value))
-const selectedCount = computed(() => generatedCases.value.filter(item => item.selected).length)
-const selectedSuggestionCount = computed(() => selectedSuggestions.value.length)
-const activeCandidateDraft = computed(() => candidateEditDraft.value)
-const canGoPrevCandidate = computed(() => candidateEditIndex.value != null && candidateEditIndex.value > 0)
-const canGoNextCandidate = computed(() => candidateEditIndex.value != null && candidateEditIndex.value < generatedCases.value.length - 1)
-const canGenerate = computed(() => !!targetWorkspaceCode.value && !!form.requirementTitle.trim() && !!form.requirementContent.trim())
-const canSave = computed(() => !!targetWorkspaceCode.value && selectedCount.value > 0)
-const canReviewGeneratedCases = computed(() => generatedCases.value.length > 0 && canGenerate.value)
-const hasSelectedAssets = computed(() => requirementAssets.value.some(item => item.selected))
-const canSupplementGenerate = computed(() => (
-  canGenerate.value
-  && generatedCases.value.length > 0
-  && (selectedSuggestions.value.length > 0 || !!supplementNotes.value.trim())
-))
-const configStatusText = computed(() => {
-  if (!targetWorkspaceCode.value) return '请先选择目标空间'
-  if (loadingConfig.value) return '正在加载 AI 配置'
-  if (!activeConfig.value) return '当前还没有可用的 AI 生成配置'
-  return `${activeConfig.value.provider} / ${activeConfig.value.model} / temperature ${activeConfig.value.temperature.toFixed(1)} / 系统上限 ${activeConfig.value.maxCases} 条 / ${activeConfig.value.supportsImageInput ? '图文可用' : '仅文本'}`
-})
-const generationMetaText = computed(() => {
-  if (!generationMeta.actualGeneratedCount) {
+const currentWorkspaceName = computed(() => {
+  if (!targetWorkspaceCode.value) {
     return ''
   }
-  return `本次请求 ${generationMeta.requestedMaxCases} 条，系统上限 ${generationMeta.systemMaxCases} 条，实际生成 ${generationMeta.actualGeneratedCount} 条。`
+  return writableWorkspaces.value.find(item => item.code === targetWorkspaceCode.value)?.name ?? targetWorkspaceCode.value
 })
-const assetCapabilityText = computed(() => {
-  if (!requirementAssets.value.length) {
-    return '当前未选择需求图片素材，本次会按纯文本需求生成。'
+const hasProcessingTask = computed(() => (
+  !!latestTaskRecord.value
+  && !['COMPLETED', 'FAILED', 'CANCELED'].includes(latestTaskRecord.value.status)
+))
+const canGenerate = computed(() => (
+  !!targetWorkspaceCode.value
+  && !!form.requirementTitle.trim()
+  && !!form.requirementContent.trim()
+  && !!form.manualDirectoryPath.trim()
+  && !!activeConfig.value
+))
+const canGenerateDocument = computed(() => (
+  !!targetWorkspaceCode.value
+  && !!uploadedDocument.value
+  && !!uploadedRequirementTitle.value.trim()
+  && !!uploadedRequirementContent.value.trim()
+  && !!documentForm.directoryPath.trim()
+  && !!activeConfig.value
+))
+const hasImportedDocumentAssets = computed(() => requirementAssets.value.length > 0)
+const textOnlyGenerationNotice = computed(() => {
+  if (!hasImportedDocumentAssets.value || !activeConfig.value || activeConfig.value.supportsImageInput) {
+    return ''
   }
-  if (!activeConfig.value) {
-    return '已选择需求图片素材，等待加载当前生成模型能力。'
-  }
-  return activeConfig.value.supportsImageInput
-    ? '当前生成模型支持图片输入，勾选的需求图片会参与本次生成。'
-    : '当前生成模型仅支持文本。若要使用需求图片生成，请先切换到支持图片输入的模型。'
+  return '当前编写模型不支持图片输入，将自动忽略文档中的图片素材，按纯文本需求继续生成测试用例。'
 })
-const reviewSourceText = computed(() => {
-  if (lastReviewSource.value === 'AUTO') return '自动评审'
-  if (lastReviewSource.value === 'MANUAL') return '手动评审'
-  return '未评审'
+const aiConfigReady = computed(() => (
+  !!currentWorkspaceName.value
+  && !!activeConfig.value
+  && !!reviewerConfig.value
+  && !!form.outputMode
+))
+const aiConfigStatusText = computed(() => (
+  aiConfigReady.value ? '配置完整，可直接生成' : '配置缺失，请检查模型配置'
+))
+const aiConfigStatusClass = computed(() => (
+  aiConfigReady.value ? 'config-status-success' : 'config-status-danger'
+))
+const recentTaskRecords = computed(() => {
+  const priorityMap: Record<AiGenerationTaskRecord['status'], number> = {
+    PENDING: 0,
+    GENERATING: 1,
+    REVIEWING: 2,
+    FAILED: 3,
+    COMPLETED: 4,
+    CANCELED: 5,
+  }
+
+  return [...taskRecords.value]
+    .sort((left, right) => {
+      const priorityDiff = priorityMap[left.status] - priorityMap[right.status]
+      if (priorityDiff !== 0) {
+        return priorityDiff
+      }
+      return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+    })
+    .slice(0, 3)
 })
 
-function flattenModules(nodes: CaseDirectoryNode[], prefix = ''): ModuleOption[] {
-  return nodes.flatMap((node) => {
-    const label = prefix ? `${prefix} / ${node.name}` : node.name
-    return [
-      {
-        value: node.id,
-        label,
-      },
-      ...flattenModules(node.children ?? [], label),
-    ]
+function formatFileSize(size: number) {
+  if (size < 1024) {
+    return `${size} B`
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(2)} KB`
+  }
+  return `${(size / (1024 * 1024)).toFixed(2)} MB`
+}
+
+function getTaskStatusLabel(status: AiGenerationTaskRecord['status']) {
+  const labelMap: Record<AiGenerationTaskRecord['status'], string> = {
+    PENDING: '已创建',
+    GENERATING: '生成中',
+    REVIEWING: '评审中',
+    COMPLETED: '已完成',
+    FAILED: '失败',
+    CANCELED: '已终止',
+  }
+  return labelMap[status]
+}
+
+function getTaskStatusTone(status: AiGenerationTaskRecord['status']) {
+  const toneMap: Record<AiGenerationTaskRecord['status'], string> = {
+    PENDING: 'status-info',
+    GENERATING: 'status-info',
+    REVIEWING: 'status-warning',
+    COMPLETED: 'status-success',
+    FAILED: 'status-danger',
+    CANCELED: 'status-neutral',
+  }
+  return toneMap[status]
+}
+
+function getFailureStepLabel(step: AiGenerationTaskRecord['currentStep']) {
+  const labelMap: Record<AiGenerationTaskRecord['currentStep'], string> = {
+    1: '任务创建',
+    2: 'AI 生成用例',
+    3: 'AI 自动评审',
+    4: '任务完成',
+  }
+  return labelMap[step]
+}
+
+function pickLatestTaskRecord(records: AiGenerationTaskRecord[]) {
+  return records.find(item => ['PENDING', 'GENERATING', 'REVIEWING', 'FAILED'].includes(item.status))
+    ?? records[0]
+    ?? null
+}
+
+function startTaskPolling() {
+  stopTaskPolling()
+  taskPollingTimer = window.setInterval(() => {
+    void refreshLatestTaskRecord()
+  }, 2500)
+}
+
+function stopTaskPolling() {
+  if (taskPollingTimer != null) {
+    window.clearInterval(taskPollingTimer)
+    taskPollingTimer = null
+  }
+}
+
+async function refreshLatestTaskRecord() {
+  if (!targetWorkspaceCode.value) {
+    taskRecords.value = []
+    latestTaskRecord.value = null
+    stopTaskPolling()
+    return
+  }
+
+  taskRecords.value = await listAiGenerationRecords(targetWorkspaceCode.value)
+  latestTaskRecord.value = pickLatestTaskRecord(taskRecords.value)
+  if (taskRecords.value.some(item => ['PENDING', 'GENERATING', 'REVIEWING'].includes(item.status))) {
+    startTaskPolling()
+  } else {
+    stopTaskPolling()
+  }
+}
+
+function formatTaskTime(value: string) {
+  return new Date(value).toLocaleString('zh-CN', { hour12: false })
+}
+
+async function openTaskProcessDialog(recordId?: string) {
+  await refreshLatestTaskRecord()
+  latestTaskRecord.value = recordId && targetWorkspaceCode.value
+    ? await getAiGenerationRecord(targetWorkspaceCode.value, recordId)
+    : pickLatestTaskRecord(taskRecords.value)
+
+  if (!latestTaskRecord.value) {
+    ElMessage.info('当前还没有生成任务')
+    return
+  }
+  processDialogVisible.value = true
+}
+
+async function openScopedProcessDialog(source: 'manual' | 'document') {
+  const recordId = source === 'manual' ? manualTaskRecordId.value : documentTaskRecordId.value
+  if (!recordId) {
+    ElMessage.info('请先生成测试用例')
+    return
+  }
+
+  if (!targetWorkspaceCode.value) {
+    ElMessage.info('请先选择目标空间')
+    return
+  }
+
+  latestTaskRecord.value = await getAiGenerationRecord(targetWorkspaceCode.value, recordId)
+  if (!latestTaskRecord.value) {
+    ElMessage.info('当前任务记录不存在，请重新生成测试用例')
+    return
+  }
+  processDialogVisible.value = true
+}
+
+function openTaskDetail(recordId: string) {
+  router.push({
+    name: 'cases-ai-record-detail',
+    params: { taskId: recordId },
   })
 }
 
-function resetGeneratedCases() {
-  generatedCases.value = []
-  generationWarnings.value = []
-  invalidCases.value = []
-  aiReviewResult.value = null
-  lastReviewSource.value = null
-  candidateEditDrawerVisible.value = false
-  candidateEditIndex.value = null
-  selectedSuggestions.value = []
-  supplementNotes.value = ''
-  generationMeta.systemMaxCases = 0
-  generationMeta.requestedMaxCases = 0
-  generationMeta.effectiveMaxCases = 0
-  generationMeta.actualGeneratedCount = 0
+function openTaskRecordsPage() {
+  router.push({
+    name: 'cases-ai-records',
+  })
 }
 
-function resetRequirementAssets() {
-  requirementAssets.value = []
+function normalizeDirectorySegments(path: string) {
+  return path
+    .split(/[\\/]+/)
+    .map(segment => segment.trim())
+    .filter(Boolean)
 }
 
-function resetDraftState() {
-  form.requirementTitle = ''
-  form.requirementContent = ''
-  form.maxCases = 12
-  form.directoryId = null
-  resetGeneratedCases()
-  resetRequirementAssets()
+function normalizeDirectoryPath(path: string) {
+  return normalizeDirectorySegments(path).join('/')
 }
 
-function resolveDraftStorageKey(targetCode: string) {
-  return `${AI_GENERATE_DRAFT_STORAGE_PREFIX}:${targetCode || '__EMPTY__'}`
+function buildDirectoryPath(basePath: string, title: string) {
+  const normalizedBasePath = normalizeDirectoryPath(basePath)
+  const normalizedTitle = title.trim()
+  if (!normalizedBasePath) {
+    return normalizedTitle
+  }
+  return normalizedTitle ? `${normalizedBasePath}/${normalizedTitle}` : normalizedBasePath
 }
 
-function createDraftSnapshot(): AiGenerateDraft {
-  return {
-    activeTab: activeTab.value,
-    autoReviewEnabled: autoReviewEnabled.value,
-    selectedWorkspaceCode: selectedWorkspaceCode.value,
-    form: {
-      requirementTitle: form.requirementTitle,
-      requirementContent: form.requirementContent,
-      maxCases: form.maxCases,
-      directoryId: form.directoryId,
-    },
-    generatedCases: generatedCases.value.map(item => ({ ...item })),
-    generationWarnings: [...generationWarnings.value],
-    invalidCases: invalidCases.value.map(item => ({ ...item })),
-    aiReviewResult: aiReviewResult.value
-      ? {
-        ...aiReviewResult.value,
-        issues: [...aiReviewResult.value.issues],
-        suggestions: [...aiReviewResult.value.suggestions],
-      }
-      : null,
-    selectedSuggestions: [...selectedSuggestions.value],
-    supplementNotes: supplementNotes.value,
-    requirementAssets: requirementAssets.value.map(item => ({ ...item })),
-    generationMeta: {
-      systemMaxCases: generationMeta.systemMaxCases,
-      requestedMaxCases: generationMeta.requestedMaxCases,
-      effectiveMaxCases: generationMeta.effectiveMaxCases,
-      actualGeneratedCount: generationMeta.actualGeneratedCount,
-    },
-    reviewSource: lastReviewSource.value,
+function findDirectoryBasePath(path: string) {
+  const normalizedPath = normalizeDirectoryPath(path)
+  if (!normalizedPath) {
+    return ''
   }
+  const matchedOption = [...directoryOptions.value]
+    .sort((left, right) => right.value.length - left.value.length)
+    .find(item => normalizedPath === item.value || normalizedPath.startsWith(`${item.value}/`))
+  return matchedOption?.value ?? ''
 }
 
-function persistDraft(targetCode = targetWorkspaceCode.value) {
-  if (hydratingDraft.value) {
-    return
-  }
-  localStorage.setItem(resolveDraftStorageKey(targetCode), JSON.stringify(createDraftSnapshot()))
-}
-
-function applyDraft(draft: AiGenerateDraft | null) {
-  hydratingDraft.value = true
-  try {
-    if (!draft) {
-      resetDraftState()
-      return
-    }
-    activeTab.value = draft.activeTab ?? 'requirement'
-    autoReviewEnabled.value = draft.autoReviewEnabled ?? true
-    selectedWorkspaceCode.value = draft.selectedWorkspaceCode ?? selectedWorkspaceCode.value
-    form.requirementTitle = draft.form.requirementTitle ?? ''
-    form.requirementContent = draft.form.requirementContent ?? ''
-    form.maxCases = Number(draft.form.maxCases ?? 12) || 12
-    form.directoryId = typeof draft.form.directoryId === 'number' ? draft.form.directoryId : null
-    generatedCases.value = Array.isArray(draft.generatedCases) ? draft.generatedCases.map(item => ({ ...item })) : []
-    generationWarnings.value = Array.isArray(draft.generationWarnings) ? [...draft.generationWarnings] : []
-    invalidCases.value = Array.isArray(draft.invalidCases) ? draft.invalidCases.map(item => ({ ...item })) : []
-    aiReviewResult.value = draft.aiReviewResult
-      ? {
-        ...draft.aiReviewResult,
-        issues: [...draft.aiReviewResult.issues],
-        suggestions: [...draft.aiReviewResult.suggestions],
-      }
-      : null
-    selectedSuggestions.value = Array.isArray(draft.selectedSuggestions) ? [...draft.selectedSuggestions] : []
-    supplementNotes.value = draft.supplementNotes ?? ''
-    requirementAssets.value = Array.isArray(draft.requirementAssets) ? draft.requirementAssets.map(item => ({ ...item })) : []
-    generationMeta.systemMaxCases = draft.generationMeta?.systemMaxCases ?? 0
-    generationMeta.requestedMaxCases = draft.generationMeta?.requestedMaxCases ?? 0
-    generationMeta.effectiveMaxCases = draft.generationMeta?.effectiveMaxCases ?? 0
-    generationMeta.actualGeneratedCount = draft.generationMeta?.actualGeneratedCount ?? 0
-    lastReviewSource.value = draft.reviewSource ?? null
-  } finally {
-    hydratingDraft.value = false
-  }
-}
-
-function loadDraft(targetCode = targetWorkspaceCode.value) {
-  const raw = localStorage.getItem(resolveDraftStorageKey(targetCode))
-  if (!raw) {
-    applyDraft(null)
-    return
-  }
-  try {
-    applyDraft(JSON.parse(raw) as AiGenerateDraft)
-  } catch {
-    localStorage.removeItem(resolveDraftStorageKey(targetCode))
-    applyDraft(null)
-  }
-}
-
-function mapRequirementAssets(items: AiRequirementAsset[]) {
-  return items.map(item => ({ ...item, selected: true }))
-}
-
-function setAllSelected(checked: boolean) {
-  generatedCases.value = generatedCases.value.map(item => ({ ...item, selected: checked }))
-}
-
-function summarizeText(value: string | null | undefined, max = 96) {
-  if (!value) {
-    return '-'
-  }
-  const normalized = value.replace(/\s+/g, ' ').trim()
-  if (!normalized) {
-    return '-'
-  }
-  return normalized.length > max ? `${normalized.slice(0, max)}...` : normalized
-}
-
-function getCaseTypeLabel(caseType: string | null | undefined) {
-  if (!caseType) {
-    return '-'
-  }
-  return CASE_TYPE_LABELS[caseType] ?? caseType
-}
-
-function getPriorityClass(priority: string | null | undefined) {
-  if (!priority) {
-    return 'priority-chip priority-chip-default'
-  }
-  return `priority-chip priority-chip-${priority.toLowerCase()}`
-}
-
-function getReviewResultLabel(result: string | null | undefined) {
-  if (!result) {
-    return '-'
-  }
-  return REVIEW_RESULT_LABELS[result] ?? result
-}
-
-function getReviewResultClass(result: string | null | undefined) {
-  if (!result) {
-    return 'review-result-chip review-result-chip-neutral'
-  }
-  const normalized = result.toLowerCase()
-  return `review-result-chip review-result-chip-${normalized}`
-}
-
-function cloneEditableCandidate(item: EditableGeneratedCase): EditableGeneratedCase {
-  return {
-    ...item,
-    warnings: [...(item.warnings ?? [])],
-  }
-}
-
-function syncCandidateDraft(index: number | null) {
-  if (index == null) {
-    candidateEditDraft.value = null
-    return
-  }
-  const current = generatedCases.value[index]
-  candidateEditDraft.value = current ? cloneEditableCandidate(current) : null
-}
-
-function openCandidateEditor(index: number) {
-  if (!generatedCases.value[index]) {
-    return
-  }
-  candidateEditIndex.value = index
-  syncCandidateDraft(index)
-  candidateEditDrawerVisible.value = true
-}
-
-function closeCandidateEditor() {
-  candidateEditDrawerVisible.value = false
-  syncCandidateDraft(candidateEditIndex.value)
-}
-
-function goToCandidate(offset: -1 | 1) {
-  if (candidateEditIndex.value == null) {
-    return
-  }
-  const nextIndex = candidateEditIndex.value + offset
-  if (nextIndex < 0 || nextIndex >= generatedCases.value.length) {
-    return
-  }
-  candidateEditIndex.value = nextIndex
-  syncCandidateDraft(nextIndex)
-}
-
-function saveCandidateEditor() {
-  if (candidateEditIndex.value == null || !candidateEditDraft.value) {
-    return
-  }
-  generatedCases.value.splice(candidateEditIndex.value, 1, cloneEditableCandidate(candidateEditDraft.value))
-  candidateEditDrawerVisible.value = false
-  ElMessage.success('候选用例已保存')
-}
-
-function removeGeneratedCase(index: number) {
-  generatedCases.value.splice(index, 1)
-  if (candidateEditIndex.value == null) {
-    return
-  }
-  if (!generatedCases.value.length) {
-    candidateEditIndex.value = null
-    candidateEditDraft.value = null
-    candidateEditDrawerVisible.value = false
-    return
-  }
-  if (candidateEditIndex.value === index) {
-    const nextIndex = Math.min(index, generatedCases.value.length - 1)
-    candidateEditIndex.value = nextIndex
-    if (!generatedCases.value[nextIndex]) {
-      candidateEditDraft.value = null
-      candidateEditDrawerVisible.value = false
-      return
-    }
-    syncCandidateDraft(nextIndex)
-    return
-  }
-  if (candidateEditIndex.value > index) {
-    candidateEditIndex.value -= 1
-    syncCandidateDraft(candidateEditIndex.value)
-  }
-}
-
-function triggerRequirementImport() {
-  requirementFileInput.value?.click()
-}
-
-function triggerAssetUpload() {
-  requirementAssetInput.value?.click()
-}
-
-async function handleRequirementFileChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) {
-    return
-  }
-  importingRequirement.value = true
-  try {
-    const response = await platformApi.importRequirementDocument(workspaceCode.value, file)
-    form.requirementTitle = response.title || file.name.replace(/\.[^.]+$/, '')
-    form.requirementContent = response.content
-    requirementAssets.value = mapRequirementAssets(response.assets)
-    ElMessage.success(`已导入需求文档：${response.fileName}`)
-  } catch (error) {
-    ElMessage.error((error as Error).message)
-  } finally {
-    importingRequirement.value = false
-    input.value = ''
-  }
-}
-
-async function handleAssetFileChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = input.files ? Array.from(input.files) : []
-  if (!files.length) {
-    return
-  }
-  uploadingAssets.value = true
-  try {
-    const response = await platformApi.uploadRequirementAssets(workspaceCode.value, files)
-    requirementAssets.value = [...requirementAssets.value, ...mapRequirementAssets(response)]
-    ElMessage.success(`已上传 ${response.length} 个需求素材`)
-  } catch (error) {
-    ElMessage.error((error as Error).message)
-  } finally {
-    uploadingAssets.value = false
-    input.value = ''
-  }
-}
-
-async function removeRequirementAsset(asset: RequirementAssetView) {
-  try {
-    await platformApi.deleteRequirementAsset(workspaceCode.value, asset.id)
-    requirementAssets.value = requirementAssets.value.filter(item => item.id !== asset.id)
-    ElMessage.success('已移除需求素材')
-  } catch (error) {
-    ElMessage.error((error as Error).message)
-  }
-}
-
-function assetPreviewUrl(asset: RequirementAssetView) {
-  return asset.downloadUrl ? resolveApiUrl(asset.downloadUrl) : ''
-}
-
-function normalizeRequestedMaxCases(showMessage = false) {
-  if (!activeConfig.value) {
-    return
-  }
-  if (form.maxCases > activeConfig.value.maxCases) {
-    form.maxCases = activeConfig.value.maxCases
-    if (showMessage) {
-      ElMessage.warning(`已按系统上限调整为 ${activeConfig.value.maxCases} 条`)
-    }
-  }
+function flattenDirectories(nodes: CaseDirectoryNode[], prefix = ''): DirectoryOption[] {
+  return nodes.flatMap((node) => {
+    const label = prefix ? `${prefix}/${node.name}` : node.name
+    return [
+      { value: label, label, directoryId: node.id },
+      ...flattenDirectories(node.children ?? [], label),
+    ]
+  })
 }
 
 async function loadConfig() {
@@ -518,1757 +357,1523 @@ async function loadConfig() {
   try {
     const response = await platformApi.getAiCaseConfig(workspaceCode.value, targetWorkspaceCode.value)
     activeConfig.value = response.generatorConfig
-    normalizeRequestedMaxCases()
+    reviewerConfig.value = response.reviewerConfig
   } catch (error) {
     activeConfig.value = null
+    reviewerConfig.value = null
     ElMessage.error((error as Error).message)
   } finally {
     loadingConfig.value = false
   }
 }
 
-async function loadDirectories() {
+async function loadDirectoryOptions() {
   if (!targetWorkspaceCode.value) {
-    directoryWorkspace.value = null
-    moduleOptions.value = []
-    form.directoryId = null
+    directoryTree.value = []
+    directoryOptions.value = []
     return
   }
+
   loadingDirectories.value = true
   try {
     const workspaces = await platformApi.getCaseDirectories(targetWorkspaceCode.value)
-    directoryWorkspace.value = workspaces.find(item => item.workspaceCode === targetWorkspaceCode.value) ?? null
-    moduleOptions.value = flattenModules(directoryWorkspace.value?.children ?? [])
-    if (form.directoryId !== null && !moduleOptions.value.some(item => item.value === form.directoryId)) {
-      form.directoryId = null
-    }
+    const current = workspaces.find(item => item.workspaceCode === targetWorkspaceCode.value)
+    directoryTree.value = current?.children ?? []
+    directoryOptions.value = flattenDirectories(directoryTree.value)
   } catch (error) {
-    directoryWorkspace.value = null
-    moduleOptions.value = []
+    directoryTree.value = []
+    directoryOptions.value = []
     ElMessage.error((error as Error).message)
   } finally {
     loadingDirectories.value = false
   }
 }
 
-function toExistingCasePayload(item: AiGeneratedCase) {
-  return {
-    title: item.title,
-    caseType: item.caseType,
-    priority: item.priority,
-    precondition: item.precondition,
-    steps: item.steps,
-    expectedResult: item.expectedResult,
-  }
-}
-
-function applyGenerationResult(
-  response: {
-    workspaceName: string
-    provider: string
-    model: string
-    rawContent: string
-    systemMaxCases: number
-    requestedMaxCases: number
-    effectiveMaxCases: number
-    actualGeneratedCount: number
-    generatedCases: AiGeneratedCase[]
-    warnings: string[]
-    invalidCases: AiInvalidCaseItem[]
-  },
-  mode: 'replace' | 'append',
-) {
-  lastGenerationWorkspaceName.value = response.workspaceName
-  lastGenerationProvider.value = response.provider
-  lastGenerationModel.value = response.model
-  lastGenerationRawContent.value = response.rawContent
-  generationMeta.systemMaxCases = response.systemMaxCases
-  generationMeta.requestedMaxCases = response.requestedMaxCases
-  generationMeta.effectiveMaxCases = response.effectiveMaxCases
-  generationMeta.actualGeneratedCount = response.actualGeneratedCount
-
-  const mapped = response.generatedCases.map(item => ({ ...item, selected: true }))
-  generatedCases.value = mode === 'append' ? [...generatedCases.value, ...mapped] : mapped
-  generationWarnings.value = mode === 'append'
-    ? [...generationWarnings.value, ...response.warnings]
-    : response.warnings
-  invalidCases.value = mode === 'append'
-    ? [...invalidCases.value, ...response.invalidCases]
-    : response.invalidCases
-}
-
-function buildSupplementNotes() {
-  const sections: string[] = []
-  if (selectedSuggestions.value.length) {
-    sections.push(`请优先补齐以下评审建议：\n${selectedSuggestions.value.map((item, index) => `${index + 1}. ${item}`).join('\n')}`)
-  }
-  if (supplementNotes.value.trim()) {
-    sections.push(`人工补充意见：\n${supplementNotes.value.trim()}`)
-  }
-  return sections.join('\n\n')
-}
-
-async function runGenerate(mode: 'replace' | 'append') {
-  if (!canGenerate.value) {
-    ElMessage.error('请先补全目标空间、需求标题和需求内容')
-    return false
-  }
-  if (!activeConfig.value || activeConfig.value.status !== 1) {
-    ElMessage.error('当前没有可用的 AI 生成配置，请先到 AI 配置页启用生成模型')
-    return false
-  }
-  if (hasSelectedAssets.value && !activeConfig.value.supportsImageInput) {
-    ElMessage.error('当前模型不支持图片输入，请切换到支持图片输入的模型后再试')
-    return false
+async function ensureDirectoryPath(path: string) {
+  if (!targetWorkspaceCode.value) {
+    throw new Error('请先选择目标空间')
   }
 
-  if (mode === 'append') {
-    supplementing.value = true
-  } else {
-    generating.value = true
+  const segments = normalizeDirectorySegments(path)
+  if (!segments.length) {
+    throw new Error('请先填写用例保存路径')
   }
 
-  try {
-    const response = await platformApi.generateAiCases(workspaceCode.value, {
-      workspaceCode: isAllScope.value ? targetWorkspaceCode.value : undefined,
-      requirementTitle: form.requirementTitle.trim(),
-      requirementContent: form.requirementContent.trim(),
-      assetIds: requirementAssets.value.filter(item => item.selected).map(item => item.id),
-      improvementNotes: mode === 'append' ? buildSupplementNotes() : undefined,
-      existingCases: mode === 'append' ? generatedCases.value.map(toExistingCasePayload) : undefined,
-      maxCases: form.maxCases,
-    })
-    applyGenerationResult(response, mode)
-    if (mode === 'append') {
-      selectedSuggestions.value = []
-      supplementNotes.value = ''
+  let siblings = directoryTree.value
+  let parentId: number | null = null
+  let currentNode: CaseDirectoryNode | null = null
+  let createdAny = false
+
+  for (const segment of segments) {
+    let matchedNode = siblings.find(item => item.name === segment) ?? null
+
+    if (!matchedNode) {
+      matchedNode = await platformApi.createCaseDirectory(targetWorkspaceCode.value, {
+        parentId,
+        name: segment,
+      })
+      createdAny = true
+      siblings.push(matchedNode)
     }
-    ElMessage.success(mode === 'append' ? `已追加 ${response.actualGeneratedCount} 条候选用例` : `已生成 ${response.actualGeneratedCount} 条候选用例`)
-    return true
+
+    currentNode = matchedNode
+    parentId = matchedNode.id
+    siblings = matchedNode.children ?? []
+  }
+
+  if (createdAny) {
+    await loadDirectoryOptions()
+  }
+
+  return {
+    directoryId: currentNode?.id ?? null,
+    directoryName: segments.join('/'),
+  }
+}
+
+function triggerRequirementImport() {
+  if (!targetWorkspaceCode.value) {
+    ElMessage.warning('请先选择目标空间')
+    return
+  }
+  requirementFileInput.value?.click()
+}
+
+async function handleRequirementFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file || !targetWorkspaceCode.value) {
+    return
+  }
+  importingRequirement.value = true
+  try {
+    const response = await platformApi.importRequirementDocument(targetWorkspaceCode.value, file)
+    uploadedRequirementTitle.value = response.title || file.name.replace(/\.[^.]+$/, '')
+    uploadedRequirementContent.value = response.content
+    requirementAssets.value = response.assets.map(item => ({ ...item, selected: true }))
+    uploadedDocument.value = {
+      fileName: response.fileName || file.name,
+      fileSize: file.size,
+    }
+    ElMessage.success(`已导入需求文档：${response.fileName}`)
   } catch (error) {
     ElMessage.error((error as Error).message)
-    return false
+  } finally {
+    importingRequirement.value = false
+    input.value = ''
+  }
+}
+
+function clearImportedDocument() {
+  uploadedDocument.value = null
+  requirementAssets.value = []
+  uploadedRequirementTitle.value = ''
+  uploadedRequirementContent.value = ''
+  documentDirectoryBasePath.value = ''
+  documentForm.directoryPath = ''
+  documentTaskRecordId.value = ''
+}
+
+function handleManualDirectorySelect(value: string) {
+  const normalizedPath = normalizeDirectoryPath(value)
+  manualDirectoryBasePath.value = findDirectoryBasePath(normalizedPath)
+  syncingManualDirectoryPath = true
+  form.manualDirectoryPath = buildDirectoryPath(manualDirectoryBasePath.value || normalizedPath, form.requirementTitle)
+}
+
+function handleDocumentDirectorySelect(value: string) {
+  const normalizedPath = normalizeDirectoryPath(value)
+  documentDirectoryBasePath.value = findDirectoryBasePath(normalizedPath)
+  syncingDocumentDirectoryPath = true
+  documentForm.directoryPath = buildDirectoryPath(documentDirectoryBasePath.value || normalizedPath, uploadedRequirementTitle.value)
+}
+
+async function handleGenerateCases(source: 'manual' | 'document' = 'manual') {
+  const requirementTitle = source === 'document'
+    ? uploadedRequirementTitle.value.trim()
+    : form.requirementTitle.trim()
+  const requirementContent = source === 'document'
+    ? uploadedRequirementContent.value.trim()
+    : form.requirementContent.trim()
+  const directoryPath = source === 'document'
+    ? normalizeDirectoryPath(documentForm.directoryPath)
+    : normalizeDirectoryPath(form.manualDirectoryPath)
+  const canRun = source === 'document' ? canGenerateDocument.value : canGenerate.value
+
+  if (!canRun || !targetWorkspaceCode.value) {
+    ElMessage.warning(source === 'document'
+      ? '请先上传需求文档，并确认文档标题、用例保存路径、目标空间和 AI 配置可用'
+      : '请先补充需求标题、需求描述、用例保存路径，并确认目标空间和 AI 配置可用')
+    return
+  }
+
+  if (!directoryPath) {
+    ElMessage.warning(source === 'document'
+      ? '请先选择用例保存模块路径，并确认文档标题已填写'
+      : '请先选择用例保存模块路径，并确认需求标题已填写')
+    return
+  }
+
+  if (textOnlyGenerationNotice.value) {
+    ElMessage.warning(textOnlyGenerationNotice.value)
+  }
+
+  generating.value = true
+
+  try {
+    const resolvedDirectory = await ensureDirectoryPath(directoryPath)
+    const baseRecord = await createAiGenerationRecord(targetWorkspaceCode.value, {
+      requirementTitle,
+      requirementContent,
+      outputMode: form.outputMode,
+      directoryId: resolvedDirectory.directoryId,
+      directoryName: resolvedDirectory.directoryName ?? directoryPath,
+      assetIds: source === 'document' && activeConfig.value?.supportsImageInput
+        ? requirementAssets.value.filter(item => item.selected).map(item => item.id)
+        : [],
+    })
+    if (source === 'document') {
+      documentTaskRecordId.value = baseRecord.id
+    } else {
+      manualTaskRecordId.value = baseRecord.id
+    }
+    latestTaskRecord.value = baseRecord
+    await refreshLatestTaskRecord()
+    processDialogVisible.value = true
+    startTaskPolling()
+    ElMessage.success('AI 生成任务已创建，后台会继续执行')
+  } catch (error) {
+    ElMessage.error((error as Error).message)
   } finally {
     generating.value = false
-    supplementing.value = false
   }
 }
 
-async function runGenerateWithOptionalReview(mode: 'replace' | 'append') {
-  const succeeded = await runGenerate(mode)
-  if (!succeeded) {
+async function terminateTask() {
+  if (!latestTaskRecord.value || !hasProcessingTask.value) {
     return
   }
-  if (generatedCases.value.length && autoReviewEnabled.value) {
-    await runAiReview('AUTO', { silent: true })
-    if (aiReviewResult.value) {
-      ElMessage.success(mode === 'append' ? '已追加候选并完成自动评审' : '已生成候选用例并完成自动评审')
-    }
-  }
+  await ElMessageBox.confirm(
+    '确认取消当前 AI 生成任务吗？取消后后续步骤将不再继续执行。',
+    '取消生成任务',
+    {
+      type: 'warning',
+      confirmButtonText: '取消生成',
+      cancelButtonText: '取消',
+    },
+  )
+  latestTaskRecord.value = await cancelAiGenerationRecord(latestTaskRecord.value.workspaceCode, latestTaskRecord.value.id)
+  await refreshLatestTaskRecord()
+  ElMessage.success('已取消当前生成任务')
 }
 
-async function regenerateCase(index: number) {
-  const current = generatedCases.value[index]
-  if (!current) {
+function syncUploadBoxGeometry() {
+  const titleElement = titleInputRef.value
+  const textareaElement = textareaFieldRef.value
+  const uploadBodyElement = uploadPanelBodyRef.value
+
+  if (!titleElement || !textareaElement || !uploadBodyElement) {
     return
   }
-  if (!canGenerate.value) {
-    ElMessage.error('请先补全需求信息后再重生')
-    return
+
+  const titleRect = titleElement.getBoundingClientRect()
+  const textareaRect = textareaElement.getBoundingClientRect()
+  const uploadBodyRect = uploadBodyElement.getBoundingClientRect()
+
+  uploadBoxOffset.value = Math.max(titleRect.top - uploadBodyRect.top, 0)
+  uploadBoxHeight.value = Math.max(textareaRect.bottom - titleRect.top, 320)
+}
+
+function bindLayoutObserver() {
+  layoutObserver?.disconnect()
+  layoutObserver = new ResizeObserver(() => {
+    syncUploadBoxGeometry()
+  })
+
+  if (titleInputRef.value) {
+    layoutObserver.observe(titleInputRef.value)
   }
-  regeneratingIndex.value = index
-  try {
-    const response = await platformApi.generateAiCases(workspaceCode.value, {
-      workspaceCode: isAllScope.value ? targetWorkspaceCode.value : undefined,
-      requirementTitle: form.requirementTitle.trim(),
-      requirementContent: `${form.requirementContent.trim()}\n\n请重点补一条不同于现有候选的测试用例，参考当前目标用例：${current.title}`,
-      assetIds: requirementAssets.value.filter(item => item.selected).map(item => item.id),
-      existingCases: generatedCases.value.map(toExistingCasePayload),
-      maxCases: 1,
-    })
-    const replacement = response.generatedCases[0]
-    if (!replacement) {
-      throw new Error('模型未返回可替换的候选用例')
-    }
-    generatedCases.value.splice(index, 1, { ...replacement, selected: true })
-    ElMessage.success('已重生当前候选用例')
-  } catch (error) {
-    ElMessage.error((error as Error).message)
-  } finally {
-    regeneratingIndex.value = null
+  if (textareaFieldRef.value) {
+    layoutObserver.observe(textareaFieldRef.value)
+  }
+  if (uploadPanelBodyRef.value) {
+    layoutObserver.observe(uploadPanelBodyRef.value)
   }
 }
 
-async function runAiReview(source: ReviewExecutionSource = 'MANUAL', options?: { silent?: boolean }) {
-  if (!canReviewGeneratedCases.value) {
-    ElMessage.error('请先生成候选用例后再做 AI 评审')
-    return
-  }
-  reviewing.value = true
-  try {
-    const response = await platformApi.reviewAiGeneratedCases(workspaceCode.value, {
-      requirementTitle: form.requirementTitle.trim(),
-      requirementContent: form.requirementContent.trim(),
-      generatedCases: generatedCases.value.map(toExistingCasePayload),
-    })
-    aiReviewResult.value = response
-    selectedSuggestions.value = [...response.suggestions]
-    lastReviewSource.value = source
-    if (!options?.silent) {
-      ElMessage.success(source === 'AUTO' ? '已完成自动评审' : 'AI 评审已完成')
-    }
-    return response
-  } catch (error) {
-    ElMessage.error((error as Error).message)
-  } finally {
-    reviewing.value = false
-  }
+const _templateKeepAlive = {
+  CircleClose,
+  RefreshRight,
+  processSteps,
+  aiConfigStatusText,
+  aiConfigStatusClass,
+  getTaskStatusLabel,
+  getTaskStatusTone,
+  triggerRequirementImport,
+  handleRequirementFileChange,
+  terminateTask,
 }
-
-function adoptAiReviewSummary() {
-  if (!aiReviewResult.value?.summary) {
-    return
-  }
-  supplementNotes.value = supplementNotes.value.trim()
-    ? `${supplementNotes.value.trim()}\n${aiReviewResult.value.summary}`
-    : aiReviewResult.value.summary
-  ElMessage.success('已把评审总结加入补充说明')
-}
-
-function openDetailDrawer() {
-  detailDrawerVisible.value = true
-}
-
-function openReviewDrawer() {
-  reviewDrawerVisible.value = true
-}
-
-async function saveGeneratedCases() {
-  const casesToSave = generatedCases.value.filter(item => item.selected)
-  if (!casesToSave.length) {
-    ElMessage.error('请先勾选要写入用例中心的候选用例')
-    return
-  }
-  saving.value = true
-  try {
-    for (const item of casesToSave) {
-      const payload: CreateCasePayload = {
-        workspaceCode: isAllScope.value ? targetWorkspaceCode.value : undefined,
-        directoryId: form.directoryId,
-        title: item.title.trim(),
-        caseType: item.caseType || 'FUNCTION',
-        priority: item.priority || 'P1',
-        sourceType: 'AI生成',
-        caseStatus: '草稿',
-        ownerId: null,
-        precondition: item.precondition.trim(),
-        steps: item.steps.trim(),
-        expectedResult: item.expectedResult.trim(),
-      }
-      await platformApi.createCase(workspaceCode.value, payload)
-    }
-    ElMessage.success(`已写入 ${casesToSave.length} 条用例到用例中心`)
-    resetGeneratedCases()
-  } catch (error) {
-    ElMessage.error((error as Error).message)
-  } finally {
-    saving.value = false
-  }
-}
-
-async function generateAndGo() {
-  if (!canGenerate.value || generating.value || supplementing.value) {
-    return
-  }
-  await runGenerateWithOptionalReview('replace')
-  if (generatedCases.value.length) {
-    activeTab.value = 'generate'
-  }
-}
+void _templateKeepAlive
 
 watch(
-  [workspaceCode, selectedWorkspaceCode],
-  async ([currentWorkspace]) => {
-    if (!isAllScope.value) {
-      selectedWorkspaceCode.value = currentWorkspace
-    }
-    await Promise.all([loadConfig(), loadDirectories()])
-    loadDraft()
-  },
-)
-
-watch(
-  [
-    activeTab,
-    selectedWorkspaceCode,
-    autoReviewEnabled,
-    () => form.requirementTitle,
-    () => form.requirementContent,
-    () => form.maxCases,
-    () => form.directoryId,
-    generatedCases,
-    generationWarnings,
-    invalidCases,
-    aiReviewResult,
-    selectedSuggestions,
-    supplementNotes,
-    requirementAssets,
-    () => generationMeta.systemMaxCases,
-    () => generationMeta.requestedMaxCases,
-    () => generationMeta.effectiveMaxCases,
-    () => generationMeta.actualGeneratedCount,
-  ],
+  () => workspaceCode.value,
   () => {
-    persistDraft()
-    localStorage.setItem(AI_GENERATE_TAB_STORAGE_KEY, activeTab.value)
+    selectedWorkspaceCode.value = workspaceCode.value === 'ALL' ? '' : workspaceCode.value
   },
-  { deep: true },
 )
 
-watch(candidateEditDrawerVisible, (visible) => {
-  if (!visible) {
-    syncCandidateDraft(candidateEditIndex.value)
-  }
-})
+watch(
+  () => targetWorkspaceCode.value,
+  async () => {
+    requirementAssets.value = []
+    manualDirectoryBasePath.value = ''
+    documentDirectoryBasePath.value = ''
+    form.manualDirectoryPath = ''
+    documentForm.directoryPath = ''
+    await loadConfig()
+    await loadDirectoryOptions()
+    await refreshLatestTaskRecord()
+  },
+)
+
+watch(
+  () => form.requirementTitle,
+  (title) => {
+    if (!manualDirectoryBasePath.value) {
+      return
+    }
+    syncingManualDirectoryPath = true
+    form.manualDirectoryPath = buildDirectoryPath(manualDirectoryBasePath.value, title)
+  },
+)
+
+watch(
+  () => uploadedRequirementTitle.value,
+  (title) => {
+    if (!documentDirectoryBasePath.value) {
+      return
+    }
+    syncingDocumentDirectoryPath = true
+    documentForm.directoryPath = buildDirectoryPath(documentDirectoryBasePath.value, title)
+  },
+)
+
+watch(
+  () => form.manualDirectoryPath,
+  (value) => {
+    if (syncingManualDirectoryPath) {
+      syncingManualDirectoryPath = false
+      return
+    }
+    manualDirectoryBasePath.value = findDirectoryBasePath(value)
+  },
+)
+
+watch(
+  () => documentForm.directoryPath,
+  (value) => {
+    if (syncingDocumentDirectoryPath) {
+      syncingDocumentDirectoryPath = false
+      return
+    }
+    documentDirectoryBasePath.value = findDirectoryBasePath(value)
+  },
+)
 
 onMounted(async () => {
-  const rememberedTab = localStorage.getItem(AI_GENERATE_TAB_STORAGE_KEY)
-  if (rememberedTab === 'requirement' || rememberedTab === 'generate') {
-    activeTab.value = rememberedTab
-  }
   await loadSharedBase()
-  await Promise.all([loadConfig(), loadDirectories()])
-  loadDraft()
-  normalizeRequestedMaxCases()
+  await loadConfig()
+  await loadDirectoryOptions()
+  await refreshLatestTaskRecord()
+  await nextTick()
+  bindLayoutObserver()
+  syncUploadBoxGeometry()
+  window.addEventListener('resize', syncUploadBoxGeometry)
+})
+
+onBeforeUnmount(() => {
+  layoutObserver?.disconnect()
+  stopTaskPolling()
+  window.removeEventListener('resize', syncUploadBoxGeometry)
 })
 </script>
 
 <template>
-  <section class="page-shell">
-    <div class="ai-generate-layout">
-      <article class="panel-card ai-workspace-panel">
-        <el-tabs v-model="activeTab" class="ai-inner-tabs">
-          <el-tab-pane label="需求" name="requirement">
-            <div class="requirement-stage">
-              <div class="panel-header">
-                <div>
-                  <div class="panel-title">需求输入</div>
-                  <div class="panel-subtitle">先整理本次需求和材料，再一键生成候选用例。</div>
-                </div>
-              </div>
-
-              <el-form label-width="92px" class="generate-config-form">
-                <div class="generate-config-meta">
-                  <el-form-item v-if="isAllScope" label="目标空间" required>
-                    <el-select v-model="selectedWorkspaceCode" placeholder="请选择目标空间">
-                      <el-option
-                        v-for="item in writableWorkspaces"
-                        :key="item.code"
-                        :label="item.name"
-                        :value="item.code"
-                        />
-                      </el-select>
-                    </el-form-item>
-                </div>
-
-                <div class="requirement-top-actions">
-                  <div class="requirement-editor-actions">
-                    <input
-                      ref="requirementFileInput"
-                      type="file"
-                      accept=".txt,.md,.doc,.docx,.pdf"
-                      class="hidden-file-input"
-                      @change="handleRequirementFileChange"
-                    >
-                    <el-button :loading="importingRequirement" @click="triggerRequirementImport">
-                      <el-icon><Upload /></el-icon>
-                      上传文档
-                    </el-button>
-                    <input
-                      ref="requirementAssetInput"
-                      type="file"
-                      accept=".png,.jpg,.jpeg,.webp"
-                      multiple
-                      class="hidden-file-input"
-                      @change="handleAssetFileChange"
-                    >
-                    <el-button :loading="uploadingAssets" @click="triggerAssetUpload">
-                      <el-icon><Upload /></el-icon>
-                      上传图片
-                    </el-button>
-                    <el-button
-                      type="primary"
-                      :loading="generating"
-                      :disabled="!canGenerate"
-                      @click="generateAndGo"
-                    >
-                      <el-icon><MagicStick /></el-icon>
-                      生成用例
-                    </el-button>
-                  </div>
-                </div>
-
-                <el-form-item label="需求标题" required>
-                  <el-input
-                    v-model="form.requirementTitle"
-                    placeholder="例如：成员停用后按空间视角的展示规则"
-                  />
-                </el-form-item>
-              </el-form>
-
-              <section class="detail-card requirement-editor-card">
-                <div class="requirement-editor-grid">
-                  <div class="requirement-text-area">
-                    <div class="requirement-block-title">需求文本</div>
-                    <el-input
-                      v-model="form.requirementContent"
-                      type="textarea"
-                      :rows="18"
-                      resize="vertical"
-                      placeholder="这里填写最终要交给 AI 的需求描述、约束、重点风险和覆盖目标。"
-                    />
-                  </div>
-
-                  <aside class="requirement-material-area">
-                    <div class="requirement-block-title">需求材料</div>
-                    <div class="material-summary">
-                      <div class="material-summary-item">
-                        <span class="material-summary-label">当前配置</span>
-                        <span class="material-summary-value">{{ configStatusText }}</span>
-                      </div>
-                      <div class="material-summary-item">
-                        <span class="material-summary-label">图片能力</span>
-                        <span class="material-summary-value">{{ assetCapabilityText }}</span>
-                      </div>
-                    </div>
-
-                    <div v-if="requirementAssets.length" class="requirement-asset-list">
-                      <div v-for="asset in requirementAssets" :key="asset.id" class="requirement-asset-item">
-                        <div class="requirement-asset-top">
-                          <el-checkbox v-model="asset.selected" />
-                          <span class="requirement-asset-meta">{{ asset.sourceType }}</span>
-                          <el-button text type="danger" @click="removeRequirementAsset(asset)">移除</el-button>
-                        </div>
-                        <a
-                          v-if="assetPreviewUrl(asset)"
-                          :href="assetPreviewUrl(asset)"
-                          target="_blank"
-                          rel="noreferrer"
-                          class="requirement-asset-preview"
-                        >
-                          <img :src="assetPreviewUrl(asset)" :alt="asset.fileName" class="requirement-asset-image">
-                        </a>
-                        <div v-else class="requirement-asset-preview requirement-asset-fallback">文档预览</div>
-                        <a
-                          v-if="assetPreviewUrl(asset)"
-                          :href="assetPreviewUrl(asset)"
-                          target="_blank"
-                          rel="noreferrer"
-                          class="requirement-asset-link"
-                        >
-                          {{ asset.fileName }}
-                        </a>
-                        <span v-else class="requirement-asset-link">{{ asset.fileName }}</span>
-                      </div>
-                    </div>
-                    <div v-else class="empty-block compact-block material-empty">
-                      <div class="empty-title">还没有需求材料</div>
-                      <div class="empty-desc">可以上传需求文档或图片，作为 AI 生成时的辅助输入。</div>
-                    </div>
-                  </aside>
-                </div>
-              </section>
+  <section class="ai-generate-page">
+    <div class="main-content-grid">
+      <div class="panel-card input-panel">
+        <div class="panel-title-row">
+          <div>
+            <div class="section-title section-title-with-icon">
+              <span class="section-title-icon" aria-hidden="true">✍️</span>
+              <span>手动输入需求描述</span>
             </div>
-          </el-tab-pane>
+          </div>
+        </div>
 
-          <el-tab-pane label="用例生成" name="generate">
-            <div class="generate-tab-layout">
-              <div class="generate-content-grid">
-                <article class="detail-card generate-action-card">
-                  <div class="panel-header compact-header">
-                    <div>
-                      <div class="panel-title">生成操作</div>
-                      <div class="panel-subtitle">先生成候选用例，再决定要不要做补漏评审。</div>
-                    </div>
-                    <el-button text @click="openDetailDrawer">查看详情</el-button>
-                  </div>
+        <div class="form-stack">
+          <div class="field-label">需求标题<span class="field-required">*</span></div>
+          <div ref="titleInputRef">
+          <el-input
+            v-model="form.requirementTitle"
+            maxlength="120"
+            placeholder="请输入需求标题，例如：用户登录功能需求"
+          />
+          </div>
+          <div class="field-label">用例保存路径 <span class="field-required">*</span></div>
+          <el-select
+            v-model="form.manualDirectoryPath"
+            class="directory-path-select"
+            filterable
+            allow-create
+            clearable
+            :loading="loadingDirectories"
+            placeholder="请选择模块路径，选中后会自动拼接需求标题"
+            @change="handleManualDirectorySelect"
+          >
+            <el-option
+              v-for="item in directoryOptions"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
+          <div class="field-label">需求描述<span class="field-required">*</span></div>
+          <div ref="textareaFieldRef">
+          <el-input
+            v-model="form.requirementContent"
+            class="requirement-textarea"
+            type="textarea"
+            :autosize="{ minRows: 10, maxRows: 18 }"
+            resize="vertical"
+            placeholder="请详细描述您的需求，包括功能描述、使用场景、业务流程等"
+          />
+          </div>
+          <div class="char-count">{{ form.requirementContent.length }}/5000</div>
 
-                  <div class="generate-action-note">
-                    当前空间：{{ targetWorkspaceCode || '未选择' }}；已生成 {{ generatedCases.length }} 条候选用例。
-                  </div>
-                  <div class="generate-review-toggle-row">
-                    <div class="generate-review-toggle-main">
-                      <span class="generate-review-toggle-label">自动评审</span>
-                      <el-switch v-model="autoReviewEnabled" inline-prompt active-text="开" inactive-text="关" />
-                      <span class="generate-review-toggle-state">
-                        {{ autoReviewEnabled ? '已开启' : '已关闭' }}
-                      </span>
-                    </div>
-                    <span class="generate-review-toggle-desc">
-                      {{ autoReviewEnabled ? '生成后自动跑一轮 AI 评审，并把结果直接带到候选区上方。' : '当前只生成候选，用你手动点击“评审本轮候选”再做补漏。' }}
-                    </span>
-                  </div>
-                  <div class="generate-config-actions">
-                    <el-button
-                      type="primary"
-                      :loading="generating"
-                      :disabled="!canGenerate"
-                      @click="runGenerateWithOptionalReview('replace')"
-                    >
-                      <el-icon><MagicStick /></el-icon>
-                      生成候选用例
-                    </el-button>
-                    <el-button
-                      :loading="supplementing"
-                      :disabled="!canGenerate || !generatedCases.length"
-                      @click="runGenerateWithOptionalReview('append')"
-                    >
-                      <el-icon><RefreshRight /></el-icon>
-                      追加生成
-                    </el-button>
-                  </div>
-                  <div v-if="generationMetaText" class="generate-mini-meta">{{ generationMetaText }}</div>
-                </article>
+          <div class="path-action-stack">
+            <el-button
+              class="generate-primary-btn"
+              type="success"
+              :icon="MagicStick"
+              :loading="generating"
+              :disabled="!canGenerate"
+              @click="handleGenerateCases('manual')"
+            >
+              生成测试用例
+            </el-button>
+            <el-button
+              class="flow-secondary-btn"
+              :icon="View"
+              :disabled="!manualTaskRecordId"
+              @click="openScopedProcessDialog('manual')"
+            >
+              查看生成流程
+            </el-button>
+          </div>
+        </div>
+      </div>
 
-                <article class="detail-card generate-review-card">
-                  <div class="panel-header compact-header">
-                    <div>
-                      <div class="panel-title">评审控制</div>
-                      <div class="panel-subtitle">针对当前整批候选做覆盖检查，决定后续补漏方向。</div>
-                    </div>
-                    <div class="review-panel-actions">
-                      <el-button text :disabled="!aiReviewResult" @click="openReviewDrawer">查看详情</el-button>
-                      <el-button
-                        :loading="reviewing"
-                        :disabled="!canReviewGeneratedCases"
-                        @click="runAiReview('MANUAL')"
-                      >
-                        {{ aiReviewResult ? '重新评审本轮候选' : '评审本轮候选' }}
-                      </el-button>
-                    </div>
-                  </div>
+      <div class="panel-card upload-panel">
+        <div class="panel-title-row">
+          <div>
+            <div class="section-title section-title-with-icon">
+              <span class="section-title-icon" aria-hidden="true">📄</span>
+              <span>上传需求文档</span>
+            </div>
+          </div>
+        </div>
 
-                  <div class="review-control-meta">
-                    <div class="review-control-item">
-                      <span class="review-control-label">评审来源</span>
-                      <span class="review-control-value">{{ reviewSourceText }}</span>
-                    </div>
-                    <div class="review-control-item">
-                      <span class="review-control-label">建议补充</span>
-                      <span class="review-control-value">{{ aiReviewResult?.suggestions?.length ?? 0 }} 条</span>
-                    </div>
-                    <div class="review-control-item">
-                      <span class="review-control-label">发现问题</span>
-                      <span class="review-control-value">{{ aiReviewResult?.issues?.length ?? 0 }} 项</span>
-                    </div>
+        <div ref="uploadPanelBodyRef" class="upload-panel-body">
+          <template v-if="uploadedDocument">
+            <div
+              class="upload-success-shell"
+              :style="{ marginTop: `${uploadBoxOffset}px`, minHeight: `${uploadBoxHeight}px` }"
+            >
+              <div class="upload-success-box">
+                <div class="upload-success-file">
+                  <el-icon class="upload-success-icon"><DocumentAdd /></el-icon>
+                  <div class="upload-success-meta">
+                    <div class="upload-success-name">{{ uploadedDocument.fileName }}</div>
+                    <div class="upload-success-size">{{ formatFileSize(uploadedDocument.fileSize) }}</div>
                   </div>
-
-                  <div v-if="aiReviewResult" class="review-control-summary">
-                    <span :class="getReviewResultClass(aiReviewResult.result)">{{ getReviewResultLabel(aiReviewResult.result) }}</span>
-                    <span class="review-control-summary-text">{{ aiReviewResult.summary }}</span>
-                  </div>
-                  <div v-else-if="generatedCases.length" class="review-control-idle">
-                    <div class="review-control-idle-title">当前还没做评审</div>
-                    <div class="review-control-idle-text">
-                      {{ autoReviewEnabled ? '可重新发起一轮评审，检查这批候选是否还需要补漏。' : '这批候选还没评审，点击右上角按钮即可开始手动评审。' }}
-                    </div>
-                  </div>
-                  <div v-else class="empty-block compact-block review-empty-block">
-                    <div class="empty-title">还没有评审结果</div>
-                    <div class="empty-desc">
-                      {{ autoReviewEnabled ? '生成候选用例后会自动补一轮 AI 评审。' : '先生成候选用例，再按你的节奏手动评审。' }}
-                    </div>
-                  </div>
-                </article>
-              </div>
-
-              <div v-if="generationWarnings.length || invalidCases.length" class="ai-feedback-panel generate-feedback-row">
-                <div v-if="generationWarnings.length" class="ai-feedback-block">
-                  <div class="ai-feedback-title">生成提示</div>
-                  <ul class="ai-feedback-list">
-                    <li v-for="(warning, index) in generationWarnings" :key="`warning-${index}`">{{ warning }}</li>
-                  </ul>
-                </div>
-                <div v-if="invalidCases.length" class="ai-feedback-block ai-feedback-block-danger">
-                  <div class="ai-feedback-title">未纳入结果的候选项</div>
-                  <ul class="ai-feedback-list">
-                    <li v-for="item in invalidCases" :key="`invalid-${item.index}`">
-                      第 {{ item.index }} 项<span v-if="item.title">（{{ item.title }}）</span>：{{ item.reason }}
-                    </li>
-                  </ul>
+                  <button class="upload-remove-btn" type="button" @click="clearImportedDocument">×</button>
                 </div>
               </div>
 
-              <section v-if="aiReviewResult" class="detail-card ai-review-summary-banner">
-                <div class="ai-review-summary-main">
-                  <span :class="getReviewResultClass(aiReviewResult.result)">{{ getReviewResultLabel(aiReviewResult.result) }}</span>
-                  <div class="ai-review-summary-copy">
-                    <div class="ai-review-summary-title">{{ aiReviewResult.summary }}</div>
-                    <div class="ai-review-summary-meta">
-                      <span>{{ reviewSourceText }}</span>
-                      <span>问题 {{ aiReviewResult.issues.length }} 项</span>
-                      <span>建议 {{ aiReviewResult.suggestions.length }} 条</span>
-                      <span>已选 {{ selectedSuggestionCount }} 条</span>
-                    </div>
-                  </div>
+              <div class="upload-detail-form">
+                <div class="field-label">文档标题</div>
+                <el-input
+                  v-model="uploadedRequirementTitle"
+                  placeholder="请输入文档标题"
+                />
+
+                <div class="field-label">用例保存路径 <span class="field-required">*</span></div>
+                <el-select
+                  v-model="documentForm.directoryPath"
+                  class="directory-path-select"
+                  filterable
+                  allow-create
+                  clearable
+                  :loading="loadingDirectories"
+                  placeholder="请选择模块路径，选中后会自动拼接文档标题"
+                  @change="handleDocumentDirectorySelect"
+                >
+                  <el-option
+                    v-for="item in directoryOptions"
+                    :key="`document-${item.value}`"
+                    :label="item.label"
+                    :value="item.value"
+                  />
+                </el-select>
+                <div class="field-label">图片能力提示</div>
+                <div class="upload-hint-box" :class="{ 'upload-hint-box-warning': !!textOnlyGenerationNotice }">
+                  {{ textOnlyGenerationNotice || '当前模型支持图文输入，如文档中包含图片素材，将一并参与本次测试用例生成。' }}
                 </div>
-                <div class="ai-review-summary-actions">
-                  <el-button text @click="openReviewDrawer">查看评审详情</el-button>
-                  <el-button text @click="adoptAiReviewSummary">采纳总结</el-button>
+
+                <div class="upload-card-actions">
                   <el-button
-                    type="primary"
-                    :loading="supplementing"
-                    :disabled="!canSupplementGenerate"
-                    @click="runGenerate('append')"
+                    class="generate-primary-btn"
+                    type="success"
+                    :icon="MagicStick"
+                    :loading="generating"
+                    :disabled="!canGenerateDocument"
+                    @click="handleGenerateCases('document')"
                   >
-                    按评审意见追加生成
+                    生成测试用例
+                  </el-button>
+                  <el-button
+                    class="flow-secondary-btn"
+                    :icon="View"
+                    :disabled="!documentTaskRecordId"
+                    @click="openScopedProcessDialog('document')"
+                  >
+                    查看生成流程
                   </el-button>
                 </div>
-              </section>
-
-              <article class="detail-card ai-generated-panel">
-                <div class="panel-header compact-header">
-                  <div>
-                    <div class="panel-title">候选用例编辑区</div>
-                    <div class="panel-subtitle">筛选、微调候选用例后，再勾选写入正式用例中心。</div>
-                  </div>
-                  <div class="result-toolbar-actions">
-                    <div class="generated-toolbar-meta">已选 {{ selectedCount }} / {{ generatedCases.length }}</div>
-                    <el-button :disabled="!generatedCases.length" @click="setAllSelected(true)">全选</el-button>
-                    <el-button :disabled="!generatedCases.length" @click="setAllSelected(false)">取消全选</el-button>
-                    <el-button type="primary" :loading="saving" :disabled="!canSave" @click="saveGeneratedCases">
-                      <el-icon><Plus /></el-icon>
-                      写入用例中心
-                    </el-button>
-                  </div>
-                </div>
-
-                <div v-if="generatedCases.length" class="generated-case-list">
-                  <div v-for="(item, index) in generatedCases" :key="index" class="generated-case-card">
-                    <div class="generated-case-head">
-                      <div class="generated-case-main-meta">
-                        <el-checkbox v-model="item.selected" />
-                        <el-tag size="small" effect="plain">{{ getCaseTypeLabel(item.caseType) }}</el-tag>
-                        <span :class="getPriorityClass(item.priority)">{{ item.priority }}</span>
-                        <span class="generated-case-title">{{ item.title || `候选用例 ${index + 1}` }}</span>
-                      </div>
-                      <div class="generated-case-meta">
-                        <el-button text @click="openCandidateEditor(index)">编辑</el-button>
-                        <el-button text :loading="regeneratingIndex === index" @click="regenerateCase(index)">重生</el-button>
-                        <el-button text type="danger" @click="removeGeneratedCase(index)">删除</el-button>
-                      </div>
-                    </div>
-
-                    <div v-if="item.warnings.length" class="generated-case-warnings">
-                      <span v-for="(warning, warningIndex) in item.warnings" :key="`${index}-${warningIndex}`" class="generated-case-warning">
-                        {{ warning }}
-                      </span>
-                    </div>
-
-                    <div class="generated-case-summary-grid">
-                      <div class="generated-case-summary-item">
-                        <span class="generated-case-summary-label">前置条件</span>
-                        <span class="generated-case-summary-value">{{ summarizeText(item.precondition, 120) }}</span>
-                      </div>
-                      <div class="generated-case-summary-item">
-                        <span class="generated-case-summary-label">测试步骤</span>
-                        <span class="generated-case-summary-value">{{ summarizeText(item.steps, 140) }}</span>
-                      </div>
-                      <div class="generated-case-summary-item">
-                        <span class="generated-case-summary-label">预期结果</span>
-                        <span class="generated-case-summary-value">{{ summarizeText(item.expectedResult, 120) }}</span>
-                      </div>
-                      <div class="generated-case-summary-item">
-                        <span class="generated-case-summary-label">风险备注</span>
-                        <span class="generated-case-summary-value">{{ summarizeText(item.riskNotes, 120) }}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div v-else class="empty-block">
-                  <div class="empty-title">还没有生成结果</div>
-                  <div class="empty-desc">先回到“需求”页整理输入，然后在这里生成候选用例。</div>
-                </div>
-              </article>
+              </div>
             </div>
-          </el-tab-pane>
-        </el-tabs>
-      </article>
-    </div>
-  
-
-    <el-drawer v-model="detailDrawerVisible" title="生成详情" size="44%">
-      <div class="detail-drawer-content">
-        <div class="detail-drawer-block">
-          <div class="detail-drawer-label">模型</div>
-          <div class="detail-drawer-value">{{ lastGenerationProvider || '-' }} / {{ lastGenerationModel || '-' }}</div>
-        </div>
-        <div class="detail-drawer-block">
-          <div class="detail-drawer-label">空间</div>
-          <div class="detail-drawer-value">{{ lastGenerationWorkspaceName || targetWorkspaceCode || '-' }}</div>
-        </div>
-        <div class="detail-drawer-block">
-          <div class="detail-drawer-label">生成摘要</div>
-          <div class="detail-drawer-value">{{ generationMetaText || '还没有生成记录。' }}</div>
-        </div>
-        <div v-if="generationWarnings.length" class="detail-drawer-block">
-          <div class="detail-drawer-label">提示</div>
-          <ul class="detail-drawer-list">
-            <li v-for="(warning, index) in generationWarnings" :key="`drawer-warning-${index}`">{{ warning }}</li>
-          </ul>
-        </div>
-        <div v-if="invalidCases.length" class="detail-drawer-block">
-          <div class="detail-drawer-label">未纳入结果</div>
-          <ul class="detail-drawer-list">
-            <li v-for="item in invalidCases" :key="`drawer-invalid-${item.index}`">
-              第 {{ item.index }} 项<span v-if="item.title">（{{ item.title }}）</span>：{{ item.reason }}
-            </li>
-          </ul>
-        </div>
-        <div class="detail-drawer-block">
-          <div class="detail-drawer-label">原始返回</div>
-          <pre class="detail-drawer-pre">{{ lastGenerationRawContent || '暂无原始返回。' }}</pre>
-        </div>
-      </div>
-    </el-drawer>
-
-    <el-drawer v-model="reviewDrawerVisible" title="评审详情" size="46%">
-      <div class="detail-drawer-content">
-        <div class="detail-drawer-block">
-          <div class="detail-drawer-label">评审结果</div>
-          <div class="detail-drawer-value">
-            <span v-if="aiReviewResult" :class="getReviewResultClass(aiReviewResult.result)">{{ getReviewResultLabel(aiReviewResult.result) }}</span>
-            <span v-else>-</span>
-          </div>
-        </div>
-        <div class="detail-drawer-block">
-          <div class="detail-drawer-label">评审来源</div>
-          <div class="detail-drawer-value">{{ reviewSourceText }}</div>
-        </div>
-        <div class="detail-drawer-block">
-          <div class="detail-drawer-label">评审总结</div>
-          <div class="detail-drawer-value">{{ aiReviewResult?.summary || '还没有评审结果。' }}</div>
-        </div>
-        <div v-if="aiReviewResult?.issues?.length" class="detail-drawer-block">
-          <div class="detail-drawer-label">问题点</div>
-          <ul class="detail-drawer-list">
-            <li v-for="(issue, index) in aiReviewResult.issues" :key="`drawer-issue-${index}`">{{ issue }}</li>
-          </ul>
-        </div>
-        <div v-if="aiReviewResult?.suggestions?.length" class="detail-drawer-block">
-          <div class="detail-drawer-label">补充建议</div>
-          <div class="ai-review-summary-line">已选 {{ selectedSuggestionCount }} / {{ aiReviewResult.suggestions.length }}</div>
-          <el-checkbox-group v-model="selectedSuggestions" class="ai-suggestion-list">
-            <el-checkbox
-              v-for="(suggestion, index) in aiReviewResult.suggestions"
-              :key="`drawer-suggestion-${index}`"
-              :label="suggestion"
-              :value="suggestion"
-              class="ai-suggestion-item"
-            >
-              <span class="ai-review-card-index">{{ index + 1 }}</span>
-              <span class="ai-review-card-content">{{ suggestion }}</span>
-            </el-checkbox>
-          </el-checkbox-group>
-        </div>
-        <div class="detail-drawer-block">
-          <div class="detail-drawer-label">人工补充意见</div>
-          <el-input
-            v-model="supplementNotes"
-            type="textarea"
-            :rows="6"
-            resize="vertical"
-            placeholder="可以补充你自己的评审意见，再基于这些意见追加生成。"
-          />
-        </div>
-        <div class="detail-drawer-actions">
-          <el-button text @click="adoptAiReviewSummary" :disabled="!aiReviewResult?.summary">采纳总结</el-button>
-          <el-button
-            type="primary"
-            :loading="supplementing"
-            :disabled="!canSupplementGenerate"
-            @click="runGenerate('append')"
+          </template>
+          <button
+            v-else
+            class="upload-large-box"
+            type="button"
+            :style="{ marginTop: `${uploadBoxOffset}px`, minHeight: `${uploadBoxHeight}px` }"
+            @click="triggerRequirementImport"
           >
-            按评审意见追加生成
-          </el-button>
-        </div>
-        <div class="detail-drawer-block">
-          <div class="detail-drawer-label">原始返回</div>
-          <pre class="detail-drawer-pre">{{ aiReviewResult?.rawContent || '暂无原始返回。' }}</pre>
+            <el-icon class="upload-box-icon"><DocumentAdd /></el-icon>
+            <div class="upload-box-center">
+              <div class="upload-box-title">拖拽文件到此处或点击选择文件</div>
+              <div class="upload-box-desc">支持 PDF、Word、TXT、Markdown 格式</div>
+            </div>
+            <span class="upload-primary-btn">选择文件</span>
+          </button>
         </div>
       </div>
-    </el-drawer>
+    </div>
 
-    <el-drawer
-      v-model="candidateEditDrawerVisible"
-      title="编辑候选用例"
-      size="52%"
-      :destroy-on-close="false"
-    >
-      <template v-if="activeCandidateDraft">
-        <div class="candidate-edit-drawer">
-          <div class="candidate-edit-meta">
-            <el-tag size="small" effect="plain">{{ getCaseTypeLabel(activeCandidateDraft.caseType) }}</el-tag>
-            <span :class="getPriorityClass(activeCandidateDraft.priority)">{{ activeCandidateDraft.priority }}</span>
-            <span class="candidate-edit-index">第 {{ candidateEditIndex === null ? 0 : candidateEditIndex + 1 }} / {{ generatedCases.length }} 条</span>
+    <div class="panel-card ai-config-card">
+      <div class="panel-title-row">
+        <div>
+          <div class="section-title section-title-with-icon">
+            <span class="section-title-icon output-section-icon" aria-hidden="true">📤</span>
+            <span>输出模式设置</span>
           </div>
+          <div class="section-desc">先选择本次任务的输出方式。</div>
+        </div>
+      </div>
 
-          <el-form label-width="84px" class="generated-case-form">
-            <el-form-item label="用例名称">
-              <el-input v-model="activeCandidateDraft.title" />
-            </el-form-item>
-            <div class="generated-case-row">
-              <el-form-item label="优先级">
-                <el-select v-model="activeCandidateDraft.priority">
-                  <el-option label="P0" value="P0" />
-                  <el-option label="P1" value="P1" />
-                  <el-option label="P2" value="P2" />
-                  <el-option label="P3" value="P3" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="用例类型">
-                <el-select v-model="activeCandidateDraft.caseType">
-                  <el-option label="功能" value="FUNCTION" />
-                  <el-option label="边界" value="BOUNDARY" />
-                  <el-option label="异常" value="EXCEPTION" />
-                  <el-option label="回归" value="REGRESSION" />
-                </el-select>
-              </el-form-item>
+      <div class="output-mode-grid output-mode-grid-visual">
+        <label class="output-mode-card output-mode-card-visual" :class="{ 'output-mode-card-active': form.outputMode === 'STREAM' }">
+          <input v-model="form.outputMode" type="radio" value="STREAM">
+          <div class="output-mode-title">
+            <span class="output-mode-icon output-mode-icon-stream" aria-hidden="true">⚡</span>
+            <span>实时流式输出</span>
+          </div>
+          <div class="output-mode-desc">优先展示任务执行进度和阶段状态。</div>
+        </label>
+        <label class="output-mode-card output-mode-card-visual" :class="{ 'output-mode-card-active': form.outputMode === 'COMPLETE' }">
+          <input v-model="form.outputMode" type="radio" value="COMPLETE">
+          <div class="output-mode-title">
+            <span class="output-mode-icon output-mode-icon-complete" aria-hidden="true">📄</span>
+            <span>完整输出</span>
+          </div>
+          <div class="output-mode-desc">等待生成和评审全部完成后统一返回结果。</div>
+        </label>
+      </div>
+    </div>
+
+    <div class="panel-card ai-config-card">
+      <div class="panel-title-row">
+        <div>
+          <div class="section-title section-title-with-icon">
+            <span class="section-title-icon" aria-hidden="true">🤖</span>
+            <span>当前 AI 配置</span>
+          </div>
+          <div class="section-desc">展示当前空间下本次生成任务会使用的 AI 配置摘要。</div>
+        </div>
+        <el-button :icon="RefreshRight" text @click="loadConfig">刷新配置</el-button>
+      </div>
+
+      <div class="ai-config-grid ai-config-grid-five">
+        <div class="config-info-item config-info-item-status">
+          <div class="config-info-label">配置状态</div>
+          <div class="config-status-panel" :class="aiConfigStatusClass">
+            <span class="config-status-dot" />
+            <span class="config-status-text">{{ aiConfigStatusText }}</span>
+          </div>
+        </div>
+        <div class="config-info-item">
+          <div class="config-info-label">当前空间</div>
+          <div class="config-info-value">{{ currentWorkspaceName || '-' }}</div>
+        </div>
+        <div class="config-info-item">
+          <div class="config-info-label">编写模型</div>
+          <div class="config-info-value">
+            {{ activeConfig ? `${activeConfig.provider} / ${activeConfig.model} / 温度 ${activeConfig.temperature.toFixed(1)}` : '-' }}
+          </div>
+        </div>
+        <div class="config-info-item">
+          <div class="config-info-label">评审模型</div>
+          <div class="config-info-value">
+            {{ reviewerConfig ? `${reviewerConfig.provider} / ${reviewerConfig.model} / 温度 ${reviewerConfig.temperature.toFixed(1)}` : '-' }}
+          </div>
+        </div>
+        <div class="config-info-item">
+          <div class="config-info-label">输出模式</div>
+          <div class="config-info-value">{{ form.outputMode === 'STREAM' ? '实时流式输出' : '完整输出' }}</div>
+        </div>
+      </div>
+
+      <div class="recent-task-card">
+        <div class="panel-title-row recent-task-header">
+          <div>
+            <div class="section-title section-title-with-icon">
+              <span class="section-title-icon" aria-hidden="true">🕘</span>
+              <span>最近任务</span>
             </div>
-            <el-form-item label="前置条件">
-              <el-input v-model="activeCandidateDraft.precondition" type="textarea" :rows="3" resize="vertical" />
-            </el-form-item>
-            <el-form-item label="测试步骤">
-              <el-input v-model="activeCandidateDraft.steps" type="textarea" :rows="6" resize="vertical" />
-            </el-form-item>
-            <el-form-item label="预期结果">
-              <el-input v-model="activeCandidateDraft.expectedResult" type="textarea" :rows="4" resize="vertical" />
-            </el-form-item>
-            <el-form-item label="风险备注">
-              <el-input v-model="activeCandidateDraft.riskNotes" type="textarea" :rows="3" resize="vertical" />
-            </el-form-item>
-          </el-form>
+            <div class="section-desc">展示最近 3 条任务，优先显示进行中、失败和待处理任务。</div>
+          </div>
+          <el-button :icon="RefreshRight" text @click="refreshLatestTaskRecord">刷新任务</el-button>
+        </div>
+
+        <div v-if="recentTaskRecords.length" class="recent-task-list">
+          <div v-for="task in recentTaskRecords" :key="task.id" class="recent-task-item">
+            <div class="recent-task-main">
+              <div class="recent-task-top">
+                <div class="recent-task-title">{{ task.requirementTitle }}</div>
+                <span class="status-pill" :class="getTaskStatusTone(task.status)">
+                  {{ getTaskStatusLabel(task.status) }}
+                </span>
+              </div>
+              <div class="recent-task-meta">
+                <span>{{ task.workspaceName }}</span>
+                <span>{{ task.outputMode === 'STREAM' ? '实时流式输出' : '完整输出' }}</span>
+                <span>{{ formatTaskTime(task.updatedAt) }}</span>
+              </div>
+            </div>
+            <div class="recent-task-actions">
+              <el-button class="recent-task-button recent-task-button-primary" :icon="View" @click="openTaskProcessDialog(task.id)">查看流程</el-button>
+              <el-button class="recent-task-button recent-task-button-secondary" @click="openTaskDetail(task.id)">查看详情</el-button>
+            </div>
+          </div>
+        </div>
+
+        <div v-else class="recent-task-empty">还没有最近任务，生成一次测试用例后会显示在这里。</div>
+
+        <div class="recent-task-footer">
+          <el-button text @click="openTaskRecordsPage">查看全部记录</el-button>
+        </div>
+      </div>
+    </div>
+    <input
+      ref="requirementFileInput"
+      class="hidden-file-input"
+      type="file"
+      accept=".doc,.docx,.pdf,.md,.txt"
+      @change="handleRequirementFileChange"
+    >
+
+    <el-dialog
+      v-model="processDialogVisible"
+      title="AI 用例生成流程"
+      width="760px"
+      destroy-on-close
+    >
+      <template v-if="latestTaskRecord">
+        <div class="process-dialog-meta">
+          <div>
+            <div class="process-dialog-title">{{ latestTaskRecord.requirementTitle }}</div>
+            <div class="process-dialog-subtitle">
+              {{ latestTaskRecord.workspaceName }} / {{ latestTaskRecord.outputMode === 'STREAM' ? '实时流式输出' : '完整输出' }}
+            </div>
+          </div>
+          <span class="status-pill" :class="getTaskStatusTone(latestTaskRecord.status)">
+            {{ getTaskStatusLabel(latestTaskRecord.status) }}
+          </span>
+        </div>
+
+        <div class="process-step-list">
+          <div
+            v-for="step in processSteps"
+            :key="step.index"
+            class="process-step-card"
+            :class="{
+              'process-step-card-active': latestTaskRecord.currentStep === step.index,
+              'process-step-card-done': latestTaskRecord.currentStep > step.index || latestTaskRecord.status === 'COMPLETED',
+              'process-step-card-failed': latestTaskRecord.status === 'FAILED' && latestTaskRecord.currentStep === step.index,
+            }"
+          >
+            <div class="process-step-index">{{ step.index }}</div>
+            <div class="process-step-content">
+              <div class="process-step-title">{{ step.title }}</div>
+              <div class="process-step-desc">{{ step.description }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="process-current-log">
+          <div class="section-title small-title">当前状态</div>
+          <div class="process-current-text">{{ latestTaskRecord.stepMessage }}</div>
+          <div v-if="latestTaskRecord.errorMessage" class="process-error-text">{{ latestTaskRecord.errorMessage }}</div>
+        </div>
+
+        <div v-if="latestTaskRecord.status === 'FAILED'" class="process-failure-card">
+          <div class="section-title small-title">失败位置</div>
+          <div class="process-failure-stage">失败阶段：{{ getFailureStepLabel(latestTaskRecord.currentStep) }}</div>
+          <div class="process-failure-text">{{ latestTaskRecord.errorMessage || latestTaskRecord.stepMessage }}</div>
         </div>
       </template>
 
       <template #footer>
-        <div class="candidate-edit-footer">
-          <div class="candidate-edit-nav">
-            <el-button :disabled="!canGoPrevCandidate" @click="goToCandidate(-1)">上一条</el-button>
-            <el-button :disabled="!canGoNextCandidate" @click="goToCandidate(1)">下一条</el-button>
-          </div>
-          <div class="candidate-edit-actions">
-            <el-button @click="closeCandidateEditor">取消</el-button>
-            <el-button type="primary" @click="saveCandidateEditor">保存</el-button>
-          </div>
+        <div class="process-dialog-footer">
+          <el-button @click="processDialogVisible = false">关闭</el-button>
+          <el-button
+            type="danger"
+            :icon="CircleClose"
+            :disabled="!hasProcessingTask"
+            @click="terminateTask"
+          >
+            取消生成
+          </el-button>
         </div>
       </template>
-    </el-drawer>
-</section>
+    </el-dialog>
+  </section>
 </template>
 
 <style scoped>
-.ai-generate-layout {
+.ai-generate-page {
   display: grid;
   gap: 16px;
 }
 
-.ai-workspace-panel,
-.generate-review-card,
-.ai-generated-panel,
-.requirement-main,
-.requirement-side {
-  min-width: 0;
+.ai-output-mode-card,
+.input-panel,
+.upload-panel,
+.bottom-action-card {
+  padding: 18px;
 }
 
-.ai-inner-tabs :deep(.el-tabs__header) {
-  margin-bottom: 14px;
+.input-panel,
+.upload-panel {
+  min-height: 520px;
 }
 
-.ai-inner-tabs :deep(.el-tabs__content) {
-  overflow: visible;
+.section-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-main);
 }
 
-.requirement-stage {
-  display: grid;
-  gap: 14px;
-}
-
-.generate-tab-layout {
-  display: grid;
-  gap: 16px;
-}
-
-.generate-content-grid {
-  display: grid;
-  grid-template-columns: minmax(340px, 1fr) minmax(320px, 0.9fr);
-  gap: 16px;
-  align-items: start;
-}
-
-.generate-action-card,
-.generate-review-card {
-  height: 100%;
-}
-
-.panel-header-actions {
+.section-title-with-icon {
   display: inline-flex;
   align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
+  gap: 10px;
+  font-size: 18px;
 }
 
-.compact-header {
-  margin-bottom: 10px;
-}
-
-.requirement-editor-card {
-  padding: 16px;
-}
-
-.requirement-top-actions {
-  margin-bottom: 18px;
-}
-
-.requirement-editor-actions {
+.section-title-icon {
   display: inline-flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  font-size: 22px;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
-.requirement-editor-grid {
+.output-section-icon {
+  font-size: 20px;
+  transform: translateY(-1px);
+}
+
+.section-title.small-title {
+  font-size: 14px;
+}
+
+.section-desc,
+.char-count,
+.upload-box-desc,
+.process-dialog-subtitle,
+.process-step-desc,
+.process-current-text {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-subtle);
+}
+
+.section-desc {
+  margin-top: 6px;
+}
+
+.output-mode-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.9fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.output-mode-grid-visual {
+  gap: 18px;
+}
+
+.output-mode-card {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.78);
+  cursor: pointer;
+}
+
+.output-mode-card-visual {
+  min-height: 116px;
+  align-content: start;
+  padding: 20px 22px;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(221, 229, 240, 0.92);
+}
+
+.output-mode-card input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.output-mode-card-active {
+  border-color: rgba(36, 107, 255, 0.72);
+  background: rgba(233, 240, 255, 0.92);
+  box-shadow: inset 0 0 0 1px rgba(36, 107, 255, 0.3);
+}
+
+.output-mode-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-main);
+}
+
+.output-mode-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.output-mode-icon-stream {
+  transform: translateY(-1px);
+}
+
+.output-mode-icon-complete {
+  transform: translateY(-1px);
+}
+
+.output-mode-desc {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-subtle);
+  max-width: 30ch;
+}
+
+.main-content-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
   align-items: stretch;
 }
 
-.requirement-block-title {
-  margin-bottom: 10px;
+.panel-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  margin-bottom: 18px;
+}
+
+.form-stack {
+  display: grid;
+  gap: 12px;
+  min-height: 100%;
+  align-content: start;
+}
+
+.field-label {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-main);
 }
 
-.requirement-text-area,
-.requirement-material-area {
-  min-width: 0;
-  height: 100%;
+.field-required {
+  color: #ef4444;
 }
 
-.requirement-text-area {
+.field-tip {
+  margin-top: -4px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-subtle);
+}
+
+.path-preview-card {
+  display: grid;
+  gap: 6px;
+  margin-top: -2px;
+  padding: 12px 14px;
+  border: 1px solid rgba(36, 107, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(239, 246, 255, 0.8);
+}
+
+.path-preview-label {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #175cd3;
+}
+
+.path-preview-value {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #1f2937;
+  word-break: break-word;
+}
+
+.directory-path-select {
+  width: 100%;
+}
+
+.requirement-textarea :deep(.el-textarea__inner) {
+  min-height: 280px !important;
+  padding: 14px 14px 16px;
+  line-height: 1.75;
+  font-size: 14px;
+  border-radius: 10px;
+}
+
+.requirement-textarea :deep(.el-textarea) {
+  display: block;
+}
+
+.char-count {
+  text-align: right;
+  margin-top: -2px;
+  padding-bottom: 8px;
+}
+
+.action-bar,
+.process-dialog-meta,
+.process-dialog-footer {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
-.requirement-text-area :deep(.el-textarea) {
+.path-action-stack,
+.upload-card-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.generate-primary-btn {
+  width: 100%;
+  height: 54px;
+  border-radius: 10px;
+  border-color: #2fb15d;
+  background: #2fb15d;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.generate-primary-btn:hover,
+.generate-primary-btn:focus {
+  border-color: #24974d;
+  background: #24974d;
+}
+
+.generate-primary-btn:disabled {
+  border-color: #c7cdd6;
+  background: #c7cdd6;
+  color: #fff;
+}
+
+.flow-secondary-btn {
+  width: 100%;
+  height: 54px;
+  margin-left: 0;
+  border-radius: 10px;
+  border-color: var(--line-soft);
+  background: #fff;
+  color: var(--text-main);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.flow-secondary-btn:hover,
+.flow-secondary-btn:focus {
+  border-color: rgba(36, 107, 255, 0.28);
+  color: #175cd3;
+  background: rgba(239, 246, 255, 0.72);
+}
+
+.upload-large-box {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  width: 100%;
+  min-height: 320px;
+  border: 1px dashed var(--line-soft);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text-main);
+  cursor: pointer;
+  padding: 20px;
+  margin-bottom: 8px;
+}
+
+.upload-large-box:hover {
+  border-color: rgba(36, 107, 255, 0.34);
+  background: rgba(233, 240, 255, 0.72);
+}
+
+.upload-panel-body {
+  display: grid;
+  align-content: start;
+}
+
+.upload-success-shell {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+
+.upload-success-box {
+  padding: 14px;
+  border: 1px dashed var(--line-soft);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.upload-success-file {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.upload-success-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: rgba(237, 233, 254, 0.8);
+  color: #7c3aed;
+  font-size: 20px;
+}
+
+.upload-success-meta {
+  min-width: 0;
+  text-align: center;
+}
+
+.upload-success-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.upload-success-size {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-subtle);
+}
+
+.upload-remove-btn {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #f43f5e;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.upload-detail-form {
+  display: grid;
+  gap: 12px;
+}
+
+.upload-hint-box {
+  padding: 12px 14px;
+  border: 1px solid rgba(36, 107, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(239, 246, 255, 0.82);
+  font-size: 13px;
+  line-height: 1.75;
+  color: #1d4ed8;
+}
+
+.upload-hint-box-warning {
+  border-color: rgba(245, 158, 11, 0.26);
+  background: rgba(255, 247, 237, 0.92);
+  color: #9a3412;
+}
+
+.upload-box-icon {
+  font-size: 28px;
+}
+
+.upload-box-center {
+  display: grid;
+  gap: 10px;
+  text-align: center;
+}
+
+.upload-box-title {
+  font-size: 14px;
+  color: var(--text-main);
+}
+
+.upload-primary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 84px;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 8px;
+  background: #409eff;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ai-config-card {
+  padding: 20px 22px;
+}
+
+.ai-config-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 6px;
+}
+
+.ai-config-grid-five {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.config-info-item {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 12px;
+  min-height: 108px;
+  padding: 16px 18px;
+  border: 1px solid rgba(221, 229, 240, 0.9);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03);
+  overflow: hidden;
+}
+
+.config-info-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-subtle);
+  line-height: 1.4;
+}
+
+.config-info-value {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.65;
+  color: var(--text-main);
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.config-info-item-status {
+  align-content: start;
+}
+
+.config-status-panel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 36px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.config-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.config-status-text {
+  white-space: normal;
+}
+
+.config-status-success {
+  color: #067647;
+  background: rgba(236, 253, 243, 0.95);
+  border-color: rgba(18, 183, 106, 0.2);
+}
+
+.config-status-danger {
+  color: #b42318;
+  background: rgba(254, 242, 242, 0.96);
+  border-color: rgba(240, 68, 56, 0.18);
+}
+
+.recent-task-card {
+  margin-top: 16px;
+  padding: 18px 20px 16px;
+  border: 1px solid rgba(221, 229, 240, 0.9);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+}
+
+.recent-task-header {
+  margin-bottom: 14px;
+}
+
+.recent-task-list {
+  display: grid;
+  gap: 10px;
+}
+
+.recent-task-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.recent-task-main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
   flex: 1;
 }
 
-.requirement-text-area :deep(.el-textarea__inner) {
-  min-height: 520px;
-  max-height: 100%;
-  box-sizing: border-box;
+.recent-task-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.recent-task-title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--text-main);
+  word-break: break-word;
+}
+
+.recent-task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-subtle);
+}
+
+.recent-task-meta span:not(:last-child)::after {
+  content: '·';
+  margin-left: 8px;
+  color: #c0c8d2;
+}
+
+.recent-task-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.recent-task-button {
+  min-width: 84px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.recent-task-button-primary {
+  border-color: rgba(36, 107, 255, 0.18);
+  background: rgba(239, 246, 255, 0.88);
+  color: #175cd3;
+}
+
+.recent-task-button-primary:hover,
+.recent-task-button-primary:focus {
+  border-color: rgba(36, 107, 255, 0.3);
+  background: rgba(219, 234, 254, 0.92);
+  color: #175cd3;
+}
+
+.recent-task-button-secondary {
+  border-color: rgba(208, 213, 221, 0.9);
+  color: #475467;
+}
+
+.recent-task-button-secondary:hover,
+.recent-task-button-secondary:focus {
+  border-color: rgba(152, 162, 179, 0.9);
+  color: #344054;
+}
+
+.recent-task-empty {
+  padding: 16px 0 8px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-subtle);
+}
+
+.recent-task-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.process-dialog-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.process-step-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.process-step-card {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.82);
+}
+
+.process-step-card-active {
+  border-color: rgba(36, 107, 255, 0.36);
+  background: rgba(233, 240, 255, 0.82);
+}
+
+.process-step-card-done {
+  border-color: rgba(20, 163, 109, 0.22);
+}
+
+.process-step-card-failed {
+  border-color: rgba(240, 68, 56, 0.26);
+  background: rgba(254, 242, 242, 0.92);
+}
+
+.process-step-index {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.process-step-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.process-current-log {
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.process-error-text {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--danger);
+}
+
+.process-failure-card {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid rgba(240, 68, 56, 0.18);
+  border-radius: 10px;
+  background: rgba(254, 242, 242, 0.96);
+}
+
+.process-failure-stage {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #b42318;
+}
+
+.process-failure-text {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #7a271a;
+}
+
+.status-info {
+  background: rgba(219, 234, 254, 0.92);
+  color: #175cd3;
+}
+
+.status-warning {
+  background: rgba(255, 245, 223, 0.92);
+  color: #b54708;
+}
+
+.status-success {
+  background: rgba(233, 248, 241, 0.92);
+  color: #067647;
+}
+
+.status-danger {
+  background: rgba(254, 228, 226, 0.92);
+  color: #b42318;
+}
+
+.status-neutral {
+  background: rgba(242, 244, 247, 0.96);
+  color: #475467;
 }
 
 .hidden-file-input {
   display: none;
 }
 
-.generate-config-form {
-  margin-top: 2px;
-}
-
-.generate-config-meta {
-  display: grid;
-  grid-template-columns: repeat(1, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.generate-config-meta :deep(.el-form-item) {
-  margin-bottom: 18px;
-}
-
-.generate-config-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 16px;
-}
-
-.generate-config-note {
-  font-size: 13px;
-  color: var(--text-subtle);
-  line-height: 1.6;
-}
-
-.material-summary {
-  display: grid;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.material-summary-item {
-  display: grid;
-  gap: 4px;
-}
-
-.material-summary-label {
-  font-size: 12px;
-  color: var(--text-subtle);
-}
-
-.material-summary-value {
-  font-size: 13px;
-  color: var(--text-main);
-  line-height: 1.5;
-}
-
-.material-empty {
-  min-height: 220px;
-  flex: 1;
-}
-
-.requirement-material-area {
-  display: flex;
-  flex-direction: column;
-}
-
-.requirement-asset-list {
-  flex: 1;
-  align-content: start;
-}
-
-.generate-config-actions,
-.result-toolbar-actions,
-.generated-case-main-meta,
-.generated-case-meta,
-.ai-review-actions,
-.ai-review-footer,
-.review-panel-actions,
-.ai-review-summary-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.result-toolbar-actions {
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.generated-toolbar-meta,
-.asset-card-summary,
-.ai-review-summary-line {
-  font-size: 12px;
-  color: var(--text-subtle);
-}
-
-.ai-feedback-panel {
-  display: grid;
-  gap: 10px;
-}
-
-.generate-feedback-row {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.ai-feedback-block {
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: rgba(59, 130, 246, 0.08);
-}
-
-.ai-feedback-block-neutral {
-  background: rgba(15, 23, 42, 0.04);
-}
-
-.ai-feedback-block-danger {
-  background: rgba(239, 68, 68, 0.08);
-}
-
-.ai-feedback-title,
-.ai-review-section-title {
-  margin-bottom: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-main);
-}
-
-.ai-feedback-list {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding-left: 18px;
-  color: var(--text-subtle);
-  font-size: 13px;
-}
-
-.ai-feedback-text {
-  color: var(--text-subtle);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.ai-review-section {
-  margin-top: 14px;
-  padding: 12px 14px;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-}
-
-.ai-review-section-issues {
-  background: rgba(254, 242, 242, 0.78);
-}
-
-.ai-review-section-suggestions {
-  background: rgba(239, 246, 255, 0.82);
-}
-
-.ai-review-section-notes {
-  background: rgba(248, 250, 252, 0.92);
-}
-
-.ai-review-card-list {
-  display: grid;
-  gap: 8px;
-}
-
-.ai-review-card-item {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  padding: 10px 12px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.82);
-}
-
-.ai-review-card-item-issue {
-  background: rgba(255, 255, 255, 0.86);
-}
-
-.ai-review-card-index {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.08);
-  color: var(--text-subtle);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-.ai-review-card-content {
-  min-width: 0;
-  color: var(--text-main);
-  font-size: 13px;
-  line-height: 1.6;
-  word-break: break-word;
-}
-
-.ai-suggestion-list {
-  display: grid;
-  gap: 8px;
-}
-
-.ai-suggestion-item {
-  margin-right: 0;
-  padding: 10px 12px;
-  border: 1px solid rgba(59, 130, 246, 0.14);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.86);
-  transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.ai-suggestion-item :deep(.el-checkbox__label) {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  white-space: normal;
-  padding-left: 8px;
-}
-
-.ai-suggestion-item :deep(.el-checkbox__input.is-checked + .el-checkbox__label) {
-  color: inherit;
-}
-
-.ai-suggestion-item:has(.el-checkbox__input.is-checked) {
-  border-color: rgba(59, 130, 246, 0.28);
-  background: rgba(219, 234, 254, 0.72);
-  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.08);
-}
-
-.review-result-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 72px;
-  height: 24px;
-  padding: 0 10px;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.review-result-chip-approve {
-  color: #067647;
-  background: rgba(220, 252, 231, 0.92);
-  border-color: rgba(34, 197, 94, 0.22);
-}
-
-.review-result-chip-reject {
-  color: #b42318;
-  background: rgba(254, 228, 226, 0.92);
-  border-color: rgba(240, 68, 56, 0.22);
-}
-
-.review-result-chip-suggest,
-.review-result-chip-neutral {
-  color: #175cd3;
-  background: rgba(219, 234, 254, 0.92);
-  border-color: rgba(59, 130, 246, 0.22);
-}
-
-.ai-review-footer {
-  justify-content: flex-end;
-  margin-top: 14px;
-}
-
-.review-empty-block {
-  min-height: 132px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.generate-summary-title {
-  margin-top: 8px;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-main);
-}
-
-.generate-summary-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--text-subtle);
-}
-
-.generate-summary-text {
-  margin-top: 12px;
-  white-space: pre-wrap;
-  color: var(--text-main);
-  line-height: 1.7;
-  max-height: 180px;
-  overflow: auto;
-}
-
-.generate-action-note {
-  margin-top: 8px;
-  margin-bottom: 14px;
-  font-size: 13px;
-  color: var(--text-subtle);
-  line-height: 1.6;
-}
-
-.generate-review-toggle-row {
-  display: flex;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 14px;
-  padding: 10px 12px;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  background: rgba(248, 250, 252, 0.92);
-}
-
-.generate-review-toggle-main {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.generate-review-toggle-label,
-.review-control-label {
-  font-size: 12px;
-  color: var(--text-subtle);
-}
-
-.generate-review-toggle-state {
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.06);
-  color: var(--text-main);
-  font-size: 12px;
-  line-height: 1;
-}
-
-.generate-review-toggle-desc {
-  flex: 1 1 100%;
-  font-size: 12px;
-  color: var(--text-subtle);
-  line-height: 1.5;
-}
-
-.generate-mini-meta {
-  margin-top: 14px;
-  font-size: 12px;
-  color: var(--text-subtle);
-  line-height: 1.6;
-}
-
-.review-control-meta {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.review-control-item {
-  display: grid;
-  gap: 6px;
-  padding: 12px;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  background: rgba(248, 250, 252, 0.88);
-}
-
-.review-control-value {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-main);
-}
-
-.review-control-summary {
-  margin-top: 14px;
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid rgba(59, 130, 246, 0.16);
-  border-radius: 10px;
-  background: rgba(239, 246, 255, 0.78);
-}
-
-.review-control-summary-text {
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-main);
-}
-
-.review-control-idle {
-  margin-top: 14px;
-  display: grid;
-  gap: 6px;
-  padding: 12px;
-  border: 1px dashed rgba(15, 23, 42, 0.14);
-  border-radius: 10px;
-  background: rgba(248, 250, 252, 0.72);
-}
-
-.review-control-idle-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-main);
-}
-
-.review-control-idle-text {
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-subtle);
-}
-
-.ai-review-summary-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 16px;
-}
-
-.ai-review-summary-main {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  min-width: 0;
-}
-
-.ai-review-summary-copy {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.ai-review-summary-title {
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-main);
-}
-
-.ai-review-summary-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  font-size: 12px;
-  color: var(--text-subtle);
-}
-
-.ai-review-summary-actions {
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.asset-card-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.requirement-assets-card {
-  margin-top: 12px;
-}
-
-.requirement-asset-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 12px;
-  margin-top: 10px;
-}
-
-.requirement-asset-item {
-  display: grid;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.82);
-}
-
-.requirement-asset-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.requirement-asset-top .el-button {
-  margin-left: auto;
-}
-
-.requirement-asset-preview {
-  display: block;
-  width: 100%;
-  aspect-ratio: 4 / 3;
-  overflow: hidden;
-  border-radius: 8px;
-  background: rgba(15, 23, 42, 0.05);
-}
-
-.requirement-asset-fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-subtle);
-  font-size: 12px;
-}
-
-.requirement-asset-image {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.requirement-asset-link {
-  color: var(--text-main);
-  text-decoration: none;
-  font-size: 13px;
-  line-height: 1.5;
-  word-break: break-word;
-}
-
-.requirement-asset-link:hover {
-  text-decoration: underline;
-}
-
-.requirement-asset-meta {
-  font-size: 12px;
-  color: var(--text-subtle);
-}
-
-.generated-case-list {
-  display: grid;
-  gap: 10px;
-}
-
-.generated-case-card {
-  padding: 12px 14px;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.78);
-}
-
-.generated-case-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.generated-case-main-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
-}
-
-.generated-case-title {
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-main);
-  line-height: 1.5;
-}
-
-.priority-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 30px;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.priority-chip-p0 {
-  color: #b42318;
-  background: rgba(254, 228, 226, 0.92);
-  border-color: rgba(240, 68, 56, 0.2);
-}
-
-.priority-chip-p1 {
-  color: #b54708;
-  background: rgba(255, 239, 213, 0.92);
-  border-color: rgba(245, 158, 11, 0.24);
-}
-
-.priority-chip-p2 {
-  color: #175cd3;
-  background: rgba(219, 234, 254, 0.92);
-  border-color: rgba(59, 130, 246, 0.2);
-}
-
-.priority-chip-p3,
-.priority-chip-default {
-  color: #475467;
-  background: rgba(242, 244, 247, 0.96);
-  border-color: rgba(152, 162, 179, 0.24);
-}
-
-.generated-case-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-}
-
-.generated-case-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 12px;
-}
-
-.generated-case-summary-item {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.generated-case-summary-label {
-  font-size: 12px;
-  color: var(--text-subtle);
-}
-
-.generated-case-summary-value {
-  font-size: 12px;
-  color: var(--text-main);
-  line-height: 1.5;
-  white-space: normal;
-  word-break: break-word;
-}
-
-.generated-case-row {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.generated-case-row :deep(.el-form-item) {
-  margin-bottom: 18px;
-}
-
-.generated-case-form {
-  margin-top: 4px;
-}
-
-.candidate-edit-drawer {
-  display: grid;
-  gap: 14px;
-}
-
-.candidate-edit-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.candidate-edit-index {
-  font-size: 12px;
-  color: var(--text-subtle);
-}
-
-.candidate-edit-footer {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.candidate-edit-nav,
-.candidate-edit-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.generated-case-warnings {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 8px;
-}
-
-.generated-case-warning {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: rgba(245, 158, 11, 0.12);
-  color: #b45309;
-  font-size: 12px;
-}
-
-@media (max-width: 1200px) {
-  .generated-case-summary-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-.detail-drawer-content {
-  display: grid;
-  gap: 16px;
-}
-
-.detail-drawer-block {
-  display: grid;
-  gap: 8px;
-}
-
-.detail-drawer-label {
-  font-size: 12px;
-  color: var(--text-subtle);
-}
-
-.detail-drawer-value {
-  color: var(--text-main);
-  line-height: 1.7;
-  white-space: pre-wrap;
-}
-
-.detail-drawer-list {
-  margin: 0;
-  padding-left: 18px;
-  display: grid;
-  gap: 6px;
-  color: var(--text-main);
-}
-
-.detail-drawer-pre {
-  margin: 0;
-  padding: 12px;
-  border-radius: 10px;
-  background: rgba(15, 23, 42, 0.05);
-  color: var(--text-main);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 360px;
-  overflow: auto;
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.detail-drawer-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
 @media (max-width: 1280px) {
-  .generate-content-grid {
+  .main-content-grid {
     grid-template-columns: 1fr;
   }
 
-  .generate-config-meta,
-  .generated-case-row {
-    grid-template-columns: 1fr;
+  .input-panel,
+  .upload-panel {
+    min-height: auto;
   }
 
-  .requirement-editor-grid {
-    grid-template-columns: 1fr;
+  .upload-panel-body {
+    padding-top: 0;
   }
 
-  .generate-feedback-row,
-  .review-control-meta,
-  .ai-review-summary-banner {
-    grid-template-columns: 1fr;
+  .ai-config-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .ai-review-summary-banner {
-    display: grid;
+  .ai-config-grid-five {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .generate-config-footer {
+  .recent-task-item {
+    align-items: flex-start;
     flex-direction: column;
-    align-items: stretch;
+  }
+
+  .recent-task-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 900px) {
+  .output-mode-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-config-grid-five {
+    grid-template-columns: 1fr;
+  }
+
+  .path-action-stack,
+  .upload-card-actions {
+    grid-template-columns: 1fr;
   }
 }
 </style>
+
 

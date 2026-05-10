@@ -233,6 +233,23 @@ a {
   margin: 0;
 }
 
+.case-tabs :deep(.el-tabs__nav-wrap) {
+  min-height: 48px;
+}
+
+.case-tabs :deep(.el-tabs__item) {
+  height: 48px;
+  padding: 0 18px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.case-tabs :deep(.el-tabs__active-bar) {
+  bottom: 1px;
+}
+
 .case-tabs .el-tabs__nav-wrap::after {
   height: 0;
 }

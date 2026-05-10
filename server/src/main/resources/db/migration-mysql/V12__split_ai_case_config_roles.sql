@@ -1,5 +1,5 @@
 ALTER TABLE tb_ai_case_config
-    ADD COLUMN IF NOT EXISTS role_type VARCHAR(32) NULL AFTER workspace_id;
+    ADD COLUMN role_type VARCHAR(32) NULL AFTER workspace_id;
 
 UPDATE tb_ai_case_config
 SET role_type = 'CASE_GENERATOR'

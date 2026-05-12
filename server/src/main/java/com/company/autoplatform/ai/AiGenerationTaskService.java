@@ -1,9 +1,12 @@
 package com.company.autoplatform.ai;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.company.autoplatform.auth.CurrentUserContext;
 import com.company.autoplatform.casecenter.CaseDirectoryEntity;
 import com.company.autoplatform.casecenter.CaseDirectoryMapper;
 import com.company.autoplatform.common.BadRequestException;
+import com.company.autoplatform.user.UserEntity;
+import com.company.autoplatform.user.UserService;
 import com.company.autoplatform.workspace.WorkspaceEntity;
 import com.company.autoplatform.workspace.WorkspaceScope;
 import com.company.autoplatform.workspace.WorkspaceService;
@@ -17,7 +20,11 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 public class AiGenerationTaskService {
@@ -29,17 +36,20 @@ public class AiGenerationTaskService {
     private final AiCaseService aiCaseService;
     private final WorkspaceService workspaceService;
     private final CaseDirectoryMapper caseDirectoryMapper;
+    private final UserService userService;
 
     public AiGenerationTaskService(
             AiGenerationTaskMapper aiGenerationTaskMapper,
             AiCaseService aiCaseService,
             WorkspaceService workspaceService,
-            CaseDirectoryMapper caseDirectoryMapper
+            CaseDirectoryMapper caseDirectoryMapper,
+            UserService userService
     ) {
         this.aiGenerationTaskMapper = aiGenerationTaskMapper;
         this.aiCaseService = aiCaseService;
         this.workspaceService = workspaceService;
         this.caseDirectoryMapper = caseDirectoryMapper;
+        this.userService = userService;
     }
 
     public AiGenerationTaskResponse createTask(String headerWorkspaceCode, CreateAiGenerationTaskRequest request) {
@@ -51,6 +61,7 @@ public class AiGenerationTaskService {
 
         AiGenerationTaskEntity entity = new AiGenerationTaskEntity();
         LocalDateTime now = LocalDateTime.now();
+        Long currentUserId = CurrentUserContext.get();
         entity.setTaskId(generateTaskId());
         entity.setWorkspaceId(workspace.getId());
         entity.setRequirementTitle(request.requirementTitle().trim());
@@ -76,11 +87,13 @@ public class AiGenerationTaskService {
         entity.setCancelRequested(0);
         entity.setSourceTaskId(null);
         entity.setFinishedAt(null);
+        entity.setCreatedBy(currentUserId);
+        entity.setUpdatedBy(currentUserId);
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
         aiGenerationTaskMapper.insert(entity);
 
-        return toResponse(entity, workspace);
+        return toResponse(entity, workspace, collectUserMap(List.of(entity)));
     }
 
     public List<AiGenerationTaskResponse> listTasks(String workspaceCode) {
@@ -93,12 +106,13 @@ public class AiGenerationTaskService {
                 .in(AiGenerationTaskEntity::getWorkspaceId, workspaceIds)
                 .orderByDesc(AiGenerationTaskEntity::getUpdatedAt)
                 .orderByDesc(AiGenerationTaskEntity::getId));
+        Map<Long, UserEntity> userMap = collectUserMap(tasks);
 
         return tasks.stream()
                 .map(task -> toResponse(task, workspaces.stream()
                         .filter(item -> item.getId().equals(task.getWorkspaceId()))
                         .findFirst()
-                        .orElseGet(() -> workspaceService.requireWorkspaceById(task.getWorkspaceId()))))
+                        .orElseGet(() -> workspaceService.requireWorkspaceById(task.getWorkspaceId())), userMap))
                 .toList();
     }
 
@@ -108,7 +122,7 @@ public class AiGenerationTaskService {
                 workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode()
         );
         validateReadableWorkspaceScope(workspaceCode, workspace);
-        return toResponse(entity, workspace);
+        return toResponse(entity, workspace, collectUserMap(List.of(entity)));
     }
 
     public AiGenerationTaskResponse cancelTask(String taskId, String workspaceCode) {
@@ -118,10 +132,12 @@ public class AiGenerationTaskService {
         );
         validateReadableWorkspaceScope(workspaceCode, workspace);
         if (!RUNNING_STATUSES.contains(entity.getStatus())) {
-            return toResponse(entity, workspace);
+            return toResponse(entity, workspace, collectUserMap(List.of(entity)));
         }
+        entity.setUpdatedBy(CurrentUserContext.get());
         markCanceled(entity, "任务已取消，后续步骤不再继续执行。");
-        return toResponse(requireTask(taskId), workspace);
+        AiGenerationTaskEntity latest = requireTask(taskId);
+        return toResponse(latest, workspace, collectUserMap(List.of(latest)));
     }
 
     public AiGenerationTaskResponse retryTask(String taskId, String workspaceCode) {
@@ -136,6 +152,7 @@ public class AiGenerationTaskService {
 
         AiGenerationTaskEntity entity = new AiGenerationTaskEntity();
         LocalDateTime now = LocalDateTime.now();
+        Long currentUserId = CurrentUserContext.get();
         entity.setTaskId(generateTaskId());
         entity.setWorkspaceId(source.getWorkspaceId());
         entity.setRequirementTitle(source.getRequirementTitle());
@@ -161,11 +178,13 @@ public class AiGenerationTaskService {
         entity.setCancelRequested(0);
         entity.setSourceTaskId(source.getTaskId());
         entity.setFinishedAt(null);
+        entity.setCreatedBy(currentUserId);
+        entity.setUpdatedBy(currentUserId);
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
         aiGenerationTaskMapper.insert(entity);
 
-        return toResponse(entity, workspace);
+        return toResponse(entity, workspace, collectUserMap(List.of(entity)));
     }
 
     public AiGenerationTaskResponse updateTask(String taskId, String workspaceCode, UpdateAiGenerationTaskRequest request) {
@@ -181,6 +200,9 @@ public class AiGenerationTaskService {
         if (request.directoryName() != null) {
             entity.setDirectoryName(blankToNull(request.directoryName()));
         }
+        if (request.generatedCases() != null) {
+            entity.setGeneratedCasesJson(writeValue(request.generatedCases()));
+        }
         if (request.adoptedCaseIndexes() != null) {
             entity.setAdoptedCaseIndexesJson(writeValue(normalizeIndexes(request.adoptedCaseIndexes())));
         }
@@ -190,9 +212,10 @@ public class AiGenerationTaskService {
         if (request.savedCaseCount() != null) {
             entity.setSavedCaseCount(Math.max(request.savedCaseCount(), 0));
         }
+        entity.setUpdatedBy(CurrentUserContext.get());
         entity.setUpdatedAt(LocalDateTime.now());
         aiGenerationTaskMapper.updateById(entity);
-        return toResponse(entity, workspace);
+        return toResponse(entity, workspace, collectUserMap(List.of(entity)));
     }
 
     public void deleteTask(String taskId, String workspaceCode) {
@@ -402,7 +425,9 @@ public class AiGenerationTaskService {
         return readValue(raw, new TypeReference<AiReviewResult>() {}, null);
     }
 
-    private AiGenerationTaskResponse toResponse(AiGenerationTaskEntity entity, WorkspaceEntity workspace) {
+    private AiGenerationTaskResponse toResponse(AiGenerationTaskEntity entity, WorkspaceEntity workspace, Map<Long, UserEntity> userMap) {
+        UserEntity creator = entity.getCreatedBy() == null ? null : userMap.get(entity.getCreatedBy());
+        UserEntity updater = entity.getUpdatedBy() == null ? null : userMap.get(entity.getUpdatedBy());
         return new AiGenerationTaskResponse(
                 entity.getTaskId(),
                 workspace.getWorkspaceCode(),
@@ -416,6 +441,8 @@ public class AiGenerationTaskService {
                 entity.getErrorMessage(),
                 entity.getDirectoryId(),
                 entity.getDirectoryName(),
+                creator == null ? null : creator.getDisplayName(),
+                updater == null ? null : updater.getDisplayName(),
                 entity.getProvider(),
                 entity.getModel(),
                 entity.getGeneratedCount() == null ? 0 : entity.getGeneratedCount(),
@@ -432,5 +459,14 @@ public class AiGenerationTaskService {
                 entity.getUpdatedAt() == null ? null : entity.getUpdatedAt().toString(),
                 entity.getFinishedAt() == null ? null : entity.getFinishedAt().toString()
         );
+    }
+
+    private Map<Long, UserEntity> collectUserMap(List<AiGenerationTaskEntity> entities) {
+        return entities.stream()
+                .flatMap(item -> Stream.of(item.getCreatedBy(), item.getUpdatedBy()))
+                .filter(id -> id != null && id > 0)
+                .distinct()
+                .map(userService::requireUser)
+                .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
     }
 }

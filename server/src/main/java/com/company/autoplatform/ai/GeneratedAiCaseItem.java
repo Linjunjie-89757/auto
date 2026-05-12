@@ -10,6 +10,9 @@ public record GeneratedAiCaseItem(
         String steps,
         String expectedResult,
         String riskNotes,
-        List<String> warnings
+        List<String> warnings,
+        Boolean manualEdited,
+        String manualEditedByName,
+        String manualEditedAt
 ) {
 }

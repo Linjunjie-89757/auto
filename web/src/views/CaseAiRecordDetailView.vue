@@ -4,17 +4,23 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
   ArrowLeft,
+  ArrowRight,
   ArrowUp,
   Check,
   CircleClose,
   CopyDocument,
+  Delete,
   Download,
   FolderOpened,
   Memo,
+  Setting,
   View,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
+import AiGenerationProcessDialog from '../components/AiGenerationProcessDialog.vue'
+import TableSettingsDrawer from '../components/TableSettingsDrawer.vue'
+import { useTableSettings, type TableSettingsColumn } from '../composables/useTableSettings'
 import { useWorkspace } from '../composables/useWorkspace'
 import type { AiGeneratedCase, CaseDirectoryNode, CreateCasePayload } from '../types/api'
 import type { AiGenerationTaskRecord } from '../utils/caseAiGenerationRecords'
@@ -28,6 +34,7 @@ type DetailCaseRow = AiGeneratedCase & {
   index: number
   adopted: boolean
   deleted: boolean
+  manualEdited?: boolean
 }
 
 type DirectoryOption = {
@@ -39,20 +46,39 @@ const route = useRoute()
 const router = useRouter()
 const { workspaceCode } = useWorkspace()
 
+const detailTableColumns: TableSettingsColumn[] = [
+  { key: 'title', label: '用例标题', required: true, defaultVisible: true },
+  { key: 'precondition', label: '前置条件', required: true, defaultVisible: true },
+  { key: 'steps', label: '操作步骤', required: true, defaultVisible: true },
+  { key: 'expectedResult', label: '预期结果', required: true, defaultVisible: true },
+  { key: 'savedDirectoryName', label: '最终保存路径', defaultVisible: true },
+  { key: 'priority', label: '优先级', defaultVisible: true },
+  { key: 'status', label: '状态', defaultVisible: true },
+  { key: 'manualEdited', label: '人工修改', defaultVisible: false },
+  { key: 'manualEditedByName', label: '操作人', defaultVisible: false },
+]
+
+const detailTableSettings = useTableSettings({
+  storageKey: 'ai-record-detail-table-settings-v1',
+  columns: detailTableColumns,
+})
+
 const activeRecord = ref<AiGenerationTaskRecord | null>(null)
 const casePreviewVisible = ref(false)
 const adoptDialogVisible = ref(false)
 const pathDialogVisible = ref(false)
 const processDialogVisible = ref(false)
-const activeCase = ref<DetailCaseRow | null>(null)
+const activeCaseCursor = ref(-1)
 const directoryOptions = ref<DirectoryOption[]>([])
 const loadingDirectories = ref(false)
 const adopting = ref(false)
 const savingPath = ref(false)
+const savingCaseEdit = ref(false)
 const requirementExpanded = ref(false)
 const exporting = ref(false)
 const selectedCaseIndexes = ref<number[]>([])
 const adoptDialogMode = ref<'all' | 'selected'>('all')
+const casePreviewEditing = ref(false)
 let pollingTimer: number | null = null
 
 const adoptForm = reactive({
@@ -64,6 +90,12 @@ const pathForm = reactive({
   directoryId: null as number | null,
 })
 const pathTouched = ref(false)
+const caseEditForm = reactive({
+  title: '',
+  precondition: '',
+  steps: '',
+  expectedResult: '',
+})
 
 const processSteps = [
   { index: 1 as const, title: '任务已创建', description: '已记录需求内容、目标空间和输出模式。' },
@@ -88,6 +120,10 @@ const detailCases = computed<DetailCaseRow[]>(() => {
 })
 
 const availableCases = computed(() => detailCases.value.filter(item => !item.deleted))
+const activeCase = computed<DetailCaseRow | null>(() => availableCases.value[activeCaseCursor.value] ?? null)
+const activeCaseDisplayIndex = computed(() => (activeCase.value ? activeCaseCursor.value + 1 : 0))
+const canPreviewPreviousCase = computed(() => activeCaseCursor.value > 0)
+const canPreviewNextCase = computed(() => activeCaseCursor.value >= 0 && activeCaseCursor.value < availableCases.value.length - 1)
 const adoptableCases = computed(() => availableCases.value.filter(item => !item.adopted))
 const selectedCases = computed(() => availableCases.value.filter(item => selectedCaseIndexes.value.includes(item.index)))
 const selectedAdoptableCases = computed(() => selectedCases.value.filter(item => !item.adopted))
@@ -158,7 +194,11 @@ function getStatusClass(status: AiGenerationTaskRecord['status']) {
 }
 
 function getDefaultDirectoryPath(record: AiGenerationTaskRecord | null) {
-  return record?.directoryName || '未设置默认路径'
+  if (!record?.directoryName) {
+    return '未设置默认路径'
+  }
+  const workspaceLabel = record.workspaceName || record.workspaceCode
+  return workspaceLabel ? `${workspaceLabel}/${record.directoryName}` : record.directoryName
 }
 
 function formatTime(value: string | null) {
@@ -235,6 +275,10 @@ function formatCaseCellText(value: string | null | undefined) {
   return raw.replace(/\s*(\d+[\.\u3001])\s*/g, '\n$1 ').replace(/^\n+/, '').trim()
 }
 
+function getCaseSavedDirectoryName(row: DetailCaseRow) {
+  return row.savedDirectoryName || (row.adopted ? getDefaultDirectoryPath(activeRecord.value) : '-')
+}
+
 function handleSelectionChange(rows: DetailCaseRow[]) {
   selectedCaseIndexes.value = rows.map(item => item.index)
 }
@@ -256,8 +300,40 @@ async function loadDirectoryOptions(record: AiGenerationTaskRecord) {
 }
 
 function openCasePreview(row: DetailCaseRow) {
-  activeCase.value = row
+  activeCaseCursor.value = availableCases.value.findIndex(item => item.index === row.index)
+  casePreviewEditing.value = false
+  syncCaseEditForm(row)
   casePreviewVisible.value = true
+}
+
+function syncCaseEditForm(row: DetailCaseRow | null) {
+  caseEditForm.title = row?.title ?? ''
+  caseEditForm.precondition = row?.precondition ?? ''
+  caseEditForm.steps = row?.steps ?? ''
+  caseEditForm.expectedResult = row?.expectedResult ?? ''
+}
+
+function moveCasePreview(offset: -1 | 1) {
+  const nextCursor = activeCaseCursor.value + offset
+  if (nextCursor < 0 || nextCursor >= availableCases.value.length) {
+    return
+  }
+  activeCaseCursor.value = nextCursor
+  casePreviewEditing.value = false
+  syncCaseEditForm(activeCase.value)
+}
+
+function startCaseEditing() {
+  if (!activeCase.value) {
+    return
+  }
+  syncCaseEditForm(activeCase.value)
+  casePreviewEditing.value = true
+}
+
+function cancelCaseEditing() {
+  syncCaseEditForm(activeCase.value)
+  casePreviewEditing.value = false
 }
 
 function openProcessDialog() {
@@ -361,9 +437,16 @@ async function confirmAdoptAll() {
     const adopted = new Set(activeRecord.value.adoptedCaseIndexes ?? [])
     adoptDialogCases.value.forEach(item => adopted.add(item.index))
     const selectedOption = directoryOptions.value.find(item => item.value === adoptForm.directoryId)
+    const directoryName = formatDirectoryNameFromOption(selectedOption) ?? activeRecord.value.directoryName
+    const adoptedCaseIndexes = adoptDialogCases.value.map(item => item.index)
     activeRecord.value = await patchAiGenerationRecord(workspaceCode.value, activeRecord.value.id, {
       directoryId: adoptForm.directoryId,
-      directoryName: formatDirectoryNameFromOption(selectedOption) ?? activeRecord.value.directoryName,
+      directoryName,
+      generatedCases: activeRecord.value.generatedCases.map((item, index) => (
+        adoptedCaseIndexes.includes(index)
+          ? { ...item, savedDirectoryName: directoryName ?? getDefaultDirectoryPath(activeRecord.value) }
+          : item
+      )),
       adoptedCaseIndexes: [...adopted],
       savedCaseCount: adopted.size,
     })
@@ -379,6 +462,56 @@ async function confirmAdoptAll() {
   }
 }
 
+async function saveCasePreviewEdit() {
+  if (!activeRecord.value || !activeCase.value) {
+    return
+  }
+  const targetIndex = activeCase.value.index
+  savingCaseEdit.value = true
+  try {
+    activeRecord.value = await patchAiGenerationRecord(workspaceCode.value, activeRecord.value.id, {
+      generatedCases: activeRecord.value.generatedCases.map((item, index) => (
+        index === targetIndex
+          ? {
+              ...item,
+              title: caseEditForm.title.trim(),
+              precondition: caseEditForm.precondition.trim(),
+              steps: caseEditForm.steps.trim(),
+              expectedResult: caseEditForm.expectedResult.trim(),
+              manualEdited: true,
+              manualEditedByName: activeRecord.value?.updatedByName || item.manualEditedByName,
+              manualEditedAt: new Date().toISOString(),
+            }
+          : item
+      )),
+    })
+    const nextCursor = availableCases.value.findIndex(item => item.index === targetIndex)
+    activeCaseCursor.value = nextCursor >= 0 ? nextCursor : activeCaseCursor.value
+    casePreviewEditing.value = false
+    syncCaseEditForm(activeCase.value)
+    ElMessage.success('用例修改已保存')
+  } catch (error) {
+    ElMessage.error((error as Error).message)
+  } finally {
+    savingCaseEdit.value = false
+  }
+}
+
+function updatePreviewCursorAfterDelete(deletedIndex: number, previousCursor: number) {
+  if (!casePreviewVisible.value || activeCase.value?.index !== deletedIndex) {
+    return
+  }
+  if (!availableCases.value.length) {
+    casePreviewVisible.value = false
+    casePreviewEditing.value = false
+    activeCaseCursor.value = -1
+    return
+  }
+  activeCaseCursor.value = Math.min(previousCursor, availableCases.value.length - 1)
+  casePreviewEditing.value = false
+  syncCaseEditForm(activeCase.value)
+}
+
 async function deleteSingleCase(row: DetailCaseRow) {
   if (!activeRecord.value) {
     return
@@ -390,12 +523,14 @@ async function deleteSingleCase(row: DetailCaseRow) {
   })
 
   const deleted = new Set(activeRecord.value.deletedCaseIndexes ?? [])
+  const previousCursor = availableCases.value.findIndex(item => item.index === row.index)
   deleted.add(row.index)
   activeRecord.value = await patchAiGenerationRecord(workspaceCode.value, activeRecord.value.id, {
     deletedCaseIndexes: [...deleted],
   })
+  selectedCaseIndexes.value = selectedCaseIndexes.value.filter(index => index !== row.index)
+  updatePreviewCursorAfterDelete(row.index, previousCursor)
   ElMessage.success('用例已删除')
-  await loadRecord()
 }
 
 async function deleteSelectedCases() {
@@ -451,12 +586,15 @@ async function adoptSingleCase(row: DetailCaseRow) {
     await platformApi.createCase(activeRecord.value.workspaceCode, payload)
     const adopted = new Set(activeRecord.value.adoptedCaseIndexes ?? [])
     adopted.add(row.index)
+    const savedDirectoryName = activeRecord.value.directoryName ?? getDefaultDirectoryPath(activeRecord.value)
     activeRecord.value = await patchAiGenerationRecord(workspaceCode.value, activeRecord.value.id, {
+      generatedCases: activeRecord.value.generatedCases.map((item, index) => (
+        index === row.index ? { ...item, savedDirectoryName } : item
+      )),
       adoptedCaseIndexes: [...adopted],
       savedCaseCount: adopted.size,
     })
     ElMessage.success('用例已采纳')
-    await loadRecord()
   } catch (error) {
     ElMessage.error((error as Error).message)
   }
@@ -569,7 +707,31 @@ watch(() => route.params.taskId, () => {
   void loadRecord()
 })
 
+watch(casePreviewVisible, (visible) => {
+  if (!visible) {
+    casePreviewEditing.value = false
+    activeCaseCursor.value = -1
+  }
+})
+
+watch(availableCases, (rows) => {
+  if (!rows.length) {
+    if (casePreviewVisible.value) {
+      casePreviewVisible.value = false
+    }
+    activeCaseCursor.value = -1
+    return
+  }
+  if (activeCaseCursor.value >= rows.length) {
+    activeCaseCursor.value = rows.length - 1
+  }
+  if (activeCaseCursor.value >= 0 && !casePreviewEditing.value) {
+    syncCaseEditForm(activeCase.value)
+  }
+})
+
 onMounted(() => {
+  detailTableSettings.load()
   void loadRecord()
 })
 
@@ -581,35 +743,33 @@ onBeforeUnmount(() => {
 <template>
   <section class="detail-page-shell">
     <div v-if="activeRecord" class="detail-page-header">
-      <div class="detail-page-header-main">
+      <div class="detail-page-header-row">
         <el-button class="back-button" text :icon="ArrowLeft" @click="goBack">返回记录页</el-button>
-        <div class="detail-page-title">{{ activeRecord.requirementTitle }}</div>
-        <div class="detail-page-meta">
-          <span>{{ activeRecord.workspaceName }}</span>
-          <span>{{ formatTime(activeRecord.createdAt) }}</span>
-          <span class="status-pill" :class="getStatusClass(activeRecord.status)">{{ getStatusLabel(activeRecord.status) }}</span>
+        <div class="detail-page-header-right">
+          <div class="detail-page-path">
+            <span class="detail-page-path-label">当前采纳保存路径：</span>
+            <span class="detail-page-path-value">{{ getDefaultDirectoryPath(activeRecord) }}</span>
+            <el-button class="path-edit-button" text @click="openPathDialog(activeRecord)">修改保存路径</el-button>
+          </div>
+          <div class="detail-page-header-actions">
+          <el-button :icon="View" @click="openProcessDialog">查看流程</el-button>
+          <el-button type="primary" :icon="Download" :loading="exporting" @click="exportExcel">导出 Excel</el-button>
+          </div>
         </div>
-      </div>
-
-      <div class="detail-page-header-actions">
-        <el-button :icon="View" @click="openProcessDialog">查看流程</el-button>
-        <el-button type="primary" :icon="Download" :loading="exporting" @click="exportExcel">导出 Excel</el-button>
       </div>
     </div>
 
     <div v-if="activeRecord" class="panel-card detail-summary-card">
       <button class="detail-summary-toggle" type="button" @click="requirementExpanded = !requirementExpanded">
         <div class="detail-summary-header">
-          <div>
-            <div class="detail-summary-title-row">
-              <Memo class="detail-summary-title-icon" />
-              <span class="detail-summary-title">需求描述</span>
-            </div>
-            <div class="detail-summary-subtitle">
-              {{ requirementExpanded ? '查看完整需求内容' : '点击展开查看完整需求内容' }}
-            </div>
+          <div class="detail-summary-title-row">
+            <Memo class="detail-summary-title-icon" />
+            <span class="detail-summary-title">{{ activeRecord.requirementTitle }}</span>
+            <span class="detail-summary-inline-tip">点击展开查看完整需求内容</span>
           </div>
-          <component :is="requirementExpanded ? ArrowUp : ArrowDown" class="detail-summary-arrow" />
+          <span class="detail-summary-arrow">
+            <component :is="requirementExpanded ? ArrowUp : ArrowDown" />
+          </span>
         </div>
       </button>
 
@@ -657,10 +817,6 @@ onBeforeUnmount(() => {
           <span>当前用例数：{{ availableCases.length }}</span>
           <span>已采纳：{{ activeRecord.adoptedCaseIndexes.length }}</span>
           <span>已删除：{{ activeRecord.deletedCaseIndexes.length }}</span>
-          <span class="detail-path-meta">
-            当前采纳保存路径：{{ getDefaultDirectoryPath(activeRecord) }}
-            <el-button class="path-edit-button" text @click="openPathDialog(activeRecord)">修改保存路径</el-button>
-          </span>
         </div>
 
         <div class="detail-toolbar-actions">
@@ -687,51 +843,82 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="activeRecord" class="panel-card detail-table-card">
-      <el-table :data="availableCases" class="detail-case-table" border @selection-change="handleSelectionChange">
-        <el-table-column type="selection" width="52" />
-        <el-table-column label="序号" type="index" width="72" align="center" />
-        <el-table-column label="场景" min-width="240">
-          <template #default="{ row }">
-            <div class="case-cell-clamp">{{ formatCaseCellText(row.title) }}</div>
+      <div class="detail-table-wrap">
+        <el-table :data="availableCases" class="detail-case-table" border @selection-change="handleSelectionChange">
+          <el-table-column type="selection" width="52" />
+          <el-table-column label="序号" type="index" width="72" align="center" />
+          <template v-for="column in detailTableSettings.visibleColumns.value" :key="column.key">
+            <el-table-column v-if="column.key === 'title'" label="用例标题" min-width="220" show-overflow-tooltip>
+              <template #default="{ row }">
+                <div class="case-cell-clamp">{{ formatCaseCellText(row.title) }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column v-else-if="column.key === 'precondition'" label="前置条件" min-width="220" show-overflow-tooltip>
+              <template #default="{ row }">
+                <div class="case-cell-clamp">{{ formatCaseCellText(row.precondition) }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column v-else-if="column.key === 'steps'" label="操作步骤" min-width="260" show-overflow-tooltip>
+              <template #default="{ row }">
+                <div class="case-cell-clamp">{{ formatCaseCellText(row.steps) }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column v-else-if="column.key === 'expectedResult'" label="预期结果" min-width="240" show-overflow-tooltip>
+              <template #default="{ row }">
+                <div class="case-cell-clamp">{{ formatCaseCellText(row.expectedResult) }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column v-else-if="column.key === 'savedDirectoryName'" label="最终保存路径" min-width="180" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span class="detail-cell-text">{{ getCaseSavedDirectoryName(row) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column v-else-if="column.key === 'priority'" label="优先级" width="88" align="center">
+              <template #default="{ row }">
+                <span class="priority-chip" :class="`priority-${row.priority?.toLowerCase?.() || 'p3'}`">{{ row.priority }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column v-else-if="column.key === 'status'" label="状态" width="100" align="center">
+              <template #default="{ row }">
+                <span class="status-pill" :class="row.adopted ? 'status-success' : 'status-neutral'">
+                  {{ row.adopted ? '已采纳' : '未采纳' }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column v-else-if="column.key === 'manualEdited'" label="人工修改" width="88" align="center">
+              <template #default="{ row }">
+                <span class="detail-cell-text">{{ row.manualEdited ? '是' : '否' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column v-else-if="column.key === 'manualEditedByName'" label="操作人" width="120" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span class="detail-cell-text">{{ row.manualEditedByName || '-' }}</span>
+              </template>
+            </el-table-column>
           </template>
-        </el-table-column>
-        <el-table-column label="前置条件" min-width="220">
-          <template #default="{ row }">
-            <div class="case-cell-clamp">{{ formatCaseCellText(row.precondition) }}</div>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作步骤" min-width="260">
-          <template #default="{ row }">
-            <div class="case-cell-clamp">{{ formatCaseCellText(row.steps) }}</div>
-          </template>
-        </el-table-column>
-        <el-table-column label="预期结果" min-width="240">
-          <template #default="{ row }">
-            <div class="case-cell-clamp">{{ formatCaseCellText(row.expectedResult) }}</div>
-          </template>
-        </el-table-column>
-        <el-table-column label="优先级" width="88" align="center">
-          <template #default="{ row }">
-            <span class="priority-chip" :class="`priority-${row.priority?.toLowerCase?.() || 'p3'}`">{{ row.priority }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="100" align="center">
-          <template #default="{ row }">
-            <span class="status-pill" :class="row.adopted ? 'status-success' : 'status-neutral'">
-              {{ row.adopted ? '已采纳' : '未采纳' }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="230" fixed="right" align="center">
-          <template #default="{ row }">
-            <div class="table-action-row">
-              <el-button type="primary" text @click="openCasePreview(row)">查看详情</el-button>
-              <el-button type="success" text :disabled="row.adopted" @click="adoptSingleCase(row)">采纳</el-button>
-              <el-button type="danger" text @click="deleteSingleCase(row)">删除</el-button>
-            </div>
-          </template>
-        </el-table-column>
-      </el-table>
+          <el-table-column width="168" fixed="right" align="center">
+            <template #header>
+              <div class="table-action-header">
+                <span>操作</span>
+                <el-button
+                  text
+                  class="table-settings-trigger"
+                  @click="detailTableSettings.settingsVisible.value = true"
+                >
+                  <el-icon class="table-action-header-icon"><Setting /></el-icon>
+                </el-button>
+              </div>
+            </template>
+            <template #default="{ row }">
+              <div class="table-action-row table-action-row-text">
+                <el-button type="primary" text @click="openCasePreview(row)">查看详情</el-button>
+                <el-button type="success" text :disabled="row.adopted" @click="adoptSingleCase(row)">采纳</el-button>
+                <el-button type="danger" text @click="deleteSingleCase(row)">删除</el-button>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
     </div>
 
     <div v-else class="panel-card detail-empty-card">
@@ -739,98 +926,131 @@ onBeforeUnmount(() => {
       <div class="detail-empty-text">这条 AI 生成任务可能已被删除，或当前空间下无法访问。</div>
     </div>
 
-    <el-dialog v-model="casePreviewVisible" width="720px" destroy-on-close>
+    <el-dialog v-model="casePreviewVisible" width="920px" destroy-on-close class="detail-preview-dialog">
       <template #header>
-        <div class="adopt-dialog-title">用例详情</div>
+        <div class="detail-preview-header detail-preview-header-review">
+          <div>
+            <div class="adopt-dialog-title">用例详情</div>
+            <div class="detail-preview-subtitle">逐条审阅 AI 生成用例，可直接编辑后保存或采纳。</div>
+          </div>
+          <div class="case-review-nav" v-if="availableCases.length">
+            <el-button class="case-review-nav-button" :icon="ArrowLeft" :disabled="!canPreviewPreviousCase" @click="moveCasePreview(-1)">
+              上一条
+            </el-button>
+            <div class="case-review-nav-count">第 {{ activeCaseDisplayIndex }} 条 / 共 {{ availableCases.length }} 条</div>
+            <el-button class="case-review-nav-button" :icon="ArrowRight" :disabled="!canPreviewNextCase" @click="moveCasePreview(1)">
+              下一条
+            </el-button>
+          </div>
+        </div>
       </template>
       <template v-if="activeCase">
-        <div class="case-preview-layout">
-          <div class="case-preview-item">
-            <div class="detail-summary-title">测试场景</div>
-            <div class="detail-summary-content preview-content">{{ activeCase.title }}</div>
-          </div>
-          <div class="case-preview-item">
-            <div class="detail-summary-title">前置条件</div>
-            <div class="detail-summary-content preview-content">{{ activeCase.precondition || '-' }}</div>
-          </div>
-          <div class="case-preview-item">
-            <div class="detail-summary-title">操作步骤</div>
-            <div class="detail-summary-content preview-content">{{ activeCase.steps }}</div>
-          </div>
-          <div class="case-preview-item">
-            <div class="detail-summary-title">预期结果</div>
-            <div class="detail-summary-content preview-content">{{ activeCase.expectedResult }}</div>
+        <div class="detail-preview-layout">
+          <div class="case-preview-layout">
+            <div class="case-preview-item case-preview-item-full">
+              <div class="case-preview-label">用例标题</div>
+              <el-input
+                v-if="casePreviewEditing"
+                v-model="caseEditForm.title"
+                maxlength="200"
+                placeholder="请输入测试场景"
+              />
+              <div v-else class="case-preview-content">{{ activeCase.title || '-' }}</div>
+            </div>
+            <div class="case-preview-item">
+              <div class="case-preview-label">前置条件</div>
+              <el-input
+                v-if="casePreviewEditing"
+                v-model="caseEditForm.precondition"
+                type="textarea"
+                :rows="6"
+                resize="none"
+                placeholder="请输入前置条件"
+              />
+              <div v-else class="case-preview-content">{{ activeCase.precondition || '-' }}</div>
+            </div>
+            <div class="case-preview-item">
+              <div class="case-preview-label">操作步骤</div>
+              <el-input
+                v-if="casePreviewEditing"
+                v-model="caseEditForm.steps"
+                type="textarea"
+                :rows="6"
+                resize="none"
+                placeholder="请输入操作步骤"
+              />
+              <div v-else class="case-preview-content">{{ activeCase.steps || '-' }}</div>
+            </div>
+            <div class="case-preview-item case-preview-item-full">
+              <div class="case-preview-label">预期结果</div>
+              <el-input
+                v-if="casePreviewEditing"
+                v-model="caseEditForm.expectedResult"
+                type="textarea"
+                :rows="5"
+                resize="none"
+                placeholder="请输入预期结果"
+              />
+              <div v-else class="case-preview-content">{{ activeCase.expectedResult || '-' }}</div>
+            </div>
           </div>
         </div>
       </template>
-    </el-dialog>
-
-    <el-dialog v-model="processDialogVisible" title="AI生成用例流程" width="760px" destroy-on-close>
-      <template v-if="activeRecord">
-        <div class="process-dialog-meta">
-          <div>
-            <div class="process-dialog-title">{{ activeRecord.requirementTitle }}</div>
-            <div class="process-dialog-subtitle">
-              {{ activeRecord.workspaceName }} / {{ activeRecord.outputMode === 'STREAM' ? '实时流式输出' : '完整输出' }}
-            </div>
-          </div>
-          <span class="status-pill" :class="getStatusClass(activeRecord.status)">{{ getStatusLabel(activeRecord.status) }}</span>
-        </div>
-
-        <div class="process-step-list">
-          <div
-            v-for="step in processSteps"
-            :key="step.index"
-            class="process-step-card"
-            :class="{
-              'process-step-card-active': activeRecord.currentStep === step.index,
-              'process-step-card-done': activeRecord.currentStep > step.index || activeRecord.status === 'COMPLETED',
-              'process-step-card-failed': activeRecord.status === 'FAILED' && activeRecord.currentStep === step.index,
-            }"
-          >
-            <div
-              class="process-step-index"
-              :class="{
-                'process-step-index-active': activeRecord.currentStep === step.index && activeRecord.status !== 'FAILED',
-                'process-step-index-done': activeRecord.currentStep > step.index || activeRecord.status === 'COMPLETED',
-                'process-step-index-failed': activeRecord.status === 'FAILED' && activeRecord.currentStep === step.index,
-              }"
-            >
-              {{ step.index }}
-            </div>
-            <div class="process-step-content">
-              <div class="process-step-title">{{ step.title }}</div>
-              <div class="process-step-desc">{{ step.description }}</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="process-current-log">
-          <div class="detail-summary-title">当前状态</div>
-          <div class="process-current-text">{{ activeRecord.stepMessage }}</div>
-          <div v-if="activeRecord.errorMessage" class="process-error-text">{{ activeRecord.errorMessage }}</div>
-        </div>
-
-        <div v-if="activeRecord.status === 'FAILED'" class="process-failure-card">
-          <div class="detail-summary-title">失败位置</div>
-          <div class="process-failure-stage">失败阶段：{{ getFailureStageLabel(activeRecord) }}</div>
-          <div class="process-failure-text">{{ activeRecord.errorMessage || activeRecord.stepMessage }}</div>
-        </div>
-      </template>
-
       <template #footer>
-        <div class="dialog-footer">
-          <el-button
-            v-if="activeRecord && ['PENDING', 'GENERATING', 'REVIEWING'].includes(activeRecord.status)"
-            type="danger"
-            @click="cancelGeneration"
-          >
-            取消生成
-          </el-button>
-          <el-button @click="processDialogVisible = false">关闭</el-button>
+        <div class="dialog-footer case-review-footer">
+          <div class="case-review-footer-left">
+            <el-button v-if="casePreviewEditing" :icon="CircleClose" @click="cancelCaseEditing">取消编辑</el-button>
+            <el-button
+              v-else
+              :icon="Memo"
+              @click="startCaseEditing"
+            >
+              编辑
+            </el-button>
+            <el-button
+              type="success"
+              :icon="Check"
+              :disabled="!activeCase || activeCase.adopted"
+              @click="activeCase && adoptSingleCase(activeCase)"
+            >
+              {{ activeCase?.adopted ? '已采纳' : '采纳' }}
+            </el-button>
+            <el-button
+              type="danger"
+              plain
+              :icon="Delete"
+              :disabled="!activeCase"
+              @click="activeCase && deleteSingleCase(activeCase)"
+            >
+              删除
+            </el-button>
+          </div>
+          <div class="case-review-footer-right">
+            <el-button
+              v-if="casePreviewEditing"
+              type="primary"
+              :icon="Check"
+              :loading="savingCaseEdit"
+              @click="saveCasePreviewEdit"
+            >
+              保存
+            </el-button>
+            <el-button @click="casePreviewVisible = false">关闭</el-button>
+          </div>
         </div>
       </template>
     </el-dialog>
+
+    <AiGenerationProcessDialog
+      v-model="processDialogVisible"
+      :record="activeRecord"
+      :steps="processSteps"
+      :status-label="activeRecord ? getStatusLabel(activeRecord.status) : ''"
+      :status-class="activeRecord ? getStatusClass(activeRecord.status) : ''"
+      :show-cancel-button="!!activeRecord && ['PENDING', 'GENERATING', 'REVIEWING'].includes(activeRecord.status)"
+      :cancel-disabled="!activeRecord || !['PENDING', 'GENERATING', 'REVIEWING'].includes(activeRecord.status)"
+      @cancel="cancelGeneration"
+    />
 
     <el-dialog v-model="adoptDialogVisible" width="620px" destroy-on-close class="adopt-dialog">
       <template #header>
@@ -930,17 +1150,33 @@ onBeforeUnmount(() => {
         </div>
       </template>
     </el-dialog>
+
+    <TableSettingsDrawer
+      v-model="detailTableSettings.settingsVisible.value"
+      :columns="detailTableSettings.settingsColumns.value.map(column => ({
+        key: column.key,
+        label: column.label,
+        required: column.required,
+        visible: column.required ? true : detailTableSettings.visibleColumns.value.some(item => item.key === column.key),
+        draggable: detailTableSettings.canDragColumn(column.key),
+      }))"
+      :dragging-key="detailTableSettings.draggingColumnKey.value"
+      @toggle-column="detailTableSettings.toggleColumnVisibility"
+      @drag-start="detailTableSettings.handleDragStart"
+      @drag-end="detailTableSettings.handleDragEnd"
+      @drop-column="detailTableSettings.moveColumnToTarget"
+      @reset="detailTableSettings.reset"
+    />
   </section>
 </template>
 
 <style scoped>
-.detail-page-shell,
-.case-preview-layout {
+.detail-page-shell {
   display: grid;
   gap: 16px;
+  min-width: 0;
 }
 
-.detail-page-header,
 .detail-toolbar-row,
 .detail-toolbar-meta,
 .detail-toolbar-actions,
@@ -954,33 +1190,77 @@ onBeforeUnmount(() => {
 }
 
 .detail-toolbar-row,
-.detail-page-header {
+.detail-page-header-row {
   justify-content: space-between;
 }
 
 .detail-toolbar-card {
   padding: 0 20px;
+  min-width: 0;
 }
 
-.detail-page-header-main {
+.detail-page-header {
   display: grid;
-  gap: 8px;
+  gap: 12px;
+}
+
+.detail-page-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.detail-page-header-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
 }
 
 .detail-page-header-actions {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
   flex-wrap: wrap;
 }
 
+.detail-page-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 14px;
+  color: #344054;
+}
+
+.detail-page-path-label {
+  color: #667085;
+}
+
+.detail-page-path-value {
+  color: #101828;
+}
+
 .back-button {
   width: fit-content;
-  padding-left: 0;
+  min-height: 38px;
+  padding: 0 10px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #175cd3;
+}
+
+.back-button :deep(.el-icon) {
+  margin-right: 4px;
+  font-size: 15px;
 }
 
 .detail-page-title {
-  font-size: 30px;
+  font-size: 36px;
   font-weight: 700;
   color: var(--text-main);
 }
@@ -993,11 +1273,19 @@ onBeforeUnmount(() => {
 .detail-summary-card,
 .detail-table-card {
   padding: 0;
+  min-width: 0;
+}
+
+.detail-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .detail-summary-toggle {
+  display: block;
   width: 100%;
-  min-height: 90px;
+  min-height: 88px;
   padding: 0 28px;
   border: 0;
   background: transparent;
@@ -1010,27 +1298,41 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-height: 90px;
+  min-height: 88px;
 }
 
 .detail-summary-title-row {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 10px;
   flex-wrap: wrap;
+  line-height: 1.2;
 }
 
 .detail-summary-title,
 .adopt-form-title {
-  font-size: 15px;
+  font-size: 20px;
   font-weight: 700;
   color: var(--text-main);
-  line-height: 1;
+  line-height: 1.2;
 }
 
 .detail-summary-title-icon {
-  color: #f4a261;
-  font-size: 14px;
+  color: #f04438;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 16px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.detail-summary-title-icon :deep(svg) {
+  display: block;
+  width: 18px;
+  height: 18px;
 }
 
 .detail-summary-subtitle,
@@ -1038,28 +1340,45 @@ onBeforeUnmount(() => {
 .adopt-dialog-subcopy {
   font-size: 13px;
   color: #9aa4b2;
-  line-height: 1;
+  line-height: 1.6;
+}
+
+.detail-summary-inline-tip {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-subtle);
+  line-height: 1.5;
 }
 
 .detail-summary-arrow {
-  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
   color: #98a2b3;
-  margin-right: 2px;
+}
+
+.detail-summary-arrow :deep(svg) {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 .detail-summary-expanded {
   border-top: 1px solid rgba(226, 232, 240, 0.9);
-  padding: 16px 18px 14px;
+  padding: 12px 16px;
 }
 
 .detail-summary-content-shell {
-  padding: 14px 14px 10px;
+  padding: 10px 10px 8px;
   border-radius: 0;
   background: #f7f9fc;
 }
 
 .detail-summary-content {
-  padding: 14px 16px 18px;
+  padding: 12px 14px;
   border-left: 4px solid #4f9cff;
   border-radius: 4px;
   background: #eef4fb;
@@ -1070,10 +1389,6 @@ onBeforeUnmount(() => {
   word-break: break-word;
   max-height: 402px;
   overflow: auto;
-}
-
-.preview-content {
-  max-height: none;
 }
 
 .detail-summary-actions {
@@ -1145,119 +1460,6 @@ onBeforeUnmount(() => {
   line-height: 1.8;
 }
 
-.process-dialog-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.process-dialog-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text-main);
-}
-
-.process-dialog-subtitle,
-.process-step-desc,
-.process-current-text {
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--text-subtle);
-}
-
-.process-step-list {
-  display: grid;
-  gap: 12px;
-  margin-top: 18px;
-}
-
-.process-step-card {
-  display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-  padding: 14px;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  background: rgba(248, 250, 252, 0.82);
-}
-
-.process-step-card-active {
-  border-color: rgba(36, 107, 255, 0.36);
-  background: rgba(233, 240, 255, 0.82);
-}
-
-.process-step-card-done {
-  border-color: rgba(20, 163, 109, 0.22);
-}
-
-.process-step-card-failed {
-  border-color: rgba(240, 68, 56, 0.26);
-  background: rgba(254, 242, 242, 0.92);
-}
-
-.process-step-index {
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.08);
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text-main);
-}
-
-.process-step-index-active,
-.process-step-index-done {
-  background: #2f88ff;
-  color: #ffffff;
-}
-
-.process-step-index-failed {
-  background: #f04438;
-  color: #ffffff;
-}
-
-.process-current-log {
-  margin-top: 18px;
-  padding: 14px;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.84);
-}
-
-.process-error-text {
-  margin-top: 6px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--danger);
-}
-
-.process-failure-card {
-  margin-top: 14px;
-  padding: 14px;
-  border: 1px solid rgba(240, 68, 56, 0.18);
-  border-radius: 10px;
-  background: rgba(254, 242, 242, 0.96);
-}
-
-.process-failure-stage {
-  margin-top: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #b42318;
-}
-
-.process-failure-text {
-  margin-top: 6px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: #7a271a;
-}
-
 .detail-toolbar-row {
   min-height: 68px;
   padding: 16px 2px;
@@ -1270,10 +1472,112 @@ onBeforeUnmount(() => {
   line-height: 1.4;
 }
 
-.detail-path-meta {
+.detail-preview-header {
+  display: grid;
+  gap: 4px;
+}
+
+.detail-preview-header-review {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+}
+
+.detail-preview-subtitle {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-subtle);
+}
+
+.detail-preview-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.case-review-nav {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  padding: 6px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  background: #f8fafc;
+}
+
+.case-review-nav-button {
+  min-width: 96px;
+  height: 34px;
+  border-radius: 999px;
+}
+
+.case-review-nav-count {
+  min-width: 156px;
+  padding: 0 8px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #344054;
+}
+
+.detail-preview-meta-label,
+.case-preview-label {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-subtle);
+}
+
+.case-preview-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.case-preview-item {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.case-preview-item-full {
+  grid-column: 1 / -1;
+}
+
+.case-preview-content {
+  min-height: 72px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  font-size: 13px;
+  line-height: 1.8;
+  color: #344054;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.detail-preview-dialog :deep(.el-textarea__inner),
+.detail-preview-dialog :deep(.el-input__wrapper) {
+  border-radius: 10px;
+}
+
+.detail-preview-dialog :deep(.el-textarea__inner) {
+  min-height: 132px !important;
+  line-height: 1.7;
+}
+
+.case-review-footer {
+  justify-content: space-between;
+}
+
+.case-review-footer-left,
+.case-review-footer-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
@@ -1290,6 +1594,10 @@ onBeforeUnmount(() => {
   color: #111827;
 }
 
+.detail-cell-text {
+  color: var(--text-main);
+}
+
 .path-edit-button {
   padding: 0;
   font-size: 13px;
@@ -1299,6 +1607,35 @@ onBeforeUnmount(() => {
 
 .detail-toolbar-actions {
   gap: 14px;
+}
+
+.table-action-header {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #344054;
+  font-weight: 700;
+}
+
+.table-settings-trigger {
+  padding: 0;
+  min-height: auto;
+}
+
+.table-action-header-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: #667085;
+}
+
+.table-action-header-icon :deep(svg) {
+  display: block;
+  width: 14px;
+  height: 14px;
 }
 
 .detail-toolbar-actions :deep(.batch-action-button) {
@@ -1351,6 +1688,24 @@ onBeforeUnmount(() => {
 .detail-case-table :deep(.el-table__cell) {
   padding-top: 14px;
   padding-bottom: 14px;
+}
+
+.detail-case-table :deep(.el-table-fixed-column--right) {
+  background: var(--bg-panel);
+  box-shadow: -8px 0 16px rgba(15, 23, 42, 0.06);
+}
+
+.detail-case-table :deep(.el-table__body-wrapper .el-scrollbar__wrap) {
+  overflow-x: auto;
+}
+
+.table-action-row-text {
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.detail-preview-dialog :deep(.el-dialog__body) {
+  padding-top: 8px;
 }
 
 .priority-chip {

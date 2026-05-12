@@ -17,6 +17,8 @@ export interface AiGenerationTaskRecord {
   id: string
   workspaceCode: string
   workspaceName: string
+  createdByName: string
+  updatedByName: string
   requirementTitle: string
   requirementContent: string
   requirementSummary: string
@@ -57,6 +59,8 @@ export function fromAiGenerationTask(task: AiGenerationTask): AiGenerationTaskRe
     id: task.taskId,
     workspaceCode: task.workspaceCode,
     workspaceName: task.workspaceName,
+    createdByName: task.createdByName || '-',
+    updatedByName: task.updatedByName || '-',
     requirementTitle: task.requirementTitle,
     requirementContent: task.requirementContent,
     requirementSummary: summarizeRequirementText(task.requirementContent),
@@ -110,6 +114,7 @@ export async function saveAiGenerationRecord(workspaceCode: string, record: AiGe
   const payload: UpdateAiGenerationTaskPayload = {
     directoryId: record.directoryId,
     directoryName: record.directoryName,
+    generatedCases: record.generatedCases,
     adoptedCaseIndexes: record.adoptedCaseIndexes,
     deletedCaseIndexes: record.deletedCaseIndexes,
     savedCaseCount: record.savedCaseCount,

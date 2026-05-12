@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { CircleClose, FolderOpened, RefreshRight, View } from '@element-plus/icons-vue'
+import { FolderOpened, RefreshRight, Setting } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
+import AiGenerationProcessDialog from '../components/AiGenerationProcessDialog.vue'
+import TableSettingsDrawer from '../components/TableSettingsDrawer.vue'
+import { useTableSettings, type TableSettingsColumn } from '../composables/useTableSettings'
 import { useWorkspace } from '../composables/useWorkspace'
 import type { CaseDirectoryNode, CreateCasePayload } from '../types/api'
 import type { AiGenerationTaskRecord } from '../utils/caseAiGenerationRecords'
@@ -34,12 +37,37 @@ const directoryOptions = ref<DirectoryOption[]>([])
 const loadingDirectories = ref(false)
 const adopting = ref(false)
 const retryingRecordId = ref('')
+const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50]
+const pageNo = ref(1)
 let pollingTimer: number | null = null
 
 const adoptForm = reactive({
   directoryId: null as number | null,
 })
 const adoptPathTouched = ref(false)
+
+const recordColumns: TableSettingsColumn[] = [
+  { key: 'taskId', label: '任务 ID', required: true, defaultVisible: true },
+  { key: 'workspaceName', label: '所属空间', defaultVisible: true },
+  { key: 'requirementTitle', label: '关联需求', required: true, defaultVisible: true },
+  { key: 'outputMode', label: '输出模式', defaultVisible: true },
+  { key: 'status', label: '状态', defaultVisible: true },
+  { key: 'generatedCount', label: '生成用例数', defaultVisible: true },
+  { key: 'savedCaseCount', label: '已采纳数', defaultVisible: false },
+  { key: 'createdAt', label: '生成时间', defaultVisible: true },
+  { key: 'createdByName', label: '创建人', defaultVisible: false },
+  { key: 'updatedAt', label: '更新时间', defaultVisible: false },
+  { key: 'updatedByName', label: '更新人', defaultVisible: false },
+  { key: 'directoryName', label: '当前采纳路径', defaultVisible: false },
+]
+
+const recordTableSettings = useTableSettings({
+  storageKey: 'ai-record-table-settings-v2',
+  columns: recordColumns,
+  pageSizeEnabled: true,
+  defaultPageSize: 10,
+  pageSizeOptions: PAGE_SIZE_OPTIONS,
+})
 
 const processSteps = [
   { index: 1 as const, title: '任务已创建', description: '已记录需求内容、目标空间和输出模式。' },
@@ -53,6 +81,14 @@ const filteredRecords = computed(() => {
     return records.value
   }
   return records.value.filter(item => item.status === statusFilter.value)
+})
+
+const pageSize = recordTableSettings.pageSize
+const total = computed(() => filteredRecords.value.length)
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
+const pagedRecords = computed(() => {
+  const start = (pageNo.value - 1) * pageSize.value
+  return filteredRecords.value.slice(start, start + pageSize.value)
 })
 
 const stats = computed(() => ({
@@ -113,8 +149,8 @@ function getDefaultDirectoryPath(record: AiGenerationTaskRecord) {
   return record.directoryName || '未设置默认路径'
 }
 
-function getCurrentCaseCount(record: AiGenerationTaskRecord) {
-  return record.generatedCases.length - (record.deletedCaseIndexes?.length ?? 0)
+function getOutputModeLabel(outputMode: AiGenerationTaskRecord['outputMode']) {
+  return outputMode === 'STREAM' ? '实时流式输出' : '完整输出'
 }
 
 function getPrimaryActionLabel(status: AiGenerationTaskRecord['status']) {
@@ -139,6 +175,15 @@ function getPrimaryActionType(status: AiGenerationTaskRecord['status']) {
 
 function isRunningStatus(status: AiGenerationTaskRecord['status']) {
   return ['PENDING', 'GENERATING', 'REVIEWING'].includes(status)
+}
+
+function handlePageChange(value: number) {
+  pageNo.value = value
+}
+
+function updatePageSizeSetting(size: number) {
+  recordTableSettings.updatePageSize(size)
+  pageNo.value = 1
 }
 
 function flattenDirectories(nodes: CaseDirectoryNode[], prefix = ''): DirectoryOption[] {
@@ -179,6 +224,10 @@ async function loadRecords() {
     records.value = await listAiGenerationRecords(workspaceCode.value)
     if (activeRecord.value) {
       activeRecord.value = records.value.find(item => item.id === activeRecord.value?.id) ?? activeRecord.value
+    }
+    const maxPage = Math.max(1, Math.ceil(filteredRecords.value.length / pageSize.value))
+    if (pageNo.value > maxPage) {
+      pageNo.value = maxPage
     }
     if (records.value.some(item => ['PENDING', 'GENERATING', 'REVIEWING'].includes(item.status))) {
       startPolling()
@@ -363,7 +412,19 @@ async function deleteTask(record: AiGenerationTaskRecord) {
   ElMessage.success('生成任务已删除')
 }
 
+
+watch(filteredRecords, () => {
+  const maxPage = Math.max(1, Math.ceil(filteredRecords.value.length / pageSize.value))
+  if (pageNo.value > maxPage) {
+    pageNo.value = maxPage
+  }
+  if (pageNo.value < 1) {
+    pageNo.value = 1
+  }
+})
+
 onMounted(() => {
+  recordTableSettings.load()
   void loadRecords()
 })
 
@@ -413,65 +474,108 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="panel-card record-table-card">
-        <el-table :data="filteredRecords" class="record-table" border stripe>
-          <el-table-column type="index" label="序号" width="72" align="center" />
-          <el-table-column label="任务ID" min-width="180">
-            <template #default="{ row }">
-              <span class="task-code-text">{{ makeTaskCode(row.id) }}</span>
+        <div class="record-table-wrap">
+          <el-table :data="pagedRecords" class="record-table" border stripe>
+            <el-table-column type="index" label="序号" width="72" align="center" />
+            <template v-for="column in recordTableSettings.visibleColumns.value" :key="column.key">
+              <el-table-column v-if="column.key === 'taskId'" label="任务 ID" min-width="180">
+                <template #default="{ row }">
+                  <span class="task-code-text">{{ makeTaskCode(row.id) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column v-else-if="column.key === 'workspaceName'" label="所属空间" min-width="140" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <span class="workspace-text">{{ row.workspaceName || row.workspaceCode }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column v-else-if="column.key === 'requirementTitle'" label="关联需求" min-width="360" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <div class="record-requirement-title">{{ row.requirementTitle }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column v-else-if="column.key === 'outputMode'" label="输出模式" width="132" align="center">
+                <template #default="{ row }">
+                  <span>{{ getOutputModeLabel(row.outputMode) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column v-else-if="column.key === 'status'" label="状态" width="110" align="center">
+                <template #default="{ row }">
+                  <span class="status-pill" :class="getStatusClass(row.status)">{{ getStatusLabel(row.status) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column v-else-if="column.key === 'generatedCount'" label="生成用例数" width="110" align="center">
+                <template #default="{ row }">
+                  <span class="case-count-pill">{{ row.generatedCount }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column v-else-if="column.key === 'savedCaseCount'" label="已采纳数" width="98" align="center">
+                <template #default="{ row }">
+                  <span class="case-count-pill case-count-pill-success">{{ row.savedCaseCount }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column v-else-if="column.key === 'createdAt'" label="生成时间" min-width="168">
+                <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
+              </el-table-column>
+              <el-table-column v-else-if="column.key === 'createdByName'" label="创建人" min-width="120" align="center">
+                <template #default="{ row }">{{ row.createdByName || '-' }}</template>
+              </el-table-column>
+              <el-table-column v-else-if="column.key === 'updatedAt'" label="更新时间" min-width="168">
+                <template #default="{ row }">{{ formatTime(row.updatedAt) }}</template>
+              </el-table-column>
+              <el-table-column v-else-if="column.key === 'updatedByName'" label="更新人" min-width="120" align="center">
+                <template #default="{ row }">{{ row.updatedByName || '-' }}</template>
+              </el-table-column>
+              <el-table-column v-else-if="column.key === 'directoryName'" label="当前采纳路径" min-width="220" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <span class="record-muted-text">{{ getDefaultDirectoryPath(row) }}</span>
+                </template>
+              </el-table-column>
             </template>
-          </el-table-column>
-          <el-table-column label="所属空间" min-width="120" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span class="workspace-text">{{ row.workspaceName || row.workspaceCode }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="关联需求" min-width="360" show-overflow-tooltip>
-            <template #default="{ row }">
-              <div class="record-requirement-cell">
-                <div class="record-requirement-title">{{ row.requirementTitle }}</div>
-                <div class="record-requirement-path">默认路径：{{ getDefaultDirectoryPath(row) }}</div>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="状态" width="110" align="center">
-            <template #default="{ row }">
-              <span class="status-pill" :class="getStatusClass(row.status)">{{ getStatusLabel(row.status) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="用例条数" width="110" align="center">
-            <template #default="{ row }">
-              <span class="case-count-pill">{{ getCurrentCaseCount(row) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="生成时间" min-width="160">
-            <template #default="{ row }">
-              {{ formatTime(row.createdAt) }}
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="340" fixed="right" align="center">
-            <template #default="{ row }">
-              <div class="table-action-row">
-                <el-button class="record-action-button" type="primary" :icon="View" @click="openDetail(row)">查看详情</el-button>
-                <el-button
-                  class="record-action-button"
-                  :class="{
-                    'record-action-button-retry': row.status === 'FAILED',
-                    'record-action-button-process': row.status !== 'FAILED' && row.status !== 'COMPLETED',
-                  }"
-                  :type="getPrimaryActionType(row.status)"
-                  :loading="row.status === 'FAILED' && retryingRecordId === row.id"
-                  @click="handlePrimaryAction(row)"
-                >
-                  {{ getPrimaryActionLabel(row.status) }}
-                </el-button>
-                <el-button class="record-action-button" type="danger" @click="deleteTask(row)">删除</el-button>
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
+            <el-table-column width="240" fixed="right" align="center">
+              <template #header>
+                <div class="table-action-header">
+                  <span>操作</span>
+                  <el-button text class="table-settings-trigger" @click="recordTableSettings.settingsVisible.value = true">
+                    <el-icon class="table-action-header-icon"><Setting /></el-icon>
+                  </el-button>
+                </div>
+              </template>
+              <template #default="{ row }">
+                <div class="table-action-row table-action-row-text">
+                  <el-button text type="primary" @click="openDetail(row)">查看详情</el-button>
+                  <el-button
+                    text
+                    :type="getPrimaryActionType(row.status)"
+                    :loading="row.status === 'FAILED' && retryingRecordId === row.id"
+                    @click="handlePrimaryAction(row)"
+                  >
+                    {{ getPrimaryActionLabel(row.status) }}
+                  </el-button>
+                  <el-button text type="danger" @click="deleteTask(row)">删除</el-button>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <div class="table-pagination">
+          <div class="table-pagination-right">
+            <div class="table-pagination-summary">共 {{ total }} 条 / {{ totalPages }} 页</div>
+            <el-pagination
+              v-model:current-page="pageNo"
+              v-model:page-size="pageSize"
+              :page-sizes="PAGE_SIZE_OPTIONS"
+              :pager-count="7"
+              size="small"
+              layout="sizes, prev, pager, next, jumper"
+              :total="total"
+              @current-change="handlePageChange"
+              @size-change="updatePageSizeSetting"
+            />
+          </div>
+        </div>
       </div>
     </template>
-
     <div v-else class="panel-card record-empty-card">
       <div class="record-empty-content">
         <div class="record-empty-icon">📝</div>
@@ -483,6 +587,28 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+
+
+    <TableSettingsDrawer
+      v-model="recordTableSettings.settingsVisible.value"
+      :columns="recordTableSettings.settingsColumns.value.map(column => ({
+        key: column.key,
+        label: column.label,
+        required: column.required,
+        visible: column.required ? true : recordTableSettings.visibleColumns.value.some(item => item.key === column.key),
+        draggable: recordTableSettings.canDragColumn(column.key),
+      }))"
+      :page-size-enabled="true"
+      :page-size="recordTableSettings.pageSizeDisplay.value"
+      :page-size-options="PAGE_SIZE_OPTIONS"
+      :dragging-key="recordTableSettings.draggingColumnKey.value"
+      @page-size-change="updatePageSizeSetting"
+      @toggle-column="recordTableSettings.toggleColumnVisibility"
+      @drag-start="recordTableSettings.handleDragStart"
+      @drag-end="recordTableSettings.handleDragEnd"
+      @drop-column="recordTableSettings.moveColumnToTarget"
+      @reset="recordTableSettings.reset"
+    />
 
     <el-dialog v-model="adoptDialogVisible" width="620px" destroy-on-close class="adopt-dialog">
       <template #header>
@@ -533,67 +659,16 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="processDialogVisible" title="AI生成用例流程" width="760px" destroy-on-close>
-      <template v-if="activeRecord">
-        <div class="process-dialog-meta">
-          <div>
-            <div class="process-dialog-title">{{ activeRecord.requirementTitle }}</div>
-            <div class="process-dialog-subtitle">
-              {{ activeRecord.workspaceName }} / {{ activeRecord.outputMode === 'STREAM' ? '实时流式输出' : '完整输出' }}
-            </div>
-          </div>
-          <span class="status-pill" :class="getStatusClass(activeRecord.status)">{{ getStatusLabel(activeRecord.status) }}</span>
-        </div>
-
-        <div class="process-step-list">
-          <div
-            v-for="step in processSteps"
-            :key="step.index"
-            class="process-step-card"
-            :class="{
-              'process-step-card-active': activeRecord.currentStep === step.index,
-              'process-step-card-done': activeRecord.currentStep > step.index || activeRecord.status === 'COMPLETED',
-              'process-step-card-failed': activeRecord.status === 'FAILED' && activeRecord.currentStep === step.index,
-            }"
-          >
-            <div
-              class="process-step-index"
-              :class="{
-                'process-step-index-active': activeRecord.currentStep === step.index && activeRecord.status !== 'FAILED',
-                'process-step-index-done': activeRecord.currentStep > step.index || activeRecord.status === 'COMPLETED',
-                'process-step-index-failed': activeRecord.status === 'FAILED' && activeRecord.currentStep === step.index,
-              }"
-            >
-              {{ step.index }}
-            </div>
-            <div class="process-step-content">
-              <div class="process-step-title">{{ step.title }}</div>
-              <div class="process-step-desc">{{ step.description }}</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="process-current-log">
-          <div class="process-current-label">当前状态</div>
-          <div class="process-current-text">{{ activeRecord.stepMessage }}</div>
-          <div v-if="activeRecord.errorMessage" class="process-error-text">{{ activeRecord.errorMessage }}</div>
-        </div>
-      </template>
-
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button
-            v-if="activeRecord && isRunningStatus(activeRecord.status)"
-            type="danger"
-            :icon="CircleClose"
-            @click="cancelGeneration(activeRecord)"
-          >
-            取消生成
-          </el-button>
-          <el-button @click="processDialogVisible = false">关闭</el-button>
-        </div>
-      </template>
-    </el-dialog>
+    <AiGenerationProcessDialog
+      v-model="processDialogVisible"
+      :record="activeRecord"
+      :steps="processSteps"
+      :status-label="activeRecord ? getStatusLabel(activeRecord.status) : ''"
+      :status-class="activeRecord ? getStatusClass(activeRecord.status) : ''"
+      :show-cancel-button="!!activeRecord && isRunningStatus(activeRecord.status)"
+      :cancel-disabled="!activeRecord || !isRunningStatus(activeRecord.status)"
+      @cancel="activeRecord && cancelGeneration(activeRecord)"
+    />
   </section>
 </template>
 
@@ -601,12 +676,14 @@ onBeforeUnmount(() => {
 .ai-record-page {
   display: grid;
   gap: 16px;
+  min-width: 0;
 }
 
 .record-filter-card,
 .record-stats-card,
 .record-table-card {
   padding: 20px 22px;
+  min-width: 0;
 }
 
 .record-filter-row,
@@ -617,6 +694,60 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.record-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.table-action-header {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #344054;
+  font-weight: 700;
+}
+
+.table-settings-trigger {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+}
+
+.table-action-header-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: #667085;
+}
+
+.table-action-header-icon :deep(svg) {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.table-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.table-pagination-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.table-pagination-summary {
+  color: var(--text-subtle);
+  font-size: 13px;
 }
 
 .dialog-footer {
@@ -710,38 +841,40 @@ onBeforeUnmount(() => {
   font-weight: 700;
 }
 
+.record-table {
+  width: 100%;
+  min-width: 0;
+}
+
 .record-table :deep(.el-table__cell) {
   padding-top: 14px;
   padding-bottom: 14px;
 }
 
+.record-table :deep(.el-table-fixed-column--right) {
+  background: var(--bg-panel);
+  box-shadow: -8px 0 16px rgba(15, 23, 42, 0.06);
+}
+
+.record-table :deep(.el-table__body-wrapper .el-scrollbar__wrap) {
+  overflow-x: auto;
+}
+
 .task-code-text {
-  font-weight: 400;
-  color: #667085;
+  color: var(--text-main);
 }
 
 .workspace-text {
-  font-weight: 500;
-  color: #475467;
-}
-
-.record-requirement-cell {
-  display: grid;
-  gap: 4px;
+  color: var(--text-main);
 }
 
 .record-requirement-title {
   min-width: 0;
   font-size: 13px;
-  font-weight: 500;
-  color: #344054;
-}
-
-.record-requirement-path {
-  min-width: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #98a2b3;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .case-count-pill {
@@ -756,6 +889,15 @@ onBeforeUnmount(() => {
   color: #1d4ed8;
   font-size: 13px;
   font-weight: 700;
+}
+
+.case-count-pill-success {
+  background: rgba(18, 183, 106, 0.12);
+  color: #027a48;
+}
+
+.record-muted-text {
+  color: #667085;
 }
 
 .adopt-dialog-title {
@@ -880,6 +1022,10 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 10px;
   flex-wrap: nowrap;
+}
+
+.record-table .table-action-row-text {
+  gap: 0;
 }
 
 .process-dialog-meta {

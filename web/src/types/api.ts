@@ -220,6 +220,10 @@ export interface AiGeneratedCase {
   expectedResult: string
   riskNotes: string | null
   warnings: string[]
+  savedDirectoryName?: string | null
+  manualEdited?: boolean
+  manualEditedByName?: string | null
+  manualEditedAt?: string | null
 }
 
 export interface AiInvalidCaseItem {
@@ -264,6 +268,8 @@ export interface AiGenerationTask {
   taskId: string
   workspaceCode: string
   workspaceName: string
+  createdByName?: string | null
+  updatedByName?: string | null
   requirementTitle: string
   requirementContent: string
   outputMode: AiGenerationOutputMode
@@ -303,6 +309,7 @@ export interface CreateAiGenerationTaskPayload {
 export interface UpdateAiGenerationTaskPayload {
   directoryId?: number | null
   directoryName?: string | null
+  generatedCases?: AiGeneratedCase[]
   adoptedCaseIndexes?: number[]
   deletedCaseIndexes?: number[]
   savedCaseCount?: number

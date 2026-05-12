@@ -10,6 +10,7 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
+import AiGenerationProcessDialog from '../components/AiGenerationProcessDialog.vue'
 import { useCaseCenterShared } from '../composables/useCaseCenterShared'
 import type {
   AiCaseConfig,
@@ -51,6 +52,7 @@ const activeConfig = ref<AiCaseConfig | null>(null)
 const reviewerConfig = ref<AiCaseConfig | null>(null)
 const requirementAssets = ref<RequirementAssetView[]>([])
 const latestTaskRecord = ref<AiGenerationTaskRecord | null>(null)
+const activeProcessRecordId = ref('')
 const manualTaskRecordId = ref('')
 const documentTaskRecordId = ref('')
 const taskRecords = ref<AiGenerationTaskRecord[]>([])
@@ -210,16 +212,6 @@ function getTaskStatusTone(status: AiGenerationTaskRecord['status']) {
   return toneMap[status]
 }
 
-function getFailureStepLabel(step: AiGenerationTaskRecord['currentStep']) {
-  const labelMap: Record<AiGenerationTaskRecord['currentStep'], string> = {
-    1: '任务创建',
-    2: 'AI 生成用例',
-    3: 'AI 自动评审',
-    4: '任务完成',
-  }
-  return labelMap[step]
-}
-
 function pickLatestTaskRecord(records: AiGenerationTaskRecord[]) {
   return records.find(item => ['PENDING', 'GENERATING', 'REVIEWING', 'FAILED'].includes(item.status))
     ?? records[0]
@@ -244,12 +236,20 @@ async function refreshLatestTaskRecord() {
   if (!targetWorkspaceCode.value) {
     taskRecords.value = []
     latestTaskRecord.value = null
+    activeProcessRecordId.value = ''
     stopTaskPolling()
     return
   }
 
   taskRecords.value = await listAiGenerationRecords(targetWorkspaceCode.value)
-  latestTaskRecord.value = pickLatestTaskRecord(taskRecords.value)
+  if (processDialogVisible.value && activeProcessRecordId.value) {
+    latestTaskRecord.value = await getAiGenerationRecord(targetWorkspaceCode.value, activeProcessRecordId.value)
+      ?? taskRecords.value.find(item => item.id === activeProcessRecordId.value)
+      ?? null
+  }
+  else {
+    latestTaskRecord.value = pickLatestTaskRecord(taskRecords.value)
+  }
   if (taskRecords.value.some(item => ['PENDING', 'GENERATING', 'REVIEWING'].includes(item.status))) {
     startTaskPolling()
   } else {
@@ -263,6 +263,7 @@ function formatTaskTime(value: string) {
 
 async function openTaskProcessDialog(recordId?: string) {
   await refreshLatestTaskRecord()
+  activeProcessRecordId.value = recordId || ''
   latestTaskRecord.value = recordId && targetWorkspaceCode.value
     ? await getAiGenerationRecord(targetWorkspaceCode.value, recordId)
     : pickLatestTaskRecord(taskRecords.value)
@@ -271,6 +272,7 @@ async function openTaskProcessDialog(recordId?: string) {
     ElMessage.info('当前还没有生成任务')
     return
   }
+  activeProcessRecordId.value = latestTaskRecord.value.id
   processDialogVisible.value = true
 }
 
@@ -291,6 +293,7 @@ async function openScopedProcessDialog(source: 'manual' | 'document') {
     ElMessage.info('当前任务记录不存在，请重新生成测试用例')
     return
   }
+  activeProcessRecordId.value = latestTaskRecord.value.id
   processDialogVisible.value = true
 }
 
@@ -633,6 +636,16 @@ watch(
     await loadConfig()
     await loadDirectoryOptions()
     await refreshLatestTaskRecord()
+  },
+)
+
+watch(
+  () => processDialogVisible.value,
+  (visible) => {
+    if (!visible) {
+      activeProcessRecordId.value = ''
+      latestTaskRecord.value = pickLatestTaskRecord(taskRecords.value)
+    }
   },
 )
 
@@ -994,71 +1007,16 @@ onBeforeUnmount(() => {
       @change="handleRequirementFileChange"
     >
 
-    <el-dialog
+    <AiGenerationProcessDialog
       v-model="processDialogVisible"
-      title="AI 用例生成流程"
-      width="760px"
-      destroy-on-close
-    >
-      <template v-if="latestTaskRecord">
-        <div class="process-dialog-meta">
-          <div>
-            <div class="process-dialog-title">{{ latestTaskRecord.requirementTitle }}</div>
-            <div class="process-dialog-subtitle">
-              {{ latestTaskRecord.workspaceName }} / {{ latestTaskRecord.outputMode === 'STREAM' ? '实时流式输出' : '完整输出' }}
-            </div>
-          </div>
-          <span class="status-pill" :class="getTaskStatusTone(latestTaskRecord.status)">
-            {{ getTaskStatusLabel(latestTaskRecord.status) }}
-          </span>
-        </div>
-
-        <div class="process-step-list">
-          <div
-            v-for="step in processSteps"
-            :key="step.index"
-            class="process-step-card"
-            :class="{
-              'process-step-card-active': latestTaskRecord.currentStep === step.index,
-              'process-step-card-done': latestTaskRecord.currentStep > step.index || latestTaskRecord.status === 'COMPLETED',
-              'process-step-card-failed': latestTaskRecord.status === 'FAILED' && latestTaskRecord.currentStep === step.index,
-            }"
-          >
-            <div class="process-step-index">{{ step.index }}</div>
-            <div class="process-step-content">
-              <div class="process-step-title">{{ step.title }}</div>
-              <div class="process-step-desc">{{ step.description }}</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="process-current-log">
-          <div class="section-title small-title">当前状态</div>
-          <div class="process-current-text">{{ latestTaskRecord.stepMessage }}</div>
-          <div v-if="latestTaskRecord.errorMessage" class="process-error-text">{{ latestTaskRecord.errorMessage }}</div>
-        </div>
-
-        <div v-if="latestTaskRecord.status === 'FAILED'" class="process-failure-card">
-          <div class="section-title small-title">失败位置</div>
-          <div class="process-failure-stage">失败阶段：{{ getFailureStepLabel(latestTaskRecord.currentStep) }}</div>
-          <div class="process-failure-text">{{ latestTaskRecord.errorMessage || latestTaskRecord.stepMessage }}</div>
-        </div>
-      </template>
-
-      <template #footer>
-        <div class="process-dialog-footer">
-          <el-button @click="processDialogVisible = false">关闭</el-button>
-          <el-button
-            type="danger"
-            :icon="CircleClose"
-            :disabled="!hasProcessingTask"
-            @click="terminateTask"
-          >
-            取消生成
-          </el-button>
-        </div>
-      </template>
-    </el-dialog>
+      :record="latestTaskRecord"
+      :steps="processSteps"
+      :status-label="latestTaskRecord ? getTaskStatusLabel(latestTaskRecord.status) : ''"
+      :status-class="latestTaskRecord ? getTaskStatusTone(latestTaskRecord.status) : ''"
+      :show-cancel-button="true"
+      :cancel-disabled="!hasProcessingTask"
+      @cancel="terminateTask"
+    />
   </section>
 </template>
 
@@ -1294,20 +1252,20 @@ onBeforeUnmount(() => {
 }
 
 .action-bar,
-.process-dialog-meta,
-.process-dialog-footer {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
 .path-action-stack,
 .upload-card-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-top: 10px;
+}
+
+.process-dialog-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .generate-primary-btn {
@@ -1752,7 +1710,19 @@ onBeforeUnmount(() => {
   color: var(--text-main);
 }
 
-.process-step-title {
+.process-step-index-active,
+.process-step-index-done {
+  background: #2f88ff;
+  color: #ffffff;
+}
+
+.process-step-index-failed {
+  background: #f04438;
+  color: #ffffff;
+}
+
+.process-step-title,
+.process-current-label {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-main);

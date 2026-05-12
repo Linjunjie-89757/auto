@@ -50,6 +50,11 @@ a {
   min-height: 100vh;
 }
 
+.app-shell > .el-container {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .app-aside {
   display: flex;
   flex-direction: column;
@@ -212,6 +217,7 @@ a {
 }
 
 .app-main {
+  min-width: 0;
   padding: 10px 24px 24px;
 }
 

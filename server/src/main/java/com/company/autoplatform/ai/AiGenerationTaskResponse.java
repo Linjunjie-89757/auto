@@ -15,6 +15,8 @@ public record AiGenerationTaskResponse(
         String errorMessage,
         Long directoryId,
         String directoryName,
+        String createdByName,
+        String updatedByName,
         String provider,
         String model,
         Integer generatedCount,

@@ -45,6 +45,12 @@ public class AiGenerationTaskEntity extends BaseEntity {
     @TableField("directory_name")
     private String directoryName;
 
+    @TableField("created_by")
+    private Long createdBy;
+
+    @TableField("updated_by")
+    private Long updatedBy;
+
     private String provider;
 
     private String model;

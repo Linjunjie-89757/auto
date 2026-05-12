@@ -255,7 +255,10 @@ public class AiProviderClient {
                         steps,
                         expectedResult,
                         optionalText(item, "riskNotes"),
-                        itemWarnings
+                        itemWarnings,
+                        false,
+                        null,
+                        null
                 ));
             }
             if (items.isEmpty()) {

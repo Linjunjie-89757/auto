@@ -47,21 +47,26 @@ a {
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .app-shell > .el-container {
   min-width: 0;
   flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .app-aside {
   display: flex;
   flex-direction: column;
+  min-height: 0;
   border-right: 1px solid var(--line-soft);
   background: linear-gradient(180deg, #0f2139 0%, #152c49 100%);
   color: #f6f8fc;
   transition: width 0.18s ease;
+  overflow: hidden;
 }
 
 .brand-block {
@@ -100,9 +105,12 @@ a {
 }
 
 .app-menu {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   border-right: 0;
   background: transparent;
+  overflow: auto;
+  padding-bottom: 8px;
 }
 
 .app-menu .el-menu-item {
@@ -126,6 +134,8 @@ a {
 }
 
 .aside-footer {
+  margin-top: auto;
+  flex: 0 0 auto;
   padding: 16px;
 }
 
@@ -218,13 +228,16 @@ a {
 
 .app-main {
   min-width: 0;
+  min-height: 0;
   padding: 10px 24px 24px;
+  overflow: auto;
 }
 
 .page-shell {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
 }
 
 .case-center-tabs {
@@ -262,6 +275,7 @@ a {
 
 .case-center-content {
   margin-top: 0;
+  min-height: 0;
 }
 
 .page-header {

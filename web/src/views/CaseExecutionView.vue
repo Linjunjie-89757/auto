@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { ArrowLeft, ArrowRight, Edit, Search } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, Edit, Filter, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { platformApi } from '../api/platform'
@@ -23,6 +23,7 @@ const loading = ref(false)
 const submitting = ref(false)
 const activeTab = ref('detail')
 const sidebarKeyword = ref('')
+const sidebarExecutionStatus = ref<ExecutionStatus | ''>('')
 const autoNext = ref(false)
 const contextState = ref<CaseExecutionContext | null>(null)
 const executionCases = ref<CaseItem[]>([])
@@ -30,6 +31,13 @@ const detail = ref<CaseDetail | null>(null)
 const selectedExecutionStatus = ref<ExecutionStatus | ''>('')
 const executionComment = ref('')
 
+const sidebarStatusOptions: Array<{ label: string, value: ExecutionStatus | '' }> = [
+  { label: '全部状态', value: '' },
+  { label: '未执行', value: 'NOT_RUN' },
+  { label: '已通过', value: 'PASSED' },
+  { label: '阻塞中', value: 'BLOCKED' },
+  { label: '失败', value: 'FAILED' },
+]
 const currentCaseId = computed(() => {
   const rawId = route.params.id?.toString()
   const parsed = Number(rawId)
@@ -37,14 +45,23 @@ const currentCaseId = computed(() => {
 })
 const directWorkspaceCode = computed(() => route.query.workspace?.toString() ?? workspaceCode.value)
 const effectiveWorkspaceCode = computed(() => contextState.value?.workspaceCode || directWorkspaceCode.value)
+const sidebarRequirementName = computed(() => {
+  const path = contextState.value?.selectedNodePath?.trim()
+  if (!path) {
+    return currentWorkspaceName.value
+  }
+  const segments = path.split('/').map(item => item.trim()).filter(Boolean)
+  return segments[segments.length - 1] || currentWorkspaceName.value
+})
 const visibleExecutionCases = computed(() => {
   const keyword = sidebarKeyword.value.trim().toLowerCase()
-  if (!keyword) {
-    return executionCases.value
-  }
-  return executionCases.value.filter(item => (
-    item.caseNo.toLowerCase().includes(keyword) || item.title.toLowerCase().includes(keyword)
-  ))
+  return executionCases.value.filter((item) => {
+    const matchesKeyword = !keyword
+      || item.caseNo.toLowerCase().includes(keyword)
+      || item.title.toLowerCase().includes(keyword)
+    const matchesStatus = !sidebarExecutionStatus.value || item.executionStatus === sidebarExecutionStatus.value
+    return matchesKeyword && matchesStatus
+  })
 })
 const currentVisibleIndex = computed(() => visibleExecutionCases.value.findIndex(item => item.id === currentCaseId.value))
 const activeCaseDisplayIndex = computed(() => (currentVisibleIndex.value >= 0 ? currentVisibleIndex.value + 1 : 0))
@@ -186,6 +203,10 @@ function moveCase(offset: -1 | 1) {
   navigateToCase(nextRow.id)
 }
 
+function applySidebarExecutionStatus(value: string | number | object) {
+  sidebarExecutionStatus.value = typeof value === 'string' ? value as ExecutionStatus | '' : ''
+}
+
 function openCaseEdit() {
   if (!detail.value) {
     return
@@ -265,16 +286,38 @@ onMounted(() => {
   <section class="execution-page" v-loading="loading">
     <aside class="execution-sidebar">
       <div class="execution-sidebar-header">
-        <div class="execution-sidebar-title">执行列表</div>
-        <div class="execution-sidebar-meta">{{ contextState?.selectedNodePath || currentWorkspaceName }}</div>
+        <div class="execution-sidebar-title">{{ sidebarRequirementName }}</div>
       </div>
-      <el-input
-        v-model="sidebarKeyword"
-        placeholder="通过 ID / 名称搜索"
-        clearable
-        :prefix-icon="Search"
-        class="execution-sidebar-search"
-      />
+      <div class="execution-sidebar-toolbar">
+        <el-input
+          v-model="sidebarKeyword"
+          placeholder="支持 ID / 标题模糊搜索"
+          clearable
+          :prefix-icon="Search"
+          class="execution-sidebar-search"
+        />
+        <el-dropdown trigger="click" @command="applySidebarExecutionStatus">
+          <el-button
+            class="execution-sidebar-filter-button"
+            :class="{ 'is-active': !!sidebarExecutionStatus }"
+            circle
+          >
+            <el-icon><Filter /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item
+                v-for="option in sidebarStatusOptions"
+                :key="option.value || 'all'"
+                :command="option.value"
+                :class="{ 'is-active': sidebarExecutionStatus === option.value }"
+              >
+                {{ option.label }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
       <div class="execution-sidebar-list">
         <button
           v-for="item in visibleExecutionCases"
@@ -468,7 +511,9 @@ onMounted(() => {
   display: grid;
   grid-template-columns: 292px minmax(0, 1fr);
   gap: 16px;
-  min-height: 720px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .execution-sidebar,
@@ -495,6 +540,15 @@ onMounted(() => {
   font-size: 14px;
   font-weight: 700;
   color: #344054;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.execution-sidebar-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .execution-sidebar-meta,
@@ -507,8 +561,41 @@ onMounted(() => {
   color: #667085;
 }
 
-.execution-sidebar-search {
+.execution-sidebar-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
   padding: 14px 18px 0;
+  align-items: center;
+}
+
+.execution-sidebar-search {
+  min-width: 0;
+}
+
+.execution-sidebar-filter-button {
+  width: 34px;
+  height: 34px;
+  border-color: var(--line-soft);
+  color: #667085;
+  background: #ffffff;
+}
+
+.execution-sidebar-filter-button:hover {
+  color: #7f56d9;
+  border-color: rgba(127, 86, 217, 0.28);
+  background: #fcfbff;
+}
+
+.execution-sidebar-filter-button.is-active {
+  color: #7f56d9;
+  border-color: rgba(127, 86, 217, 0.38);
+  background: #f5f0ff;
+}
+
+.execution-sidebar-toolbar :deep(.el-dropdown-menu__item.is-active) {
+  color: #7f56d9;
+  background: #faf7ff;
 }
 
 .execution-sidebar-list {
@@ -522,20 +609,42 @@ onMounted(() => {
 }
 
 .execution-sidebar-item {
+  position: relative;
   width: 100%;
   padding: 14px 14px 12px;
   border: 1px solid var(--line-soft);
   border-radius: 10px;
   background: #ffffff;
   text-align: left;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease, transform 0.2s ease;
 }
 
-.execution-sidebar-item:hover,
+.execution-sidebar-item::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 999px;
+  background: transparent;
+  transition: background 0.2s ease;
+}
+
+.execution-sidebar-item:hover {
+  border-color: rgba(127, 86, 217, 0.26);
+  background: #fcfbff;
+}
+
 .execution-sidebar-item.is-active {
-  border-color: rgba(127, 86, 217, 0.4);
-  background: #fcfaff;
-  box-shadow: 0 0 0 1px rgba(127, 86, 217, 0.08);
+  border-color: rgba(127, 86, 217, 0.42);
+  background: #faf7ff;
+  box-shadow: 0 0 0 1px rgba(127, 86, 217, 0.12);
+  transform: translateY(-1px);
+}
+
+.execution-sidebar-item.is-active::before {
+  background: #7f56d9;
 }
 
 .execution-sidebar-item-top,
@@ -552,23 +661,31 @@ onMounted(() => {
   gap: 12px;
 }
 
-.execution-sidebar-case-no,
-.execution-main-case-no {
-  color: #6941c6;
-}
-
 .execution-sidebar-case-title {
   margin-top: 10px;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.55;
   color: #344054;
   word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.execution-sidebar-case-no {
+  color: #667085;
+}
+
+.execution-main-case-no {
+  color: #6941c6;
 }
 
 .execution-sidebar-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex: 0 0 auto;
   padding: 12px 18px 16px;
   border-top: 1px solid var(--line-soft);
   font-size: 12px;
@@ -576,8 +693,8 @@ onMounted(() => {
 }
 
 .execution-main {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -607,21 +724,32 @@ onMounted(() => {
 }
 
 .execution-body {
+  flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   padding: 0 24px;
 }
 
 .execution-tabs {
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .execution-tabs :deep(.el-tabs__header) {
   margin: 0;
+  flex: 0 0 auto;
 }
 
 .execution-tabs :deep(.el-tabs__content) {
+  min-height: 0;
+  overflow: auto;
   padding: 20px 0 24px;
+}
+
+.execution-tabs :deep(.el-tab-pane) {
+  min-height: 100%;
 }
 
 .execution-section-grid {
@@ -734,9 +862,11 @@ onMounted(() => {
 }
 
 .execution-footer {
+  margin-top: auto;
   padding: 16px 24px 22px;
   border-top: 1px solid var(--line-soft);
   background: #ffffff;
+  flex: 0 0 auto;
 }
 
 .execution-footer-bar {
@@ -788,9 +918,9 @@ onMounted(() => {
 }
 
 .status-tag-blocked {
-  --el-tag-text-color: #6d42c7;
-  --el-tag-bg-color: rgba(109, 66, 199, 0.1);
-  --el-tag-border-color: rgba(109, 66, 199, 0.22);
+  --el-tag-text-color: #b54708;
+  --el-tag-bg-color: rgba(247, 144, 9, 0.12);
+  --el-tag-border-color: rgba(247, 144, 9, 0.28);
 }
 
 .status-tag-pending {
@@ -801,6 +931,12 @@ onMounted(() => {
 
 @media (max-width: 1280px) {
   .execution-page {
+    grid-template-columns: 1fr;
+    height: 100%;
+    overflow: visible;
+  }
+
+  .execution-sidebar-toolbar {
     grid-template-columns: 1fr;
   }
 
@@ -827,6 +963,10 @@ onMounted(() => {
 
   .execution-submit-actions {
     justify-content: stretch;
+  }
+
+  .execution-footer {
+    flex: 0 0 auto;
   }
 }
 </style>

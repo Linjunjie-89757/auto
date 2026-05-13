@@ -51,7 +51,7 @@ const activeMeta = computed(() => tabMeta[activeTab.value] ?? tabMeta.manage)
 </script>
 
 <template>
-  <section class="page-shell">
+  <section class="page-shell case-center-shell">
     <div class="page-header">
       <div>
         <div class="page-title">{{ activeMeta.title }}</div>
@@ -72,3 +72,24 @@ const activeMeta = computed(() => tabMeta[activeTab.value] ?? tabMeta.manage)
     </div>
   </section>
 </template>
+
+<style scoped>
+.case-center-shell {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.case-center-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.case-center-content > :deep(*) {
+  height: 100%;
+  min-height: 0;
+}
+</style>

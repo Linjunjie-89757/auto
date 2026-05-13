@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, type HistoryState } from 'vue-router'
 import { FolderOpened, RefreshRight, Setting } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
@@ -349,10 +349,12 @@ async function loadDirectoryOptions(record: AiGenerationTaskRecord) {
 }
 
 function openDetail(record: AiGenerationTaskRecord) {
+  const recordSnapshot = JSON.parse(JSON.stringify(record)) as Record<string, unknown>
   router.push({
     name: 'cases-ai-record-detail',
     params: { taskId: record.id },
-    query: { workspace: workspaceCode.value },
+    query: { workspace: record.workspaceCode },
+    state: { recordSnapshot } as unknown as HistoryState,
   })
 }
 

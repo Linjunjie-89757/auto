@@ -77,6 +77,7 @@ const detailTableSettings = useTableSettings({
 })
 
 const activeRecord = ref<AiGenerationTaskRecord | null>(null)
+const loadingRecord = ref(true)
 const casePreviewVisible = ref(false)
 const adoptDialogVisible = ref(false)
 const processDialogVisible = ref(false)
@@ -96,6 +97,24 @@ const selectedCaseIndexes = ref<number[]>([])
 const adoptDialogMode = ref<'all' | 'selected'>('all')
 const casePreviewEditing = ref(false)
 let pollingTimer: number | null = null
+
+function getRecordSnapshotFromHistory(taskId?: string) {
+  const snapshot = window.history.state?.recordSnapshot as AiGenerationTaskRecord | undefined
+  if (!snapshot || !taskId || snapshot.id !== taskId) {
+    return null
+  }
+  return snapshot
+}
+
+function seedRecordSnapshot(taskId?: string) {
+  const snapshot = getRecordSnapshotFromHistory(taskId)
+  if (!snapshot) {
+    return false
+  }
+  activeRecord.value = snapshot
+  loadingRecord.value = false
+  return true
+}
 
 const adoptForm = reactive({
   directoryId: null as number | null,
@@ -171,10 +190,14 @@ async function loadRecord() {
   const taskId = route.params.taskId?.toString()
   if (!taskId) {
     activeRecord.value = null
+    loadingRecord.value = false
     return
   }
+  const hasSnapshot = seedRecordSnapshot(taskId)
+  loadingRecord.value = !hasSnapshot
   try {
-    activeRecord.value = await getAiGenerationRecord(workspaceCode.value, taskId)
+    const nextRecord = await getAiGenerationRecord(workspaceCode.value, taskId)
+    activeRecord.value = nextRecord
     if (activeRecord.value && ['PENDING', 'GENERATING', 'REVIEWING'].includes(activeRecord.value.status)) {
       startPolling()
     } else {
@@ -183,6 +206,8 @@ async function loadRecord() {
   } catch (error) {
     ElMessage.error((error as Error).message)
     activeRecord.value = null
+  } finally {
+    loadingRecord.value = false
   }
 }
 
@@ -843,6 +868,7 @@ function exportExcel() {
 }
 
 watch(() => route.params.taskId, () => {
+  seedRecordSnapshot(route.params.taskId?.toString())
   void loadRecord()
 })
 
@@ -871,6 +897,7 @@ watch(availableCases, (rows) => {
 
 onMounted(() => {
   detailTableSettings.load()
+  seedRecordSnapshot(route.params.taskId?.toString())
   void loadRecord()
 })
 
@@ -1060,26 +1087,33 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <div v-else-if="loadingRecord" class="panel-card detail-empty-card">
+      <div class="detail-empty-title">正在加载任务详情...</div>
+      <div class="detail-empty-text">稍等一下，正在读取这条 AI 生成任务记录。</div>
+    </div>
+
     <div v-else class="panel-card detail-empty-card">
       <div class="detail-empty-title">任务记录不存在</div>
       <div class="detail-empty-text">这条 AI 生成任务可能已被删除，或当前空间下无法访问。</div>
     </div>
 
-    <el-dialog v-model="casePreviewVisible" width="920px" destroy-on-close class="detail-preview-dialog">
+    <el-drawer
+      v-model="casePreviewVisible"
+      size="760px"
+      direction="rtl"
+      destroy-on-close
+      class="detail-preview-drawer"
+    >
       <template #header>
         <div class="detail-preview-header detail-preview-header-review">
           <div>
             <div class="adopt-dialog-title">用例详情</div>
             <div class="detail-preview-subtitle">逐条审阅 AI 生成用例，可直接编辑后保存或采纳。</div>
           </div>
-          <div class="case-review-nav" v-if="availableCases.length">
-            <el-button class="case-review-nav-button" :icon="ArrowLeft" :disabled="!canPreviewPreviousCase" @click="moveCasePreview(-1)">
-              上一条
-            </el-button>
-            <div class="case-review-nav-count">第 {{ activeCaseDisplayIndex }} 条 / 共 {{ availableCases.length }} 条</div>
-            <el-button class="case-review-nav-button" :icon="ArrowRight" :disabled="!canPreviewNextCase" @click="moveCasePreview(1)">
-              下一条
-            </el-button>
+          <div v-if="availableCases.length" class="case-review-header-count">
+            <span class="case-review-header-count-current">第 {{ activeCaseDisplayIndex }} 条</span>
+            <span class="case-review-header-count-divider">/</span>
+            <span class="case-review-header-count-total">共 {{ availableCases.length }} 条</span>
           </div>
         </div>
       </template>
@@ -1137,7 +1171,16 @@ onBeforeUnmount(() => {
       </template>
       <template #footer>
         <div class="dialog-footer case-review-footer">
-          <div class="case-review-footer-left">
+          <div class="case-review-footer-nav" v-if="availableCases.length">
+            <el-button class="case-review-nav-button" :icon="ArrowLeft" :disabled="!canPreviewPreviousCase" @click="moveCasePreview(-1)">
+              上一条
+            </el-button>
+            <el-button class="case-review-nav-button" :disabled="!canPreviewNextCase" @click="moveCasePreview(1)">
+              下一条
+              <el-icon><ArrowRight /></el-icon>
+            </el-button>
+          </div>
+          <div class="case-review-footer-right">
             <el-button v-if="casePreviewEditing" :icon="CircleClose" @click="cancelCaseEditing">取消编辑</el-button>
             <el-button
               v-else
@@ -1163,8 +1206,6 @@ onBeforeUnmount(() => {
             >
               删除
             </el-button>
-          </div>
-          <div class="case-review-footer-right">
             <el-button
               v-if="casePreviewEditing"
               type="primary"
@@ -1174,11 +1215,10 @@ onBeforeUnmount(() => {
             >
               保存
             </el-button>
-            <el-button @click="casePreviewVisible = false">关闭</el-button>
           </div>
         </div>
       </template>
-    </el-dialog>
+    </el-drawer>
 
     <AiGenerationProcessDialog
       v-model="processDialogVisible"
@@ -1631,7 +1671,8 @@ onBeforeUnmount(() => {
 .detail-preview-header-review {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
-  gap: 16px;
+  gap: 12px;
+  padding-right: 32px;
 }
 
 .detail-preview-subtitle {
@@ -1640,34 +1681,43 @@ onBeforeUnmount(() => {
   color: var(--text-subtle);
 }
 
+.case-review-header-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: end;
+  align-self: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #f2f4f7;
+  font-size: 12px;
+  line-height: 28px;
+  color: #475467;
+}
+
+.case-review-header-count-current {
+  font-weight: 700;
+}
+
+.case-review-header-count-divider {
+  color: #98a2b3;
+}
+
+.case-review-header-count-total {
+  color: #667085;
+  font-weight: 600;
+}
+
 .detail-preview-layout {
   display: grid;
   gap: 16px;
 }
 
-.case-review-nav {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 999px;
-  background: #f8fafc;
-}
-
 .case-review-nav-button {
-  min-width: 96px;
+  min-width: 88px;
   height: 34px;
-  border-radius: 999px;
-}
-
-.case-review-nav-count {
-  min-width: 156px;
-  padding: 0 8px;
-  text-align: center;
-  font-size: 13px;
-  font-weight: 700;
-  color: #344054;
+  border-radius: 8px;
 }
 
 .detail-preview-meta-label,
@@ -1680,8 +1730,8 @@ onBeforeUnmount(() => {
 
 .case-preview-layout {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
 }
 
 .case-preview-item {
@@ -1694,7 +1744,7 @@ onBeforeUnmount(() => {
 }
 
 .case-preview-item-full {
-  grid-column: 1 / -1;
+  grid-column: auto;
 }
 
 .case-preview-content {
@@ -1710,12 +1760,32 @@ onBeforeUnmount(() => {
   word-break: break-word;
 }
 
-.detail-preview-dialog :deep(.el-textarea__inner),
-.detail-preview-dialog :deep(.el-input__wrapper) {
+.detail-preview-drawer :deep(.el-drawer__header) {
+  margin-bottom: 0;
+  padding: 18px 20px 0;
+  align-items: flex-start;
+}
+
+.detail-preview-drawer :deep(.el-drawer__headerbtn) {
+  top: 18px;
+  right: 20px;
+}
+
+.detail-preview-drawer :deep(.el-drawer__body) {
+  padding: 12px 20px 0;
+}
+
+.detail-preview-drawer :deep(.el-drawer__footer) {
+  padding: 16px 20px 20px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.detail-preview-drawer :deep(.el-textarea__inner),
+.detail-preview-drawer :deep(.el-input__wrapper) {
   border-radius: 10px;
 }
 
-.detail-preview-dialog :deep(.el-textarea__inner) {
+.detail-preview-drawer :deep(.el-textarea__inner) {
   min-height: 132px !important;
   line-height: 1.7;
 }
@@ -1724,7 +1794,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
 }
 
-.case-review-footer-left,
+.case-review-footer-nav,
 .case-review-footer-right {
   display: inline-flex;
   align-items: center;
@@ -1853,10 +1923,6 @@ onBeforeUnmount(() => {
 .table-action-row-text {
   justify-content: center;
   flex-wrap: wrap;
-}
-
-.detail-preview-dialog :deep(.el-dialog__body) {
-  padding-top: 8px;
 }
 
 .priority-chip {

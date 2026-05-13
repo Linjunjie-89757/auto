@@ -1170,11 +1170,6 @@ onBeforeUnmount(() => {
             <div class="adopt-dialog-title">用例详情</div>
             <div class="detail-preview-subtitle">逐条审阅 AI 生成用例，可直接编辑后保存或采纳。</div>
           </div>
-          <div v-if="availableCases.length" class="case-review-header-count">
-            <span class="case-review-header-count-current">第 {{ activeCaseDisplayIndex }} 条</span>
-            <span class="case-review-header-count-divider">/</span>
-            <span class="case-review-header-count-total">共 {{ availableCases.length }} 条</span>
-          </div>
         </div>
       </template>
       <template v-if="activeCase">
@@ -1249,6 +1244,9 @@ onBeforeUnmount(() => {
             <el-button class="case-review-nav-button" :icon="ArrowLeft" :disabled="!canPreviewPreviousCase" @click="moveCasePreview(-1)">
               上一条
             </el-button>
+            <div class="case-review-nav-counter">
+              {{ activeCaseDisplayIndex }}/{{ availableCases.length }}
+            </div>
             <el-button class="case-review-nav-button" :disabled="!canPreviewNextCase" @click="moveCasePreview(1)">
               下一条
               <el-icon><ArrowRight /></el-icon>
@@ -1778,34 +1776,6 @@ onBeforeUnmount(() => {
   color: var(--text-subtle);
 }
 
-.case-review-header-count {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  justify-self: end;
-  align-self: center;
-  min-height: 28px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: #f2f4f7;
-  font-size: 12px;
-  line-height: 28px;
-  color: #475467;
-}
-
-.case-review-header-count-current {
-  font-weight: 700;
-}
-
-.case-review-header-count-divider {
-  color: #98a2b3;
-}
-
-.case-review-header-count-total {
-  color: #667085;
-  font-weight: 600;
-}
-
 .detail-preview-layout {
   display: grid;
   gap: 16px;
@@ -1815,6 +1785,22 @@ onBeforeUnmount(() => {
   min-width: 88px;
   height: 34px;
   border-radius: 8px;
+}
+
+.case-review-nav-counter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  color: #344054;
 }
 
 .detail-preview-meta-label,

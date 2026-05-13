@@ -7,6 +7,7 @@ import CaseAiConfigView from '../views/CaseAiConfigView.vue'
 import CaseAiGenerateView from '../views/CaseAiGenerateView.vue'
 import CaseAiRecordDetailView from '../views/CaseAiRecordDetailView.vue'
 import CaseAiRecordsView from '../views/CaseAiRecordsView.vue'
+import CaseExecutionView from '../views/CaseExecutionView.vue'
 import CaseManagementView from '../views/CaseManagementView.vue'
 import AutomationView from '../views/AutomationView.vue'
 import BugManagementView from '../views/BugManagementView.vue'
@@ -43,6 +44,11 @@ const router = createRouter({
           path: 'manage',
           name: 'cases-manage',
           component: CaseManagementView,
+        },
+        {
+          path: 'manage/execute/:id',
+          name: 'cases-execute',
+          component: CaseExecutionView,
         },
         {
           path: 'ai-generate',

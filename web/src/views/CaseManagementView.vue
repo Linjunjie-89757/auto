@@ -1,5 +1,6 @@
 ﻿<script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft,
   ArrowRight,
@@ -18,6 +19,18 @@ import ListToolbar from '../components/ListToolbar.vue'
 import { useCaseCenterShared } from '../composables/useCaseCenterShared'
 import { useListToolbarState } from '../composables/useListToolbarState'
 import TableSettingsDrawer from '../components/TableSettingsDrawer.vue'
+import { saveCaseExecutionContext } from '../utils/caseExecutionContext'
+import {
+  executionStatusLabel,
+  executionStatusTagClass,
+  executionStatusTagType,
+  formatDateTime,
+  normalizeReviewStatus,
+  reviewStatusLabel,
+  reviewStatusTagClass,
+  reviewStatusTagType,
+  type ReviewStatus,
+} from '../utils/casePresentation'
 import type {
   AiReviewResult,
   BatchDeleteCasesPayload,
@@ -28,7 +41,6 @@ import type {
   CaseItem,
   CreateBugPayload,
   CreateCasePayload,
-  ExecuteCasePayload,
   ReviewCasePayload,
 } from '../types/api'
 type TreeNode = {
@@ -49,8 +61,6 @@ type CaseModuleOption = {
   workspaceCode: string
   directoryId: number | null
 }
-type ReviewStatus = 'PENDING' | 'PASSED' | 'REJECTED'
-type ExecutionStatus = 'NOT_RUN' | 'PASSED' | 'BLOCKED' | 'FAILED'
 type CaseColumnKey =
   | 'caseNo'
   | 'title'
@@ -88,6 +98,8 @@ const {
   canCreateCase,
   loadSharedBase,
 } = useCaseCenterShared()
+const route = useRoute()
+const router = useRouter()
 const loading = ref(false)
 const saving = ref(false)
 const moduleSaving = ref(false)
@@ -106,7 +118,6 @@ const moveDialogVisible = ref(false)
 const caseEditorVisible = ref(false)
 const caseEditorMode = ref<'create' | 'edit' | 'copy'>('create')
 const reviewDrawerVisible = ref(false)
-const executionDrawerVisible = ref(false)
 const aiReviewing = ref(false)
 const batchMoveVisible = ref(false)
 const batchEditVisible = ref(false)
@@ -162,25 +173,6 @@ const reviewForm = reactive<ReviewCasePayload & {
 })
 const aiReviewState = reactive<{ result: AiReviewResult | null }>({
   result: null,
-})
-const executionForm = reactive<ExecuteCasePayload & {
-  id: number | null
-  title: string
-  modulePath: string
-  priority: string
-  precondition: string
-  steps: string
-  expectedResult: string
-}>({
-  id: null,
-  title: '',
-  modulePath: '',
-  priority: 'P1',
-  precondition: '',
-  steps: '',
-  expectedResult: '',
-  executionStatus: 'NOT_RUN',
-  executionComment: '',
 })
 const bugState = reactive<CreateBugPayload & { workspaceCode: string; caseId: number | null }>({
   workspaceCode: '',
@@ -264,6 +256,7 @@ const caseListToolbar = useListToolbarState({
 })
 const pageSize = caseListToolbar.pageSize
 const hydratingCaseViewMemory = ref(false)
+const caseManageBootstrapped = ref(false)
 
 function resolveCaseViewMemoryKey(targetWorkspaceCode: string) {
   return `${CASE_VIEW_MEMORY_KEY}:${targetWorkspaceCode || '__EMPTY__'}`
@@ -427,12 +420,6 @@ function formatCaseModulePath(targetWorkspaceCode: string, targetDirectoryId: nu
 function normalizeCaseStatus(status: string) {
   return status?.trim() || '草稿'
 }
-function normalizeReviewStatus(status: string): ReviewStatus {
-  if (status === 'PASSED' || status === 'REJECTED') {
-    return status
-  }
-  return 'PENDING'
-}
 function resetCaseForm() {
   caseForm.id = null
   caseForm.workspaceCode = isAllScope.value ? '' : workspaceCode.value
@@ -458,17 +445,6 @@ function resetReviewForm() {
   reviewForm.reviewStatus = 'PENDING'
   reviewForm.reviewComment = ''
   aiReviewState.result = null
-}
-function resetExecutionForm() {
-  executionForm.id = null
-  executionForm.title = ''
-  executionForm.modulePath = ''
-  executionForm.priority = 'P1'
-  executionForm.precondition = ''
-  executionForm.steps = ''
-  executionForm.expectedResult = ''
-  executionForm.executionStatus = 'NOT_RUN'
-  executionForm.executionComment = ''
 }
 function resetBatchEditForm() {
   batchEditForm.caseIds = []
@@ -665,14 +641,13 @@ const currentCaseIndex = computed(() => {
     ? caseForm.id
     : reviewDrawerVisible.value
       ? reviewForm.id
-      : executionDrawerVisible.value
-        ? executionForm.id
-        : null
+      : null
   if (activeId === null) {
     return -1
   }
   return filteredCases.value.findIndex(item => item.id === activeId)
 })
+const currentCaseDisplayIndex = computed(() => (currentCaseIndex.value >= 0 ? currentCaseIndex.value + 1 : 0))
 const canGoPrev = computed(() => currentCaseIndex.value > 0)
 const canGoNext = computed(() => currentCaseIndex.value >= 0 && currentCaseIndex.value < filteredCases.value.length - 1)
 const visibleColumns = computed(() => caseListToolbar.visibleColumns.value
@@ -699,45 +674,6 @@ function caseEditorTitle() {
 }
 function canWriteRow(row: CaseItem) {
   return canWriteWorkspace(row.workspaceCode)
-}
-function reviewStatusTagType(status: string) {
-  if (status === 'PASSED') return 'success'
-  if (status === 'REJECTED') return 'danger'
-  return 'info'
-}
-function reviewStatusTagClass(status: string) {
-  if (status === 'PASSED') return 'status-tag-passed'
-  if (status === 'REJECTED') return 'status-tag-failed'
-  return 'status-tag-pending'
-}
-function reviewStatusLabel(status: string) {
-  if (status === 'PASSED') return '已通过'
-  if (status === 'REJECTED') return '不通过'
-  return '未评审'
-}
-function executionStatusTagType(status: string) {
-  if (status === 'PASSED') return 'success'
-  if (status === 'FAILED') return 'danger'
-  if (status === 'BLOCKED') return 'primary'
-  return 'info'
-}
-function executionStatusTagClass(status: string) {
-  if (status === 'PASSED') return 'status-tag-passed'
-  if (status === 'FAILED') return 'status-tag-failed'
-  if (status === 'BLOCKED') return 'status-tag-blocked'
-  return 'status-tag-pending'
-}
-function executionStatusLabel(status: string) {
-  if (status === 'PASSED') return '已通过'
-  if (status === 'FAILED') return '失败'
-  if (status === 'BLOCKED') return '阻塞中'
-  return '未执行'
-}
-function formatDateTime(value: string | null) {
-  if (!value) {
-    return '-'
-  }
-  return value.replace('T', ' ').slice(0, 16)
 }
 function resetCaseFilters() {
   caseListToolbar.filterMemory.reset()
@@ -825,6 +761,15 @@ async function bootstrap() {
   }
   await loadSharedBase()
   await loadCases()
+  caseManageBootstrapped.value = true
+  void maybeOpenEditCaseFromRoute()
+}
+function currentRouteQueryRecord() {
+  return Object.fromEntries(
+    Object.entries(route.query)
+      .filter(([, value]) => typeof value === 'string')
+      .map(([key, value]) => [key, value as string]),
+  )
 }
 function getPreferredWorkspaceCode() {
   const node = selectedNode.value
@@ -832,6 +777,21 @@ function getPreferredWorkspaceCode() {
     return isAllScope.value ? '' : workspaceCode.value
   }
   return node.workspaceCode
+}
+async function maybeOpenEditCaseFromRoute() {
+  const rawId = route.query.editCaseId?.toString()
+  if (!rawId || !caseManageBootstrapped.value) {
+    return
+  }
+  const caseId = Number(rawId)
+  if (!Number.isFinite(caseId) || caseEditorVisible.value) {
+    return
+  }
+  await router.replace({
+    path: route.path,
+    query: Object.fromEntries(Object.entries(route.query).filter(([key]) => key !== 'editCaseId')),
+  })
+  await openCaseEdit(caseId)
 }
 function openCaseCreate() {
   if (isAllScope.value && selectedNode.value?.type === 'root') {
@@ -879,7 +839,18 @@ async function openCaseCopy(id: number) {
   }
 }
 function executeCase(row: CaseItem) {
-  void openCaseExecute(row.id)
+  saveCaseExecutionContext({
+    workspaceCode: activeListWorkspaceCode.value,
+    returnQuery: currentRouteQueryRecord(),
+    selectedNodePath: selectedNodePath.value,
+    sourceLabel: activeListWorkspaceCode.value === workspaceCode.value ? '当前列表' : '跨空间列表',
+    items: filteredCases.value,
+  })
+  void router.push({
+    name: 'cases-execute',
+    params: { id: row.id },
+    query: route.query,
+  })
 }
 async function openCaseReview(id: number) {
   try {
@@ -895,24 +866,6 @@ async function openCaseReview(id: number) {
     reviewForm.reviewComment = detail.reviewComment ?? ''
     aiReviewState.result = null
     reviewDrawerVisible.value = true
-  }
-  catch (error) {
-    ElMessage.error((error as Error).message)
-  }
-}
-async function openCaseExecute(id: number) {
-  try {
-    const detail = await platformApi.getCaseDetail(activeListWorkspaceCode.value, id)
-    executionForm.id = detail.id
-    executionForm.title = detail.title
-    executionForm.modulePath = formatCaseModulePath(detail.workspaceCode, detail.directoryId ?? null)
-    executionForm.priority = detail.priority
-    executionForm.precondition = detail.precondition ?? ''
-    executionForm.steps = detail.steps ?? ''
-    executionForm.expectedResult = detail.expectedResult ?? ''
-    executionForm.executionStatus = (detail.executionStatus as ExecutionStatus) || 'NOT_RUN'
-    executionForm.executionComment = detail.executionComment ?? ''
-    executionDrawerVisible.value = true
   }
   catch (error) {
     ElMessage.error((error as Error).message)
@@ -972,28 +925,6 @@ async function submitReview(status: ReviewStatus) {
     })
     reviewForm.reviewStatus = status
     ElMessage.success(status === 'PASSED' ? '评审已通过' : '评审已驳回')
-    await loadCases()
-  }
-  catch (error) {
-    ElMessage.error((error as Error).message)
-  }
-  finally {
-    saving.value = false
-  }
-}
-async function submitExecution(status: ExecutionStatus) {
-  if (!executionForm.id) {
-    return
-  }
-  saving.value = true
-  try {
-    executionForm.executionStatus = status
-    const detail = await platformApi.executeCase(activeListWorkspaceCode.value, executionForm.id, {
-      executionStatus: status,
-      executionComment: executionForm.executionComment?.trim(),
-    })
-    executionForm.executionStatus = detail.executionStatus as ExecutionStatus
-    ElMessage.success('执行结果已更新')
     await loadCases()
   }
   catch (error) {
@@ -1226,10 +1157,6 @@ function handleCaseCommand(command: string, row: CaseItem) {
     void openCaseReview(row.id)
     return
   }
-  if (command === 'execute') {
-    void openCaseExecute(row.id)
-    return
-  }
   if (command === 'bug') {
     openBugDialog(row)
     return
@@ -1342,7 +1269,7 @@ async function confirmBatchDelete() {
     }
   }
 }
-async function moveToCase(offset: -1 | 1, mode: 'edit' | 'review' | 'execute') {
+async function moveToCase(offset: -1 | 1, mode: 'edit' | 'review') {
   const nextRow = filteredCases.value[currentCaseIndex.value + offset]
   if (!nextRow) {
     return
@@ -1353,9 +1280,7 @@ async function moveToCase(offset: -1 | 1, mode: 'edit' | 'review' | 'execute') {
   }
   if (mode === 'review') {
     await openCaseReview(nextRow.id)
-    return
   }
-  await openCaseExecute(nextRow.id)
 }
 function handlePageChange(value: number) {
   const targetPage = Math.min(Math.max(value, 1), Math.max(totalPages.value, 1))
@@ -1378,7 +1303,7 @@ watch(
 watch(workspaceCode, async () => {
   resetCaseForm()
   resetReviewForm()
-  resetExecutionForm()
+  caseManageBootstrapped.value = false
   const memory = loadCaseViewMemory(workspaceCode.value)
   hydratingCaseViewMemory.value = true
   try {
@@ -1390,6 +1315,12 @@ watch(workspaceCode, async () => {
   }
   await bootstrap()
 })
+watch(
+  () => route.query.editCaseId,
+  () => {
+    void maybeOpenEditCaseFromRoute()
+  },
+)
 watch(
   () => caseForm.workspaceCode,
   newValue => {
@@ -1752,26 +1683,26 @@ onMounted(bootstrap)
       </template>
     </el-dialog>
 
-    <el-drawer v-model="caseEditorVisible" :title="caseEditorTitle()" size="720px">
-      <el-form label-width="88px" class="case-editor-form">
-        <el-form-item label="用例名称" required>
+    <el-drawer v-model="caseEditorVisible" :title="caseEditorTitle()" size="720px" class="case-detail-drawer">
+      <el-form label-position="top" class="case-editor-form case-detail-form">
+        <el-form-item label="用例名称" required class="case-detail-form-item case-detail-form-item-full">
           <el-input v-model="caseForm.title" placeholder="请输入用例名称" />
         </el-form-item>
-        <el-form-item label="用例模块">
+        <el-form-item label="用例模块" class="case-detail-form-item">
           <el-select v-model="caseModuleValue" placeholder="请选择用例模块">
             <el-option v-for="item in caseModuleOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </el-form-item>
-        <el-form-item label="优先级">
+        <el-form-item label="优先级" class="case-detail-form-item">
           <el-segmented v-model="caseForm.priority" :options="['P0', 'P1', 'P2', 'P3']" />
         </el-form-item>
-        <el-form-item label="前置条件">
+        <el-form-item label="前置条件" class="case-detail-form-item">
           <el-input v-model="caseForm.precondition" type="textarea" :rows="3" resize="vertical" />
         </el-form-item>
-        <el-form-item label="测试步骤">
+        <el-form-item label="测试步骤" class="case-detail-form-item">
           <el-input v-model="caseForm.steps" type="textarea" :rows="6" resize="vertical" />
         </el-form-item>
-        <el-form-item label="预期结果">
+        <el-form-item label="预期结果" class="case-detail-form-item case-detail-form-item-full">
           <el-input v-model="caseForm.expectedResult" type="textarea" :rows="4" resize="vertical" />
         </el-form-item>
       </el-form>
@@ -1782,6 +1713,9 @@ onMounted(bootstrap)
               <el-icon><ArrowLeft /></el-icon>
               上一条
             </el-button>
+            <div class="drawer-nav-counter">
+              {{ currentCaseDisplayIndex }}/{{ filteredCases.length }}
+            </div>
             <el-button :disabled="!canGoNext" @click="moveToCase(1, 'edit')">
               下一条
               <el-icon><ArrowRight /></el-icon>
@@ -1797,25 +1731,25 @@ onMounted(bootstrap)
       </template>
     </el-drawer>
 
-    <el-drawer v-model="reviewDrawerVisible" title="用例评审" size="720px">
-      <el-form label-width="88px" class="review-form">
-        <el-form-item label="用例标题" class="review-title-form-item">
+    <el-drawer v-model="reviewDrawerVisible" title="用例评审" size="720px" class="case-detail-drawer">
+      <el-form label-position="top" class="review-form case-detail-form">
+        <el-form-item label="用例标题" class="review-title-form-item case-detail-form-item case-detail-form-item-full">
           <div class="review-title-card">
             <div class="detail-title">{{ reviewForm.title }}</div>
             <el-tag size="small" effect="plain" class="review-priority-tag">{{ reviewForm.priority }}</el-tag>
           </div>
         </el-form-item>
-        <el-form-item label="用例模块">
-          <el-input :model-value="reviewForm.modulePath" readonly />
+        <el-form-item label="用例模块" class="case-detail-form-item case-detail-form-item-full">
+          <el-input :model-value="reviewForm.modulePath" readonly class="case-detail-readonly-field" />
         </el-form-item>
-        <el-form-item label="前置条件">
-          <el-input :model-value="reviewForm.precondition" type="textarea" :rows="3" resize="vertical" readonly />
+        <el-form-item label="前置条件" class="case-detail-form-item">
+          <el-input :model-value="reviewForm.precondition" type="textarea" :rows="3" resize="vertical" readonly class="case-detail-readonly-field" />
         </el-form-item>
-        <el-form-item label="测试步骤">
-          <el-input :model-value="reviewForm.steps" type="textarea" :rows="6" resize="vertical" readonly />
+        <el-form-item label="测试步骤" class="case-detail-form-item">
+          <el-input :model-value="reviewForm.steps" type="textarea" :rows="6" resize="vertical" readonly class="case-detail-readonly-field" />
         </el-form-item>
-        <el-form-item label="预期结果">
-          <el-input :model-value="reviewForm.expectedResult" type="textarea" :rows="4" resize="vertical" readonly />
+        <el-form-item label="预期结果" class="case-detail-form-item case-detail-form-item-full">
+          <el-input :model-value="reviewForm.expectedResult" type="textarea" :rows="4" resize="vertical" readonly class="case-detail-readonly-field" />
         </el-form-item>
         <div class="review-ai-toolbar">
           <el-button :loading="aiReviewing" @click="runCaseAiReview">AI评审</el-button>
@@ -1846,7 +1780,7 @@ onMounted(bootstrap)
             <el-input :model-value="aiReviewState.result.rawContent" type="textarea" :rows="4" resize="vertical" readonly />
           </div>
         </div>
-        <el-form-item label="评审意见">
+        <el-form-item label="评审意见" class="case-detail-form-item case-detail-form-item-full">
           <el-input v-model="reviewForm.reviewComment" type="textarea" :rows="4" resize="vertical" />
         </el-form-item>
       </el-form>
@@ -1857,6 +1791,9 @@ onMounted(bootstrap)
               <el-icon><ArrowLeft /></el-icon>
               上一条
             </el-button>
+            <div class="drawer-nav-counter">
+              {{ currentCaseDisplayIndex }}/{{ filteredCases.length }}
+            </div>
             <el-button :disabled="!canGoNext" @click="moveToCase(1, 'review')">
               下一条
               <el-icon><ArrowRight /></el-icon>
@@ -1866,57 +1803,6 @@ onMounted(bootstrap)
             <el-button @click="reviewDrawerVisible = false">关闭</el-button>
             <el-button type="danger" plain :loading="saving" @click="submitReview('REJECTED')">驳回</el-button>
             <el-button type="primary" :loading="saving" @click="submitReview('PASSED')">通过</el-button>
-          </div>
-        </div>
-      </template>
-    </el-drawer>
-
-    <el-drawer v-model="executionDrawerVisible" title="用例执行" size="720px">
-      <el-form label-width="88px" class="review-form">
-        <el-form-item label="用例标题" class="review-title-form-item">
-          <div class="review-title-card">
-            <div class="detail-title">{{ executionForm.title }}</div>
-            <el-tag size="small" effect="plain" class="review-priority-tag">{{ executionForm.priority }}</el-tag>
-          </div>
-        </el-form-item>
-        <el-form-item label="用例模块">
-          <el-input :model-value="executionForm.modulePath" readonly />
-        </el-form-item>
-        <el-form-item label="当前状态">
-          <el-tag :type="executionStatusTagType(executionForm.executionStatus)" effect="plain" :class="executionStatusTagClass(executionForm.executionStatus)">
-            {{ executionStatusLabel(executionForm.executionStatus) }}
-          </el-tag>
-        </el-form-item>
-        <el-form-item label="前置条件">
-          <el-input :model-value="executionForm.precondition" type="textarea" :rows="3" resize="vertical" readonly />
-        </el-form-item>
-        <el-form-item label="测试步骤">
-          <el-input :model-value="executionForm.steps" type="textarea" :rows="6" resize="vertical" readonly />
-        </el-form-item>
-        <el-form-item label="预期结果">
-          <el-input :model-value="executionForm.expectedResult" type="textarea" :rows="4" resize="vertical" readonly />
-        </el-form-item>
-        <el-form-item label="执行意见">
-          <el-input v-model="executionForm.executionComment" type="textarea" :rows="4" resize="vertical" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <div class="drawer-footer">
-          <div class="drawer-nav">
-            <el-button :disabled="!canGoPrev" @click="moveToCase(-1, 'execute')">
-              <el-icon><ArrowLeft /></el-icon>
-              上一条
-            </el-button>
-            <el-button :disabled="!canGoNext" @click="moveToCase(1, 'execute')">
-              下一条
-              <el-icon><ArrowRight /></el-icon>
-            </el-button>
-          </div>
-          <div class="drawer-submit">
-            <el-button @click="executionDrawerVisible = false">关闭</el-button>
-            <el-button type="danger" plain :loading="saving" @click="submitExecution('FAILED')">失败</el-button>
-            <el-button type="primary" plain :loading="saving" @click="submitExecution('BLOCKED')">阻塞</el-button>
-            <el-button type="success" :loading="saving" @click="submitExecution('PASSED')">通过</el-button>
           </div>
         </div>
       </template>
@@ -2333,45 +2219,144 @@ onMounted(bootstrap)
   gap: 12px;
   width: 100%;
 }
+
+.case-detail-drawer :deep(.el-drawer__header) {
+  margin-bottom: 0;
+  padding: 18px 20px 0;
+  align-items: flex-start;
+}
+
+.case-detail-drawer :deep(.el-drawer__body) {
+  padding: 12px 20px 0;
+}
+
+.case-detail-drawer :deep(.el-drawer__footer) {
+  padding: 16px 20px 20px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.case-detail-drawer :deep(.el-input__wrapper),
+.case-detail-drawer :deep(.el-textarea__inner),
+.case-detail-drawer :deep(.el-select__wrapper) {
+  border-radius: 10px;
+}
+
+.case-detail-drawer :deep(.el-textarea__inner) {
+  line-height: 1.7;
+}
+
+.case-detail-form {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.case-detail-form-item {
+  margin-bottom: 0;
+  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.case-detail-form-item-full {
+  grid-column: 1 / -1;
+}
+
+.case-detail-form :deep(.el-form-item__label) {
+  min-height: auto;
+  margin-bottom: 10px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-subtle);
+}
+
+.case-detail-form :deep(.el-form-item__content) {
+  display: block;
+  min-width: 0;
+}
+
+.case-detail-form :deep(.el-segmented) {
+  width: fit-content;
+}
+
+.case-detail-readonly-field :deep(.el-input__wrapper),
+.case-detail-readonly-field :deep(.el-textarea__inner) {
+  background: #f8fafc;
+  border-color: rgba(15, 23, 42, 0.06);
+  color: #344054;
+  box-shadow: none;
+}
+
+.case-detail-readonly-field :deep(.el-input__wrapper) {
+  min-height: 44px;
+}
+
+.case-detail-readonly-field :deep(.el-textarea__inner) {
+  min-height: 132px !important;
+  padding: 14px 16px;
+}
+
+.case-detail-readonly-field :deep(.el-input__inner),
+.case-detail-readonly-field :deep(.el-textarea__inner) {
+  color: #344054;
+}
+
 .drawer-nav,
 .drawer-submit {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
+.drawer-nav-counter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  color: #344054;
+}
 .review-title-form-item :deep(.el-form-item__content) {
   display: block;
 }
 .review-title-card {
   position: relative;
-  min-height: 84px;
   border: 1px solid var(--line-soft);
   border-radius: 12px;
-  background: #f8fbff;
+  background: #ffffff;
   padding: 20px 72px 20px 24px;
 }
 .detail-title {
-  font-size: 18px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.7;
   font-weight: 700;
-  color: var(--text-main);
+  color: #344054;
 }
 .review-priority-tag {
   position: absolute;
   top: 18px;
   right: 20px;
 }
-.review-form {
-  margin-top: 16px;
-}
 .review-ai-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 8px 0 16px;
+  margin: 8px 0 4px;
+  grid-column: 1 / -1;
 }
 .review-ai-result {
-  margin-bottom: 16px;
+  margin-bottom: 4px;
+  grid-column: 1 / -1;
 }
 .review-ai-header {
   display: flex;

@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import {
   CircleClose,
   DocumentAdd,
+  FolderOpened,
   MagicStick,
   RefreshRight,
   View,
@@ -38,6 +39,16 @@ type DirectoryOption = {
   directoryId: number | null
 }
 
+type DirectoryPickerMode = 'manual' | 'document'
+
+type DirectoryPickerNode = {
+  key: string
+  name: string
+  fullPath: string
+  selectable: boolean
+  children: DirectoryPickerNode[]
+}
+
 const router = useRouter()
 const { workspaceCode, isAllScope, writableWorkspaces, loadSharedBase } = useCaseCenterShared()
 
@@ -46,6 +57,7 @@ const loadingDirectories = ref(false)
 const importingRequirement = ref(false)
 const generating = ref(false)
 const processDialogVisible = ref(false)
+const directoryPickerVisible = ref(false)
 
 const selectedWorkspaceCode = ref(workspaceCode.value === 'ALL' ? '' : workspaceCode.value)
 const activeConfig = ref<AiCaseConfig | null>(null)
@@ -73,6 +85,9 @@ const directoryOptions = ref<DirectoryOption[]>([])
 const directoryTree = ref<CaseDirectoryNode[]>([])
 const manualDirectoryBasePath = ref('')
 const documentDirectoryBasePath = ref('')
+const directoryPickerKeyword = ref('')
+const directoryPickerMode = ref<DirectoryPickerMode>('manual')
+const directoryPickerSelectedPath = ref('')
 let syncingManualDirectoryPath = false
 let syncingDocumentDirectoryPath = false
 let layoutObserver: ResizeObserver | null = null
@@ -176,6 +191,70 @@ const recentTaskRecords = computed(() => {
       return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
     })
     .slice(0, 3)
+})
+
+const directoryPickerTree = computed<DirectoryPickerNode[]>(() => {
+  if (!targetWorkspaceCode.value || !currentWorkspaceName.value) {
+    return []
+  }
+  const appendFullPath = (nodes: CaseDirectoryNode[], prefix = ''): DirectoryPickerNode[] => nodes.map((node) => {
+    const fullPath = prefix ? `${prefix}/${node.name}` : node.name
+    return {
+      key: fullPath,
+      name: node.name,
+      fullPath,
+      selectable: true,
+      children: appendFullPath(node.children ?? [], fullPath),
+    }
+  })
+  return [{
+    key: `workspace:${targetWorkspaceCode.value}`,
+    name: currentWorkspaceName.value,
+    fullPath: currentWorkspaceName.value,
+    selectable: false,
+    children: appendFullPath(directoryTree.value),
+  }]
+})
+
+const filteredDirectoryPickerTree = computed<DirectoryPickerNode[]>(() => {
+  const keyword = directoryPickerKeyword.value.trim().toLowerCase()
+  const filterNodes = (nodes: DirectoryPickerNode[]): DirectoryPickerNode[] => nodes.reduce<DirectoryPickerNode[]>((result, node) => {
+    const children = filterNodes(node.children ?? [])
+    const matched = !keyword || node.fullPath.toLowerCase().includes(keyword) || node.name.toLowerCase().includes(keyword)
+    if (matched || children.length) {
+      result.push({
+        ...node,
+        children,
+      })
+    }
+    return result
+  }, [])
+  return filterNodes(directoryPickerTree.value)
+})
+
+const directoryPickerPreviewPath = computed(() => {
+  if (!directoryPickerSelectedPath.value) {
+    return ''
+  }
+  const title = directoryPickerMode.value === 'manual'
+    ? form.requirementTitle
+    : uploadedRequirementTitle.value
+  const fullDirectoryPath = buildDirectoryPath(directoryPickerSelectedPath.value, title)
+  return currentWorkspaceName.value ? `${currentWorkspaceName.value} / ${fullDirectoryPath}` : fullDirectoryPath
+})
+
+const manualDirectoryDisplayPath = computed(() => {
+  if (!form.manualDirectoryPath) {
+    return ''
+  }
+  return currentWorkspaceName.value ? `${currentWorkspaceName.value} / ${form.manualDirectoryPath}` : form.manualDirectoryPath
+})
+
+const documentDirectoryDisplayPath = computed(() => {
+  if (!documentForm.directoryPath) {
+    return ''
+  }
+  return currentWorkspaceName.value ? `${currentWorkspaceName.value} / ${documentForm.directoryPath}` : documentForm.directoryPath
 })
 
 function formatFileSize(size: number) {
@@ -491,6 +570,39 @@ function handleDocumentDirectorySelect(value: string) {
   documentForm.directoryPath = buildDirectoryPath(documentDirectoryBasePath.value || normalizedPath, uploadedRequirementTitle.value)
 }
 
+function openDirectoryPicker(mode: DirectoryPickerMode) {
+  if (!targetWorkspaceCode.value) {
+    ElMessage.warning('请先选择目标空间')
+    return
+  }
+  directoryPickerMode.value = mode
+  directoryPickerKeyword.value = ''
+  directoryPickerSelectedPath.value = mode === 'manual'
+    ? (manualDirectoryBasePath.value || findDirectoryBasePath(form.manualDirectoryPath))
+    : (documentDirectoryBasePath.value || findDirectoryBasePath(documentForm.directoryPath))
+  directoryPickerVisible.value = true
+}
+
+function handleDirectoryPickerNodeSelect(node: DirectoryPickerNode) {
+  if (!node.selectable) {
+    return
+  }
+  directoryPickerSelectedPath.value = node.fullPath
+}
+
+function confirmDirectoryPickerSelection() {
+  if (!directoryPickerSelectedPath.value) {
+    ElMessage.warning('请先选择用例保存路径')
+    return
+  }
+  if (directoryPickerMode.value === 'manual') {
+    handleManualDirectorySelect(directoryPickerSelectedPath.value)
+  } else {
+    handleDocumentDirectorySelect(directoryPickerSelectedPath.value)
+  }
+  directoryPickerVisible.value = false
+}
+
 async function handleGenerateCases(source: 'manual' | 'document' = 'manual') {
   const requirementTitle = source === 'document'
     ? uploadedRequirementTitle.value.trim()
@@ -734,23 +846,20 @@ onBeforeUnmount(() => {
           />
           </div>
           <div class="field-label">用例保存路径 <span class="field-required">*</span></div>
-          <el-select
-            v-model="form.manualDirectoryPath"
-            class="directory-path-select"
-            filterable
-            allow-create
-            clearable
-            :loading="loadingDirectories"
-            placeholder="请选择模块路径，选中后会自动拼接需求标题"
-            @change="handleManualDirectorySelect"
+          <el-input
+            :model-value="manualDirectoryDisplayPath"
+            class="directory-path-input directory-path-input-with-action"
+            readonly
+            :placeholder="loadingDirectories ? '正在加载目录...' : '请选择模块路径，选中后会自动拼接需求标题'"
           >
-            <el-option
-              v-for="item in directoryOptions"
-              :key="item.value"
-              :label="item.label"
-              :value="item.value"
-            />
-          </el-select>
+            <template #suffix>
+              <el-tooltip content="选择保存路径" placement="top">
+                <button type="button" class="path-action-icon-button" @click="openDirectoryPicker('manual')">
+                  <el-icon><FolderOpened /></el-icon>
+                </button>
+              </el-tooltip>
+            </template>
+          </el-input>
           <div class="field-label">需求描述<span class="field-required">*</span></div>
           <div ref="textareaFieldRef">
           <el-input
@@ -822,23 +931,20 @@ onBeforeUnmount(() => {
                 />
 
                 <div class="field-label">用例保存路径 <span class="field-required">*</span></div>
-                <el-select
-                  v-model="documentForm.directoryPath"
-                  class="directory-path-select"
-                  filterable
-                  allow-create
-                  clearable
-                  :loading="loadingDirectories"
-                  placeholder="请选择模块路径，选中后会自动拼接文档标题"
-                  @change="handleDocumentDirectorySelect"
+                <el-input
+                  :model-value="documentDirectoryDisplayPath"
+                  class="directory-path-input directory-path-input-with-action"
+                  readonly
+                  :placeholder="loadingDirectories ? '正在加载目录...' : '请选择模块路径，选中后会自动拼接文档标题'"
                 >
-                  <el-option
-                    v-for="item in directoryOptions"
-                    :key="`document-${item.value}`"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
+                  <template #suffix>
+                    <el-tooltip content="选择保存路径" placement="top">
+                      <button type="button" class="path-action-icon-button" @click="openDirectoryPicker('document')">
+                        <el-icon><FolderOpened /></el-icon>
+                      </button>
+                    </el-tooltip>
+                  </template>
+                </el-input>
                 <div class="field-label">图片能力提示</div>
                 <div class="upload-hint-box" :class="{ 'upload-hint-box-warning': !!textOnlyGenerationNotice }">
                   {{ textOnlyGenerationNotice || '当前模型支持图文输入，如文档中包含图片素材，将一并参与本次测试用例生成。' }}
@@ -1017,6 +1123,57 @@ onBeforeUnmount(() => {
       :cancel-disabled="!hasProcessingTask"
       @cancel="terminateTask"
     />
+
+    <el-dialog v-model="directoryPickerVisible" width="720px" destroy-on-close class="path-picker-dialog">
+      <template #header>
+        <div class="adopt-dialog-title">选择保存路径</div>
+      </template>
+      <div class="path-picker-layout">
+        <el-input
+          v-model="directoryPickerKeyword"
+          clearable
+          placeholder="搜索目录名称"
+          class="path-picker-search"
+        />
+        <div class="path-picker-tree-panel">
+          <div v-if="loadingDirectories" class="path-picker-empty">
+            正在加载目录...
+          </div>
+          <div v-else-if="!filteredDirectoryPickerTree.length" class="path-picker-empty">
+            未找到匹配的目录
+          </div>
+          <el-tree
+            v-else
+            :data="filteredDirectoryPickerTree"
+            node-key="key"
+            highlight-current
+            :expand-on-click-node="false"
+            :default-expanded-keys="targetWorkspaceCode ? [`workspace:${targetWorkspaceCode}`] : []"
+            :current-node-key="directoryPickerSelectedPath || undefined"
+            class="path-picker-tree"
+            @node-click="handleDirectoryPickerNodeSelect"
+          >
+            <template #default="{ data }">
+              <div class="path-picker-tree-node" :class="{ 'is-workspace': !data.selectable }">
+                <span class="path-picker-tree-node-label">{{ data.name }}</span>
+              </div>
+            </template>
+          </el-tree>
+        </div>
+        <div class="path-picker-selected-panel">
+          <div class="path-picker-selected-label">已选路径</div>
+          <div class="path-picker-selected-value">
+            {{ directoryPickerPreviewPath || '请在上方目录树中选择保存路径' }}
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="directoryPickerVisible = false">取消</el-button>
+          <el-button type="primary" :icon="FolderOpened" :disabled="!directoryPickerSelectedPath" @click="confirmDirectoryPickerSelection">确认修改</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -1229,8 +1386,41 @@ onBeforeUnmount(() => {
   word-break: break-word;
 }
 
-.directory-path-select {
+.directory-path-input {
   width: 100%;
+}
+
+.directory-path-input :deep(.el-input__wrapper) {
+  cursor: default;
+}
+
+.directory-path-input-with-action :deep(.el-input__suffix) {
+  margin-left: 8px;
+}
+
+.path-action-icon-button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #98a2b3;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.path-action-icon-button:hover {
+  background: rgba(15, 23, 42, 0.06);
+  color: #175cd3;
+}
+
+.path-action-icon-button:focus-visible {
+  outline: 2px solid rgba(23, 92, 211, 0.24);
+  outline-offset: 1px;
 }
 
 .requirement-textarea :deep(.el-textarea__inner) {
@@ -1792,6 +1982,66 @@ onBeforeUnmount(() => {
 
 .hidden-file-input {
   display: none;
+}
+
+.path-picker-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.path-picker-tree-panel {
+  min-height: 320px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.path-picker-empty {
+  min-height: 296px;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: #98a2b3;
+  text-align: center;
+}
+
+.path-picker-tree-node {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  width: 100%;
+}
+
+.path-picker-tree-node.is-workspace {
+  font-weight: 700;
+  color: #101828;
+  cursor: default;
+}
+
+.path-picker-tree-node-label,
+.path-picker-selected-value {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #344054;
+  word-break: break-word;
+}
+
+.path-picker-selected-panel {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.path-picker-selected-label {
+  font-size: 12px;
+  color: #667085;
+  line-height: 1.5;
 }
 
 @media (max-width: 1280px) {

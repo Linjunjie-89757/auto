@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -22,7 +22,7 @@ import AiGenerationProcessDialog from '../components/AiGenerationProcessDialog.v
 import TableSettingsDrawer from '../components/TableSettingsDrawer.vue'
 import { useTableSettings, type TableSettingsColumn } from '../composables/useTableSettings'
 import { useWorkspace } from '../composables/useWorkspace'
-import type { AiGeneratedCase, CaseDirectoryNode, CaseDirectoryWorkspace, CreateCasePayload, WorkspaceItem } from '../types/api'
+import type { AiGeneratedCase, CaseDirectoryNode, CreateCasePayload } from '../types/api'
 import type { AiGenerationTaskRecord } from '../utils/caseAiGenerationRecords'
 import {
   cancelAiGenerationRecord,
@@ -42,9 +42,17 @@ type DirectoryOption = {
   label: string
 }
 
-type WorkspaceOption = {
-  code: string
+type PathPickerSelection = {
+  directoryId: number | null
+}
+
+type PathPickerTreeNode = {
+  key: string
+  id: number | null
   name: string
+  fullPath: string
+  selectable: boolean
+  children: PathPickerTreeNode[]
 }
 
 const route = useRoute()
@@ -71,16 +79,14 @@ const detailTableSettings = useTableSettings({
 const activeRecord = ref<AiGenerationTaskRecord | null>(null)
 const casePreviewVisible = ref(false)
 const adoptDialogVisible = ref(false)
-const pathDialogVisible = ref(false)
 const processDialogVisible = ref(false)
+const pathPickerVisible = ref(false)
 const activeCaseCursor = ref(-1)
 const adoptDirectoryOptions = ref<DirectoryOption[]>([])
 const pathDirectoryOptions = ref<DirectoryOption[]>([])
-const directoryWorkspaces = ref<CaseDirectoryWorkspace[]>([])
-const pathWorkspaceOptions = ref<WorkspaceOption[]>([])
+const pathDirectoryTree = ref<CaseDirectoryNode[]>([])
 const loadingAdoptDirectories = ref(false)
 const loadingPathDirectories = ref(false)
-const loadingPathWorkspaces = ref(false)
 const adopting = ref(false)
 const savingPath = ref(false)
 const savingCaseEdit = ref(false)
@@ -101,6 +107,10 @@ const pathForm = reactive({
   directoryId: null as number | null,
 })
 const pathTouched = ref(false)
+const pathPickerKeyword = ref('')
+const pathPickerSelection = reactive<PathPickerSelection>({
+  directoryId: null,
+})
 const caseEditForm = reactive({
   title: '',
   precondition: '',
@@ -212,6 +222,10 @@ function getDefaultDirectoryPath(record: AiGenerationTaskRecord | null) {
   return workspaceLabel ? `${workspaceLabel}/${record.directoryName}` : record.directoryName
 }
 
+const pathPickerWorkspaceName = computed(() => (
+  activeRecord.value?.workspaceName || activeRecord.value?.workspaceCode || ''
+))
+
 function formatTime(value: string | null) {
   if (!value) {
     return '-'
@@ -310,42 +324,29 @@ async function loadDirectoryOptions(record: AiGenerationTaskRecord) {
   }
 }
 
-function getWorkspaceDirectories(targetWorkspaceCode: string) {
-  return directoryWorkspaces.value.find(item => item.workspaceCode === targetWorkspaceCode)?.children ?? []
-}
-
-async function ensurePathWorkspaceData() {
-  if (directoryWorkspaces.value.length && pathWorkspaceOptions.value.length) {
-    return
-  }
-  loadingPathWorkspaces.value = true
-  try {
-    const [workspaces, directories] = await Promise.all([
-      platformApi.getWorkspaces(),
-      platformApi.getCaseDirectories('ALL'),
-    ])
-    pathWorkspaceOptions.value = workspaces.map((item: WorkspaceItem) => ({
-      code: item.code,
-      name: item.name,
-    }))
-    directoryWorkspaces.value = directories
-  } finally {
-    loadingPathWorkspaces.value = false
-  }
-}
-
 function syncPathDirectoryOptions(targetWorkspaceCode: string, preferredDirectoryName?: string | null, preferredDirectoryId?: number | null) {
-  pathDirectoryOptions.value = flattenDirectories(getWorkspaceDirectories(targetWorkspaceCode))
+  void targetWorkspaceCode
+  pathDirectoryOptions.value = flattenDirectories(pathDirectoryTree.value)
   const fallbackOption = pathDirectoryOptions.value.find(item => item.label === normalizeDirectoryLabel(preferredDirectoryName))
   pathForm.directoryId = preferredDirectoryId ?? fallbackOption?.value ?? null
+}
+
+function syncPickerDirectorySelection(targetWorkspaceCode: string, preferredDirectoryId?: number | null) {
+  void targetWorkspaceCode
+  const options = flattenDirectories(pathDirectoryTree.value)
+  const hasPreferred = preferredDirectoryId != null && options.some(item => item.value === preferredDirectoryId)
+  pathPickerSelection.directoryId = hasPreferred ? preferredDirectoryId : null
 }
 
 async function loadPathDirectoryOptions(targetWorkspaceCode: string, preferredDirectoryName?: string | null, preferredDirectoryId?: number | null) {
   loadingPathDirectories.value = true
   try {
-    await ensurePathWorkspaceData()
+    const workspaces = await platformApi.getCaseDirectories(targetWorkspaceCode)
+    const current = workspaces.find(item => item.workspaceCode === targetWorkspaceCode)
+    pathDirectoryTree.value = current?.children ?? []
     syncPathDirectoryOptions(targetWorkspaceCode, preferredDirectoryName, preferredDirectoryId)
   } catch (error) {
+    pathDirectoryTree.value = []
     pathDirectoryOptions.value = []
     pathForm.directoryId = null
     ElMessage.error((error as Error).message)
@@ -353,6 +354,59 @@ async function loadPathDirectoryOptions(targetWorkspaceCode: string, preferredDi
     loadingPathDirectories.value = false
   }
 }
+
+const filteredPathPickerDirectories = computed(() => {
+  if (!pathForm.workspaceCode || !pathPickerWorkspaceName.value) {
+    return [] as PathPickerTreeNode[]
+  }
+  const keyword = pathPickerKeyword.value.trim().toLowerCase()
+  const filterNodes = (nodes: PathPickerTreeNode[]): PathPickerTreeNode[] => nodes.reduce<PathPickerTreeNode[]>((result, node) => {
+    const children = filterNodes(node.children ?? [])
+    const matched = !keyword || node.fullPath.toLowerCase().includes(keyword) || node.name.toLowerCase().includes(keyword)
+    if (matched || children.length) {
+      result.push({
+        ...node,
+        children,
+      })
+    }
+    return result
+  }, [])
+  const appendFullPath = (nodes: CaseDirectoryNode[], prefix = ''): PathPickerTreeNode[] => nodes.map((node) => {
+    const fullPath = prefix ? `${prefix} / ${node.name}` : node.name
+    return {
+      key: `dir:${node.id}`,
+      id: node.id,
+      name: node.name,
+      fullPath,
+      selectable: true,
+      children: appendFullPath(node.children ?? [], fullPath),
+    }
+  })
+  const root: PathPickerTreeNode = {
+    key: `workspace:${pathForm.workspaceCode}`,
+    id: null,
+    name: pathPickerWorkspaceName.value,
+    fullPath: pathPickerWorkspaceName.value,
+    selectable: false,
+    children: appendFullPath(pathDirectoryTree.value),
+  }
+  return filterNodes([root])
+})
+
+const pathPickerSelectedOption = computed(() => {
+  if (pathPickerSelection.directoryId == null) {
+    return null
+  }
+  return flattenDirectories(pathDirectoryTree.value)
+    .find(item => item.value === pathPickerSelection.directoryId) ?? null
+})
+
+const pathPickerSelectedFullPath = computed(() => {
+  if (!pathPickerSelectedOption.value) {
+    return ''
+  }
+  return pathPickerWorkspaceName.value ? `${pathPickerWorkspaceName.value} / ${pathPickerSelectedOption.value.label}` : pathPickerSelectedOption.value.label
+})
 
 function openCasePreview(row: DetailCaseRow) {
   activeCaseCursor.value = availableCases.value.findIndex(item => item.index === row.index)
@@ -427,22 +481,31 @@ async function openPathDialog(record: AiGenerationTaskRecord) {
     activeRecord.value.directoryName,
     activeRecord.value.directoryId,
   )
-  pathDialogVisible.value = true
+  pathPickerKeyword.value = ''
+  syncPickerDirectorySelection(pathForm.workspaceCode, pathForm.directoryId)
+  pathPickerVisible.value = true
 }
 
-function handlePathWorkspaceChange(value: string) {
+function handlePathPickerNodeSelect(node: CaseDirectoryNode) {
+  if ('selectable' in node && !node.selectable) {
+    return
+  }
+  pathPickerSelection.directoryId = node.id
+}
+
+function confirmPathPickerSelection() {
+  if (pathPickerSelection.directoryId == null) {
+    ElMessage.warning('请先选择保存路径')
+    return
+  }
   pathTouched.value = true
-  syncPathDirectoryOptions(value, null, null)
+  syncPathDirectoryOptions(pathForm.workspaceCode, null, pathPickerSelection.directoryId)
+  void confirmPathChange()
 }
 
 async function confirmPathChange() {
   if (!activeRecord.value) {
     ElMessage.warning('当前任务记录不存在，请关闭弹窗后重试')
-    return
-  }
-  if (!pathForm.workspaceCode) {
-    pathTouched.value = true
-    ElMessage.warning('请先选择空间')
     return
   }
   if (pathForm.directoryId == null) {
@@ -460,7 +523,7 @@ async function confirmPathChange() {
       directoryName: formatDirectoryNameFromOption(selectedOption) ?? activeRecord.value.directoryName,
     })
     adoptForm.directoryId = activeRecord.value.directoryId
-    pathDialogVisible.value = false
+    pathPickerVisible.value = false
     await router.replace({
       query: {
         ...route.query,
@@ -1177,72 +1240,60 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="pathDialogVisible" width="620px" destroy-on-close class="adopt-dialog">
+    <el-dialog v-model="pathPickerVisible" width="760px" destroy-on-close class="path-picker-dialog">
       <template #header>
-        <div class="adopt-dialog-title">修改保存路径</div>
+        <div class="adopt-dialog-title">选择保存路径</div>
       </template>
       <template v-if="activeRecord">
-        <div class="adopt-dialog-body">
-          <div class="adopt-dialog-notice">
-            <div class="adopt-dialog-copy">
-              为任务“{{ activeRecord.requirementTitle }}”调整后续采纳时使用的默认保存路径。
-            </div>
-            <div class="adopt-dialog-subcopy">
-              修改后会作为本任务后续“采纳 / 批量采纳”的默认保存路径，不影响已保存的用例。
-            </div>
+        <div class="path-picker-layout">
+          <div class="path-picker-current">
+            <span class="path-picker-current-label">当前保存路径</span>
+            <span class="path-picker-current-value">{{ getDefaultDirectoryPath(activeRecord) }}</span>
           </div>
-          <div class="adopt-dialog-form-card">
-            <div class="adopt-form-title">路径配置</div>
-            <div class="path-dialog-current">当前保存路径：{{ getDefaultDirectoryPath(activeRecord) }}</div>
-            <el-form label-position="top">
-              <el-form-item required>
-                <template #label>
-                  <span>当前空间 <span class="dialog-required">*</span></span>
-                </template>
-                <el-select
-                  v-model="pathForm.workspaceCode"
-                  :class="{ 'is-invalid-select': pathTouched && !pathForm.workspaceCode }"
-                  :loading="loadingPathWorkspaces"
-                  placeholder="请选择空间"
-                  @change="handlePathWorkspaceChange"
-                >
-                  <el-option
-                    v-for="item in pathWorkspaceOptions"
-                    :key="item.code"
-                    :label="item.name"
-                    :value="item.code"
-                  />
-                </el-select>
-                <div v-if="pathTouched && !pathForm.workspaceCode" class="dialog-field-error">请选择空间</div>
-              </el-form-item>
-              <el-form-item required>
-                <template #label>
-                  <span>新保存路径 <span class="dialog-required">*</span></span>
-                </template>
-                <el-select
-                  v-model="pathForm.directoryId"
-                  :class="{ 'is-invalid-select': pathTouched && pathForm.directoryId == null }"
-                  :loading="loadingPathDirectories"
-                  placeholder="请选择新的保存路径"
-                  @change="pathTouched = true"
-                >
-                  <el-option
-                    v-for="item in pathDirectoryOptions"
-                    :key="`path-${String(item.value)}`"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-                <div v-if="pathTouched && pathForm.directoryId == null" class="dialog-field-error">请选择保存路径</div>
-              </el-form-item>
-            </el-form>
+          <el-input
+            v-model="pathPickerKeyword"
+            clearable
+            placeholder="搜索目录名称"
+            class="path-picker-search"
+          />
+          <div class="path-picker-tree-panel" :class="{ 'is-invalid': pathTouched && pathForm.directoryId == null }">
+            <div v-if="loadingPathDirectories" class="path-picker-empty">
+              正在加载目录...
+            </div>
+            <div v-else-if="!filteredPathPickerDirectories.length" class="path-picker-empty">
+              未找到匹配的目录
+            </div>
+            <el-tree
+              v-else
+              :data="filteredPathPickerDirectories"
+              node-key="key"
+              highlight-current
+              :expand-on-click-node="false"
+              :default-expanded-keys="pathForm.workspaceCode ? [`workspace:${pathForm.workspaceCode}`] : []"
+              :current-node-key="pathPickerSelection.directoryId != null ? `dir:${pathPickerSelection.directoryId}` : undefined"
+              class="path-picker-tree"
+              @node-click="handlePathPickerNodeSelect"
+            >
+              <template #default="{ data }">
+                <div class="path-picker-tree-node" :class="{ 'is-workspace': !data.selectable }">
+                  <span class="path-picker-tree-node-label">{{ data.name }}</span>
+                </div>
+              </template>
+            </el-tree>
+          </div>
+          <div v-if="pathTouched && pathForm.directoryId == null" class="dialog-field-error">请选择保存路径</div>
+          <div class="path-picker-selected-panel">
+            <div class="path-picker-selected-label">已选路径</div>
+            <div class="path-picker-selected-value">
+              {{ pathPickerSelectedFullPath || '请在上方目录树中选择保存路径' }}
+            </div>
           </div>
         </div>
       </template>
       <template #footer>
         <div class="dialog-footer">
-          <el-button @click="pathDialogVisible = false">取消</el-button>
-          <el-button type="primary" :icon="FolderOpened" :loading="savingPath" @click="confirmPathChange">确认修改</el-button>
+          <el-button @click="pathPickerVisible = false">取消</el-button>
+          <el-button type="primary" :icon="FolderOpened" :loading="savingPath" :disabled="pathPickerSelection.directoryId == null" @click="confirmPathPickerSelection">确认修改</el-button>
         </div>
       </template>
     </el-dialog>
@@ -1894,6 +1945,94 @@ onBeforeUnmount(() => {
   font-size: 12px;
   line-height: 1.5;
   color: #f04438;
+}
+
+.path-picker-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.path-picker-current {
+  display: grid;
+  gap: 6px;
+}
+
+.path-picker-current-label {
+  font-size: 12px;
+  color: #667085;
+  line-height: 1.5;
+}
+
+.path-picker-current-value {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #344054;
+  word-break: break-word;
+}
+
+.path-picker-tree-panel {
+  min-height: 320px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.path-picker-tree-panel.is-invalid {
+  border-color: #f04438;
+}
+
+.path-picker-empty {
+  min-height: 296px;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: #98a2b3;
+  text-align: center;
+}
+
+.path-picker-tree-node {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  width: 100%;
+}
+
+.path-picker-tree-node.is-workspace {
+  font-weight: 700;
+  color: #101828;
+  cursor: default;
+}
+
+.path-picker-tree-node-label {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #344054;
+  word-break: break-word;
+}
+
+.path-picker-selected-panel {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.path-picker-selected-label {
+  font-size: 12px;
+  color: #667085;
+  line-height: 1.5;
+}
+
+.path-picker-selected-value {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #344054;
+  word-break: break-word;
 }
 
 .status-pill {

@@ -24,6 +24,15 @@ type DirectoryOption = {
   label: string
 }
 
+type PathPickerNode = {
+  key: string
+  id: number | null
+  name: string
+  fullPath: string
+  selectable: boolean
+  children: PathPickerNode[]
+}
+
 const router = useRouter()
 const { workspaceCode } = useWorkspace()
 
@@ -31,9 +40,11 @@ const records = ref<AiGenerationTaskRecord[]>([])
 const loading = ref(false)
 const processDialogVisible = ref(false)
 const adoptDialogVisible = ref(false)
+const adoptPathPickerVisible = ref(false)
 const activeRecord = ref<AiGenerationTaskRecord | null>(null)
 const statusFilter = ref('')
 const directoryOptions = ref<DirectoryOption[]>([])
+const directoryTree = ref<CaseDirectoryNode[]>([])
 const loadingDirectories = ref(false)
 const adopting = ref(false)
 const retryingRecordId = ref('')
@@ -45,6 +56,8 @@ const adoptForm = reactive({
   directoryId: null as number | null,
 })
 const adoptPathTouched = ref(false)
+const adoptPathPickerKeyword = ref('')
+const adoptPathPickerDirectoryId = ref<number | null>(null)
 
 const recordColumns: TableSettingsColumn[] = [
   { key: 'taskId', label: '任务 ID', required: true, defaultVisible: true },
@@ -110,6 +123,63 @@ const adoptableCases = computed(() => {
     .filter(item => !adoptedIndexes.has(item.index) && !deletedIndexes.has(item.index))
 })
 
+const activeRecordWorkspaceName = computed(() => (
+  activeRecord.value?.workspaceName || activeRecord.value?.workspaceCode || ''
+))
+
+const adoptPathPickerTree = computed<PathPickerNode[]>(() => {
+  if (!activeRecordWorkspaceName.value || !activeRecord.value?.workspaceCode) {
+    return []
+  }
+  const appendFullPath = (nodes: CaseDirectoryNode[], prefix = ''): PathPickerNode[] => nodes.map((node) => {
+    const fullPath = prefix ? `${prefix} / ${node.name}` : node.name
+    return {
+      key: `dir:${node.id}`,
+      id: node.id,
+      name: node.name,
+      fullPath,
+      selectable: true,
+      children: appendFullPath(node.children ?? [], fullPath),
+    }
+  })
+  return [{
+    key: `workspace:${activeRecord.value.workspaceCode}`,
+    id: null,
+    name: activeRecordWorkspaceName.value,
+    fullPath: activeRecordWorkspaceName.value,
+    selectable: false,
+    children: appendFullPath(directoryTree.value),
+  }]
+})
+
+const filteredAdoptPathPickerTree = computed<PathPickerNode[]>(() => {
+  const keyword = adoptPathPickerKeyword.value.trim().toLowerCase()
+  const filterNodes = (nodes: PathPickerNode[]): PathPickerNode[] => nodes.reduce<PathPickerNode[]>((result, node) => {
+    const children = filterNodes(node.children ?? [])
+    const matched = !keyword || node.fullPath.toLowerCase().includes(keyword) || node.name.toLowerCase().includes(keyword)
+    if (matched || children.length) {
+      result.push({
+        ...node,
+        children,
+      })
+    }
+    return result
+  }, [])
+  return filterNodes(adoptPathPickerTree.value)
+})
+
+const selectedAdoptPathLabel = computed(() => {
+  const selected = directoryOptions.value.find(item => item.value === adoptForm.directoryId)
+  const path = selected?.label ?? (activeRecord.value?.directoryName || '')
+  return path && activeRecordWorkspaceName.value ? `${activeRecordWorkspaceName.value} / ${path}` : path
+})
+
+const selectedAdoptPathPickerLabel = computed(() => {
+  const selected = directoryOptions.value.find(item => item.value === adoptPathPickerDirectoryId.value)
+  const path = selected?.label ?? ''
+  return path && activeRecordWorkspaceName.value ? `${activeRecordWorkspaceName.value} / ${path}` : path
+})
+
 function getStatusLabel(status: AiGenerationTaskRecord['status']) {
   const labelMap: Record<AiGenerationTaskRecord['status'], string> = {
     PENDING: '需求解析中',
@@ -146,7 +216,11 @@ function formatTime(value: string | null) {
 }
 
 function getDefaultDirectoryPath(record: AiGenerationTaskRecord) {
-  return record.directoryName || '未设置默认路径'
+  if (!record.directoryName) {
+    return '未设置默认路径'
+  }
+  const workspaceLabel = record.workspaceName || record.workspaceCode
+  return workspaceLabel ? `${workspaceLabel} / ${record.directoryName}` : record.directoryName
 }
 
 function getOutputModeLabel(outputMode: AiGenerationTaskRecord['outputMode']) {
@@ -261,10 +335,12 @@ async function loadDirectoryOptions(record: AiGenerationTaskRecord) {
   try {
     const workspaces = await platformApi.getCaseDirectories(record.workspaceCode)
     const current = workspaces.find(item => item.workspaceCode === record.workspaceCode)
-    directoryOptions.value = flattenDirectories(current?.children ?? [])
+    directoryTree.value = current?.children ?? []
+    directoryOptions.value = flattenDirectories(directoryTree.value)
     const fallbackOption = directoryOptions.value.find(item => item.label === normalizeDirectoryLabel(record.directoryName))
     adoptForm.directoryId = record.directoryId ?? fallbackOption?.value ?? null
   } catch (error) {
+    directoryTree.value = []
     directoryOptions.value = []
     ElMessage.error((error as Error).message)
   } finally {
@@ -339,6 +415,29 @@ async function openAdoptDialog(record: AiGenerationTaskRecord) {
   adoptPathTouched.value = false
   await loadDirectoryOptions(activeRecord.value)
   adoptDialogVisible.value = true
+}
+
+function openAdoptPathPicker() {
+  adoptPathPickerKeyword.value = ''
+  adoptPathPickerDirectoryId.value = adoptForm.directoryId
+  adoptPathPickerVisible.value = true
+}
+
+function handleAdoptPathPickerNodeSelect(node: PathPickerNode) {
+  if (!node.selectable) {
+    return
+  }
+  adoptPathPickerDirectoryId.value = node.id
+}
+
+function confirmAdoptPathPicker() {
+  if (adoptPathPickerDirectoryId.value == null) {
+    ElMessage.warning('请选择保存路径')
+    return
+  }
+  adoptPathTouched.value = true
+  adoptForm.directoryId = adoptPathPickerDirectoryId.value
+  adoptPathPickerVisible.value = false
 }
 
 async function confirmAdoptAll() {
@@ -631,20 +730,16 @@ onBeforeUnmount(() => {
                 <template #label>
                   <span>保存路径 <span class="dialog-required">*</span></span>
                 </template>
-                <el-select
-                  v-model="adoptForm.directoryId"
-                  :class="{ 'is-invalid-select': adoptPathTouched && adoptForm.directoryId == null }"
-                  :loading="loadingDirectories"
-                  placeholder="请选择保存路径"
-                  @change="adoptPathTouched = true"
-                >
-                  <el-option
-                    v-for="item in directoryOptions"
-                    :key="String(item.value)"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
+                <div class="path-picker-trigger-card" :class="{ 'is-invalid': adoptPathTouched && adoptForm.directoryId == null }">
+                  <div class="path-picker-trigger-value">
+                    {{ selectedAdoptPathLabel || '请选择保存路径' }}
+                  </div>
+                  <el-tooltip content="选择保存路径" placement="top">
+                    <button type="button" class="path-action-icon-button" @click="openAdoptPathPicker">
+                      <el-icon><FolderOpened /></el-icon>
+                    </button>
+                  </el-tooltip>
+                </div>
                 <div v-if="adoptPathTouched && adoptForm.directoryId == null" class="dialog-field-error">请选择保存路径</div>
               </el-form-item>
             </el-form>
@@ -655,6 +750,57 @@ onBeforeUnmount(() => {
         <div class="dialog-footer">
           <el-button @click="adoptDialogVisible = false">取消</el-button>
           <el-button type="primary" :icon="FolderOpened" :loading="adopting" @click="confirmAdoptAll">确认采纳</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="adoptPathPickerVisible" width="720px" destroy-on-close class="path-picker-dialog">
+      <template #header>
+        <div class="adopt-dialog-title">选择保存路径</div>
+      </template>
+      <div class="path-picker-layout">
+        <el-input
+          v-model="adoptPathPickerKeyword"
+          clearable
+          placeholder="搜索目录名称"
+          class="path-picker-search"
+        />
+        <div class="path-picker-tree-panel">
+          <div v-if="loadingDirectories" class="path-picker-empty">
+            正在加载目录...
+          </div>
+          <div v-else-if="!filteredAdoptPathPickerTree.length" class="path-picker-empty">
+            未找到匹配的目录
+          </div>
+          <el-tree
+            v-else
+            :data="filteredAdoptPathPickerTree"
+            node-key="key"
+            highlight-current
+            :expand-on-click-node="false"
+            :default-expanded-keys="activeRecord?.workspaceCode ? [`workspace:${activeRecord.workspaceCode}`] : []"
+            :current-node-key="adoptPathPickerDirectoryId != null ? `dir:${adoptPathPickerDirectoryId}` : undefined"
+            class="path-picker-tree"
+            @node-click="handleAdoptPathPickerNodeSelect"
+          >
+            <template #default="{ data }">
+              <div class="path-picker-tree-node" :class="{ 'is-workspace': !data.selectable }">
+                <span class="path-picker-tree-node-label">{{ data.name }}</span>
+              </div>
+            </template>
+          </el-tree>
+        </div>
+        <div class="path-picker-selected-panel">
+          <div class="path-picker-selected-label">已选路径</div>
+          <div class="path-picker-selected-value">
+            {{ selectedAdoptPathPickerLabel || '请在上方目录树中选择保存路径' }}
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="adoptPathPickerVisible = false">取消</el-button>
+          <el-button type="primary" :icon="FolderOpened" :disabled="adoptPathPickerDirectoryId == null" @click="confirmAdoptPathPicker">确认选择</el-button>
         </div>
       </template>
     </el-dialog>
@@ -950,6 +1096,120 @@ onBeforeUnmount(() => {
   font-size: 12px;
   line-height: 1.5;
   color: #f04438;
+}
+
+.path-picker-trigger-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.path-picker-trigger-card.is-invalid {
+  border-color: #f04438;
+}
+
+.path-picker-trigger-value {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #101828;
+  line-height: 1.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-picker-selected-label {
+  font-size: 12px;
+  color: #667085;
+  line-height: 1.5;
+}
+
+.path-action-icon-button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #98a2b3;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.path-action-icon-button:hover {
+  background: rgba(15, 23, 42, 0.06);
+  color: #175cd3;
+}
+
+.path-action-icon-button:focus-visible {
+  outline: 2px solid rgba(23, 92, 211, 0.24);
+  outline-offset: 1px;
+}
+
+.path-picker-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.path-picker-tree-panel {
+  min-height: 320px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.path-picker-empty {
+  min-height: 296px;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: #98a2b3;
+  text-align: center;
+}
+
+.path-picker-tree-node {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  width: 100%;
+}
+
+.path-picker-tree-node.is-workspace {
+  font-weight: 700;
+  color: #101828;
+  cursor: default;
+}
+
+.path-picker-tree-node-label,
+.path-picker-selected-value {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #344054;
+  word-break: break-word;
+}
+
+.path-picker-selected-panel {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid rgba(15, 23, 42, 0.06);
 }
 
 .status-pill {

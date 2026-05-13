@@ -9,6 +9,7 @@ public record BugSummaryResponse(
         BugStatus status,
         String assigneeName,
         String reporterName,
+        Long relatedCaseId,
         String workspaceCode,
         String workspaceName
 ) {

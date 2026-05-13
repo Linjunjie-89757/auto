@@ -20,6 +20,7 @@ import type {
   CreateEnvPayload,
   CreateUserPayload,
   CreateBugPayload,
+  UpdateBugPayload,
   ExecuteCasePayload,
   CreateParamPayload,
   CreateReportPayload,
@@ -593,7 +594,7 @@ export const platformApi = {
       body: JSON.stringify(payload),
     })
   },
-  updateBug(workspaceCode: string, id: number, payload: CreateBugPayload) {
+  updateBug(workspaceCode: string, id: number, payload: UpdateBugPayload) {
     return request<BugDetail>(`/bugs/${id}`, {
       method: 'PUT',
       workspaceCode,

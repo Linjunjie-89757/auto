@@ -15,6 +15,7 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
+import CaseEditorDrawer from '../components/CaseEditorDrawer.vue'
 import ListToolbar from '../components/ListToolbar.vue'
 import { useCaseCenterShared } from '../composables/useCaseCenterShared'
 import { useListToolbarState } from '../composables/useListToolbarState'
@@ -32,7 +33,6 @@ import {
   type ReviewStatus,
 } from '../utils/casePresentation'
 import type {
-  AiReviewResult,
   BatchDeleteCasesPayload,
   BatchMoveCasesPayload,
   BatchUpdateCasesPayload,
@@ -54,12 +54,6 @@ type TreeNode = {
 type MoveTargetOption = {
   value: number | null
   label: string
-}
-type CaseModuleOption = {
-  value: string
-  label: string
-  workspaceCode: string
-  directoryId: number | null
 }
 type CaseColumnKey =
   | 'caseNo'
@@ -118,7 +112,6 @@ const moveDialogVisible = ref(false)
 const caseEditorVisible = ref(false)
 const caseEditorMode = ref<'create' | 'edit' | 'copy'>('create')
 const reviewDrawerVisible = ref(false)
-const aiReviewing = ref(false)
 const batchMoveVisible = ref(false)
 const batchEditVisible = ref(false)
 const bugVisible = ref(false)
@@ -155,7 +148,6 @@ const caseForm = reactive<CreateCasePayload & { id: number | null; workspaceCode
 const reviewForm = reactive<ReviewCasePayload & {
   id: number | null
   title: string
-  modulePath: string
   priority: string
   precondition: string
   steps: string
@@ -163,16 +155,12 @@ const reviewForm = reactive<ReviewCasePayload & {
 }>({
   id: null,
   title: '',
-  modulePath: '',
   priority: 'P1',
   precondition: '',
   steps: '',
   expectedResult: '',
   reviewStatus: 'PENDING',
   reviewComment: '',
-})
-const aiReviewState = reactive<{ result: AiReviewResult | null }>({
-  result: null,
 })
 const bugState = reactive<CreateBugPayload & { workspaceCode: string; caseId: number | null }>({
   workspaceCode: '',
@@ -396,16 +384,6 @@ const activeListWorkspaceCode = computed(() => {
   return node.workspaceCode
 })
 const activeDirectoryId = computed(() => selectedNode.value?.type === 'module' ? selectedNode.value.directoryId : null)
-function makeCaseModuleValue(targetWorkspaceCode: string, targetDirectoryId: number | null) {
-  return `${targetWorkspaceCode}::${targetDirectoryId ?? 'ROOT'}`
-}
-function parseCaseModuleValue(value: string) {
-  const [targetWorkspaceCode, directoryToken] = value.split('::')
-  return {
-    workspaceCode: targetWorkspaceCode,
-    directoryId: directoryToken && directoryToken !== 'ROOT' ? Number(directoryToken) : null,
-  }
-}
 function getWorkspaceNameByCode(targetWorkspaceCode: string) {
   return directoryWorkspaces.value.find(item => item.workspaceCode === targetWorkspaceCode)?.workspaceName ?? targetWorkspaceCode
 }
@@ -437,14 +415,12 @@ function resetCaseForm() {
 function resetReviewForm() {
   reviewForm.id = null
   reviewForm.title = ''
-  reviewForm.modulePath = ''
   reviewForm.priority = 'P1'
   reviewForm.precondition = ''
   reviewForm.steps = ''
   reviewForm.expectedResult = ''
   reviewForm.reviewStatus = 'PENDING'
   reviewForm.reviewComment = ''
-  aiReviewState.result = null
 }
 function resetBatchEditForm() {
   batchEditForm.caseIds = []
@@ -502,52 +478,11 @@ function buildDirectoryOptions(nodes: CaseDirectoryNode[], prefix = ''): MoveTar
   }
   return options
 }
-function buildCaseModuleOptions(targetWorkspaceCode?: string) {
-  const scopes = targetWorkspaceCode
-    ? directoryWorkspaces.value.filter(item => item.workspaceCode === targetWorkspaceCode)
-    : directoryWorkspaces.value
-  return scopes.flatMap((workspace) => {
-    const options: CaseModuleOption[] = [{
-      value: makeCaseModuleValue(workspace.workspaceCode, null),
-      label: workspace.workspaceName,
-      workspaceCode: workspace.workspaceCode,
-      directoryId: null,
-    }]
-    for (const item of buildDirectoryOptions(workspace.children)) {
-      options.push({
-        value: makeCaseModuleValue(workspace.workspaceCode, item.value),
-        label: `${workspace.workspaceName} / ${item.label}`,
-        workspaceCode: workspace.workspaceCode,
-        directoryId: item.value,
-      })
-    }
-    return options
-  })
-}
 const currentDirectoryOptions = computed<MoveTargetOption[]>(() => {
   if (!caseForm.workspaceCode) {
     return []
   }
   return [{ value: null, label: '空间根目录' }, ...buildDirectoryOptions(getWorkspaceDirectories(caseForm.workspaceCode))]
-})
-const caseModuleOptions = computed<CaseModuleOption[]>(() => (
-  isAllScope.value ? buildCaseModuleOptions() : buildCaseModuleOptions(caseForm.workspaceCode || workspaceCode.value)
-))
-const caseModuleValue = computed({
-  get: () => {
-    if (!caseForm.workspaceCode) {
-      return ''
-    }
-    return makeCaseModuleValue(caseForm.workspaceCode, caseForm.directoryId ?? null)
-  },
-  set: (value: string) => {
-    if (!value) {
-      return
-    }
-    const parsed = parseCaseModuleValue(value)
-    caseForm.workspaceCode = parsed.workspaceCode
-    caseForm.directoryId = parsed.directoryId
-  },
 })
 function collectDescendantDirectoryIds(node: TreeNode) {
   const ids = new Set<number>()
@@ -857,14 +792,12 @@ async function openCaseReview(id: number) {
     const detail = await platformApi.getCaseDetail(activeListWorkspaceCode.value, id)
     reviewForm.id = detail.id
     reviewForm.title = detail.title
-    reviewForm.modulePath = formatCaseModulePath(detail.workspaceCode, detail.directoryId ?? null)
     reviewForm.priority = detail.priority
     reviewForm.precondition = detail.precondition ?? ''
     reviewForm.steps = detail.steps ?? ''
     reviewForm.expectedResult = detail.expectedResult ?? ''
     reviewForm.reviewStatus = normalizeReviewStatus(detail.reviewStatus)
     reviewForm.reviewComment = detail.reviewComment ?? ''
-    aiReviewState.result = null
     reviewDrawerVisible.value = true
   }
   catch (error) {
@@ -933,31 +866,6 @@ async function submitReview(status: ReviewStatus) {
   finally {
     saving.value = false
   }
-}
-async function runCaseAiReview() {
-  if (!reviewForm.id) {
-    return
-  }
-  aiReviewing.value = true
-  try {
-    aiReviewState.result = await platformApi.aiReviewCase(activeListWorkspaceCode.value, reviewForm.id)
-    ElMessage.success('AI 评审已完成')
-  }
-  catch (error) {
-    ElMessage.error((error as Error).message)
-  }
-  finally {
-    aiReviewing.value = false
-  }
-}
-function adoptCaseAiReviewSummary() {
-  if (!aiReviewState.result?.summary) {
-    return
-  }
-  reviewForm.reviewComment = reviewForm.reviewComment?.trim()
-    ? `${reviewForm.reviewComment.trim()}\n${aiReviewState.result.summary}`
-    : aiReviewState.result.summary
-  ElMessage.success('已采纳 AI 评审总结到评审意见')
 }
 async function confirmDeleteCase(row: CaseItem) {
   try {
@@ -1683,53 +1591,25 @@ onMounted(bootstrap)
       </template>
     </el-dialog>
 
-    <el-drawer v-model="caseEditorVisible" :title="caseEditorTitle()" size="720px" class="case-detail-drawer">
-      <el-form label-position="top" class="case-editor-form case-detail-form">
-        <el-form-item label="用例名称" required class="case-detail-form-item case-detail-form-item-full">
-          <el-input v-model="caseForm.title" placeholder="请输入用例名称" />
-        </el-form-item>
-        <el-form-item label="用例模块" class="case-detail-form-item">
-          <el-select v-model="caseModuleValue" placeholder="请选择用例模块">
-            <el-option v-for="item in caseModuleOptions" :key="item.value" :label="item.label" :value="item.value" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="优先级" class="case-detail-form-item">
-          <el-segmented v-model="caseForm.priority" :options="['P0', 'P1', 'P2', 'P3']" />
-        </el-form-item>
-        <el-form-item label="前置条件" class="case-detail-form-item">
-          <el-input v-model="caseForm.precondition" type="textarea" :rows="3" resize="vertical" />
-        </el-form-item>
-        <el-form-item label="测试步骤" class="case-detail-form-item">
-          <el-input v-model="caseForm.steps" type="textarea" :rows="6" resize="vertical" />
-        </el-form-item>
-        <el-form-item label="预期结果" class="case-detail-form-item case-detail-form-item-full">
-          <el-input v-model="caseForm.expectedResult" type="textarea" :rows="4" resize="vertical" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <div class="drawer-footer">
-          <div class="drawer-nav" v-if="caseEditorMode === 'edit'">
-            <el-button :disabled="!canGoPrev" @click="moveToCase(-1, 'edit')">
-              <el-icon><ArrowLeft /></el-icon>
-              上一条
-            </el-button>
-            <div class="drawer-nav-counter">
-              {{ currentCaseDisplayIndex }}/{{ filteredCases.length }}
-            </div>
-            <el-button :disabled="!canGoNext" @click="moveToCase(1, 'edit')">
-              下一条
-              <el-icon><ArrowRight /></el-icon>
-            </el-button>
-          </div>
-          <div class="drawer-submit">
-            <el-button @click="caseEditorVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="!canSubmitCase" @click="submitCase">
-          {{ caseEditorMode === 'copy' ? '创建复制用例' : '保存' }}
-        </el-button>
-          </div>
-        </div>
-      </template>
-    </el-drawer>
+    <CaseEditorDrawer
+      v-model="caseEditorVisible"
+      :title="caseEditorTitle()"
+      :form="caseForm"
+      :saving="saving"
+      :can-submit="canSubmitCase"
+      :submit-text="caseEditorMode === 'copy' ? '创建复制用例' : '保存'"
+      :workspace-name="getWorkspaceNameByCode(caseForm.workspaceCode)"
+      :directory-tree="getWorkspaceDirectories(caseForm.workspaceCode)"
+      :resolve-directory-path="directoryId => formatCaseModulePath(caseForm.workspaceCode, directoryId)"
+      :show-navigator="caseEditorMode === 'edit'"
+      :can-go-prev="canGoPrev"
+      :can-go-next="canGoNext"
+      :current-index="currentCaseDisplayIndex"
+      :total-count="filteredCases.length"
+      @prev="moveToCase(-1, 'edit')"
+      @next="moveToCase(1, 'edit')"
+      @submit="submitCase"
+    />
 
     <el-drawer v-model="reviewDrawerVisible" title="用例评审" size="720px" class="case-detail-drawer">
       <el-form label-position="top" class="review-form case-detail-form">
@@ -1739,47 +1619,36 @@ onMounted(bootstrap)
             <el-tag size="small" effect="plain" class="review-priority-tag">{{ reviewForm.priority }}</el-tag>
           </div>
         </el-form-item>
-        <el-form-item label="用例模块" class="case-detail-form-item case-detail-form-item-full">
-          <el-input :model-value="reviewForm.modulePath" readonly class="case-detail-readonly-field" />
-        </el-form-item>
         <el-form-item label="前置条件" class="case-detail-form-item">
-          <el-input :model-value="reviewForm.precondition" type="textarea" :rows="3" resize="vertical" readonly class="case-detail-readonly-field" />
+          <el-input
+            :model-value="reviewForm.precondition"
+            type="textarea"
+            :autosize="{ minRows: 2, maxRows: 6 }"
+            resize="vertical"
+            readonly
+            class="case-detail-readonly-field"
+          />
         </el-form-item>
         <el-form-item label="测试步骤" class="case-detail-form-item">
-          <el-input :model-value="reviewForm.steps" type="textarea" :rows="6" resize="vertical" readonly class="case-detail-readonly-field" />
+          <el-input
+            :model-value="reviewForm.steps"
+            type="textarea"
+            :autosize="{ minRows: 3, maxRows: 10 }"
+            resize="vertical"
+            readonly
+            class="case-detail-readonly-field"
+          />
         </el-form-item>
         <el-form-item label="预期结果" class="case-detail-form-item case-detail-form-item-full">
-          <el-input :model-value="reviewForm.expectedResult" type="textarea" :rows="4" resize="vertical" readonly class="case-detail-readonly-field" />
+          <el-input
+            :model-value="reviewForm.expectedResult"
+            type="textarea"
+            :autosize="{ minRows: 3, maxRows: 8 }"
+            resize="vertical"
+            readonly
+            class="case-detail-readonly-field"
+          />
         </el-form-item>
-        <div class="review-ai-toolbar">
-          <el-button :loading="aiReviewing" @click="runCaseAiReview">AI评审</el-button>
-          <el-button v-if="aiReviewState.result" text @click="adoptCaseAiReviewSummary">采纳总结</el-button>
-        </div>
-        <div v-if="aiReviewState.result" class="detail-card review-ai-result">
-          <div class="review-ai-header">
-            <div>
-              <div class="detail-title">AI评审结果</div>
-              <div class="detail-meta">{{ aiReviewState.result.summary }}</div>
-            </div>
-            <el-tag size="small" effect="plain">{{ aiReviewState.result.result }}</el-tag>
-          </div>
-          <div v-if="aiReviewState.result.issues.length" class="review-ai-section">
-            <div class="review-ai-section-title">问题点</div>
-            <ul class="review-ai-list">
-              <li v-for="(issue, index) in aiReviewState.result.issues" :key="'drawer-issue-' + index">{{ issue }}</li>
-            </ul>
-          </div>
-          <div v-if="aiReviewState.result.suggestions.length" class="review-ai-section">
-            <div class="review-ai-section-title">修改建议</div>
-            <ul class="review-ai-list">
-              <li v-for="(suggestion, index) in aiReviewState.result.suggestions" :key="'drawer-suggestion-' + index">{{ suggestion }}</li>
-            </ul>
-          </div>
-          <div v-if="!aiReviewState.result.structured" class="review-ai-raw">
-            <div class="review-ai-section-title">原始评审内容</div>
-            <el-input :model-value="aiReviewState.result.rawContent" type="textarea" :rows="4" resize="vertical" readonly />
-          </div>
-        </div>
         <el-form-item label="评审意见" class="case-detail-form-item case-detail-form-item-full">
           <el-input v-model="reviewForm.reviewComment" type="textarea" :rows="4" resize="vertical" />
         </el-form-item>
@@ -2240,6 +2109,104 @@ onMounted(bootstrap)
 .case-detail-drawer :deep(.el-select__wrapper) {
   border-radius: 10px;
 }
+.case-detail-form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+.case-detail-form-item {
+  margin-bottom: 0;
+}
+.directory-path-input {
+  width: 100%;
+}
+.directory-path-input :deep(.el-input__wrapper) {
+  cursor: default;
+}
+.directory-path-input-with-action :deep(.el-input__suffix) {
+  margin-left: 8px;
+}
+.path-action-icon-button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #98a2b3;
+  cursor: pointer;
+}
+.path-action-icon-button:focus-visible {
+  outline: 2px solid rgba(23, 92, 211, 0.24);
+  outline-offset: 1px;
+}
+.dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.path-picker-layout {
+  display: grid;
+  gap: 16px;
+}
+.path-picker-current {
+  display: grid;
+  gap: 6px;
+}
+.path-picker-current-label,
+.path-picker-selected-label {
+  font-size: 12px;
+  color: #667085;
+  line-height: 1.5;
+}
+.path-picker-current-value,
+.path-picker-tree-node-label,
+.path-picker-selected-value {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #344054;
+  word-break: break-word;
+}
+.path-picker-tree-panel {
+  min-height: 320px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: #fff;
+}
+.path-picker-empty {
+  min-height: 296px;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: #98a2b3;
+  text-align: center;
+}
+.path-picker-tree-node {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  width: 100%;
+}
+.path-picker-tree-node.is-workspace {
+  font-weight: 700;
+  color: #101828;
+  cursor: default;
+}
+.path-picker-selected-panel {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
 
 .case-detail-drawer :deep(.el-textarea__inner) {
   line-height: 1.7;
@@ -2298,6 +2265,11 @@ onMounted(bootstrap)
 .case-detail-readonly-field :deep(.el-textarea__inner) {
   min-height: 132px !important;
   padding: 14px 16px;
+}
+
+.review-form .case-detail-readonly-field :deep(.el-textarea__inner) {
+  min-height: 0 !important;
+  padding: 12px 14px;
 }
 
 .case-detail-readonly-field :deep(.el-input__inner),

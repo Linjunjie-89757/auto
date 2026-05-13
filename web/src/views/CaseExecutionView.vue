@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowRight, Edit, Filter, Search } from '@element-plus/icons
 import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { platformApi } from '../api/platform'
+import CaseEditorDrawer from '../components/CaseEditorDrawer.vue'
 import { useCaseCenterShared } from '../composables/useCaseCenterShared'
 import { loadCaseExecutionContext, type CaseExecutionContext } from '../utils/caseExecutionContext'
 import {
@@ -11,25 +12,50 @@ import {
   executionStatusTagClass,
   executionStatusTagType,
   formatDateTime,
+  reviewStatusLabel,
+  reviewStatusTagClass,
+  reviewStatusTagType,
   type ExecutionStatus,
 } from '../utils/casePresentation'
-import type { CaseDetail, CaseItem } from '../types/api'
+import type { BugDetail, BugSummary, CaseDetail, CaseDirectoryNode, CaseItem, CreateCasePayload, UpdateBugPayload } from '../types/api'
 
 const route = useRoute()
 const router = useRouter()
 const { workspaceCode, canWriteWorkspace, loadSharedBase, workspaces } = useCaseCenterShared()
 
 const loading = ref(false)
+const caseSaving = ref(false)
 const submitting = ref(false)
 const activeTab = ref('detail')
 const sidebarKeyword = ref('')
 const sidebarExecutionStatus = ref<ExecutionStatus | ''>('')
-const autoNext = ref(false)
+const autoNext = ref(true)
 const contextState = ref<CaseExecutionContext | null>(null)
 const executionCases = ref<CaseItem[]>([])
 const detail = ref<CaseDetail | null>(null)
 const selectedExecutionStatus = ref<ExecutionStatus | ''>('')
 const executionComment = ref('')
+const relatedBugs = ref<BugSummary[]>([])
+const bugListLoading = ref(false)
+const bugLinkDialogVisible = ref(false)
+const bugLinkLoading = ref(false)
+const bugLinkKeyword = ref('')
+const linkingBugId = ref<number | null>(null)
+const caseEditorVisible = ref(false)
+const caseModulePickerLoading = ref(false)
+const caseModuleDirectoryTree = ref<CaseDirectoryNode[]>([])
+const caseEditorForm = ref({
+  id: null as number | null,
+  workspaceCode: '',
+  directoryId: null as number | null,
+  title: '',
+  priority: 'P1',
+  sourceType: '',
+  caseStatus: '',
+  precondition: '',
+  steps: '',
+  expectedResult: '',
+})
 
 const sidebarStatusOptions: Array<{ label: string, value: ExecutionStatus | '' }> = [
   { label: '全部状态', value: '' },
@@ -97,6 +123,28 @@ const executionHistoryRows = computed(() => {
     comment: detail.value.executionComment || '-',
   }]
 })
+const associatedBugs = computed(() => {
+  if (currentCaseId.value === null) {
+    return []
+  }
+  return relatedBugs.value.filter(item => item.relatedCaseId === currentCaseId.value)
+})
+const canSubmitCaseEdit = computed(() => !!caseEditorForm.value.title.trim() && !!caseEditorForm.value.workspaceCode)
+const caseEditorWorkspaceName = computed(() => (
+  workspaces.value.find(item => item.code === caseEditorForm.value.workspaceCode)?.name || caseEditorForm.value.workspaceCode
+))
+const availableLinkBugs = computed(() => {
+  const keyword = bugLinkKeyword.value.trim().toLowerCase()
+  return relatedBugs.value
+    .filter(item => item.relatedCaseId === null)
+    .filter(item => isBugModulePathMatched(item))
+    .filter((item) => {
+      if (!keyword) {
+        return true
+      }
+      return item.bugNo.toLowerCase().includes(keyword) || item.title.toLowerCase().includes(keyword)
+    })
+})
 
 function buildFallbackCase(detailRow: CaseDetail): CaseItem {
   return {
@@ -130,6 +178,31 @@ function buildFallbackCase(detailRow: CaseDetail): CaseItem {
   }
 }
 
+function normalizeDirectoryLabel(path: string | null | undefined) {
+  return (path ?? '')
+    .split(/[\\/]+/)
+    .map(segment => segment.trim())
+    .filter(Boolean)
+    .join(' / ')
+}
+
+function findDirectoryNameById(nodes: CaseDirectoryNode[], directoryId: number | null, trail: string[] = []): string {
+  if (directoryId == null) {
+    return ''
+  }
+  for (const node of nodes) {
+    const nextTrail = [...trail, node.name]
+    if (node.id === directoryId) {
+      return nextTrail.join(' / ')
+    }
+    const childMatched = findDirectoryNameById(node.children ?? [], directoryId, nextTrail)
+    if (childMatched) {
+      return childMatched
+    }
+  }
+  return ''
+}
+
 function syncExecutionInputs(target: CaseDetail | null) {
   executionComment.value = target?.executionComment ?? ''
   if (target?.executionStatus === 'PASSED' || target?.executionStatus === 'BLOCKED' || target?.executionStatus === 'FAILED') {
@@ -137,6 +210,24 @@ function syncExecutionInputs(target: CaseDetail | null) {
     return
   }
   selectedExecutionStatus.value = ''
+}
+
+function isBugModulePathMatched(_bug: BugSummary) {
+  // Hook for future module-path matching once bug records expose requirement/module path.
+  return true
+}
+
+function buildUpdateBugPayload(bug: BugDetail, caseId: number): UpdateBugPayload {
+  return {
+    workspaceCode: bug.workspaceCode,
+    title: bug.title,
+    description: bug.description,
+    priority: bug.priority,
+    severity: bug.severity,
+    assigneeId: bug.assigneeId,
+    relatedCaseId: caseId,
+    tags: bug.tags,
+  }
 }
 
 function updateExecutionCollection(detailRow: CaseDetail) {
@@ -159,12 +250,54 @@ async function loadCaseDetail(caseId: number) {
     detail.value = detailRow
     updateExecutionCollection(detailRow)
     syncExecutionInputs(detailRow)
+    void loadRelatedBugs(detailRow.id, detailRow.workspaceCode)
   }
   catch (error) {
     ElMessage.error((error as Error).message)
   }
   finally {
     loading.value = false
+  }
+}
+
+async function loadRelatedBugs(caseId: number, targetWorkspaceCode?: string) {
+  const workspace = targetWorkspaceCode || effectiveWorkspaceCode.value
+  bugListLoading.value = true
+  try {
+    const response = await platformApi.getBugs(workspace)
+    relatedBugs.value = response.items.filter(item => item.relatedCaseId === caseId || item.relatedCaseId === null)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    bugListLoading.value = false
+  }
+}
+
+async function loadCaseModuleDirectories(
+  workspace: string,
+  preferredDirectoryId?: number | null,
+  preferredDirectoryName?: string | null,
+) {
+  if (!workspace) {
+    caseModuleDirectoryTree.value = []
+    return
+  }
+  caseModulePickerLoading.value = true
+  try {
+    const workspacesResponse = await platformApi.getCaseDirectories(workspace)
+    const current = workspacesResponse.find(item => item.workspaceCode === workspace)
+    caseModuleDirectoryTree.value = current?.children ?? []
+    void preferredDirectoryId
+    void preferredDirectoryName
+  }
+  catch (error) {
+    caseModuleDirectoryTree.value = []
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    caseModulePickerLoading.value = false
   }
 }
 
@@ -207,22 +340,120 @@ function applySidebarExecutionStatus(value: string | number | object) {
   sidebarExecutionStatus.value = typeof value === 'string' ? value as ExecutionStatus | '' : ''
 }
 
+function openLinkBugDialog() {
+  bugLinkKeyword.value = ''
+  bugLinkDialogVisible.value = true
+}
+
+async function associateBug(bugId: number) {
+  if (!currentCaseId.value || !detail.value) {
+    return
+  }
+  linkingBugId.value = bugId
+  bugLinkLoading.value = true
+  try {
+    const bug = await platformApi.getBugDetail(detail.value.workspaceCode, bugId)
+    await platformApi.updateBug(detail.value.workspaceCode, bugId, buildUpdateBugPayload(bug, currentCaseId.value))
+    ElMessage.success('关联缺陷成功')
+    bugLinkDialogVisible.value = false
+    await loadRelatedBugs(currentCaseId.value, detail.value.workspaceCode)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    linkingBugId.value = null
+    bugLinkLoading.value = false
+  }
+}
+
 function openCaseEdit() {
   if (!detail.value) {
     return
   }
-  const query = {
-    ...(contextState.value?.returnQuery ?? Object.fromEntries(
-      Object.entries(route.query)
-        .filter(([, value]) => typeof value === 'string')
-        .map(([key, value]) => [key, value as string]),
-    )),
-    editCaseId: String(detail.value.id),
+  caseEditorForm.value = {
+    id: detail.value.id,
+    workspaceCode: detail.value.workspaceCode,
+    directoryId: detail.value.directoryId ?? null,
+    title: detail.value.title,
+    priority: detail.value.priority,
+    sourceType: detail.value.sourceType,
+    caseStatus: detail.value.status,
+    precondition: detail.value.precondition ?? '',
+    steps: detail.value.steps ?? '',
+    expectedResult: detail.value.expectedResult ?? '',
   }
-  void router.push({
-    name: 'cases-manage',
-    query,
-  })
+  void loadCaseModuleDirectories(
+    detail.value.workspaceCode,
+    detail.value.directoryId ?? null,
+    detail.value.directoryName,
+  )
+  caseEditorVisible.value = true
+}
+
+function resolveCaseEditorDirectoryPath(directoryId: number | null) {
+  if (!caseEditorForm.value.workspaceCode) {
+    return '-'
+  }
+  const workspaceName = caseEditorWorkspaceName.value
+  if (directoryId === null) {
+    return workspaceName
+  }
+  const resolvedName = findDirectoryNameById(caseModuleDirectoryTree.value, directoryId)
+  if (resolvedName) {
+    return `${workspaceName} / ${resolvedName}`
+  }
+  const fallbackName = normalizeDirectoryLabel(detail.value?.directoryName)
+  return fallbackName ? `${workspaceName} / ${fallbackName}` : workspaceName
+}
+
+function ensureCaseModuleDirectoriesLoaded() {
+  if (!caseEditorForm.value.workspaceCode || caseModuleDirectoryTree.value.length) {
+    return
+  }
+  void loadCaseModuleDirectories(
+    caseEditorForm.value.workspaceCode,
+    caseEditorForm.value.directoryId,
+    detail.value?.directoryName ?? null,
+  )
+}
+
+async function submitCaseEdit() {
+  if (!caseEditorForm.value.id) {
+    return
+  }
+  if (!caseEditorForm.value.title.trim()) {
+    ElMessage.error('请输入用例名称')
+    return
+  }
+  caseSaving.value = true
+  try {
+    const payload: CreateCasePayload = {
+      workspaceCode: caseEditorForm.value.workspaceCode,
+      directoryId: caseEditorForm.value.directoryId,
+      title: caseEditorForm.value.title.trim(),
+      caseType: 'FUNCTION',
+      priority: caseEditorForm.value.priority,
+      sourceType: caseEditorForm.value.sourceType.trim(),
+      caseStatus: caseEditorForm.value.caseStatus,
+      ownerId: null,
+      precondition: caseEditorForm.value.precondition.trim(),
+      steps: caseEditorForm.value.steps.trim(),
+      expectedResult: caseEditorForm.value.expectedResult.trim(),
+    }
+    await platformApi.updateCase(caseEditorForm.value.workspaceCode, caseEditorForm.value.id, payload)
+    ElMessage.success('用例已更新')
+    caseEditorVisible.value = false
+    if (currentCaseId.value !== null) {
+      await loadCaseDetail(currentCaseId.value)
+    }
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    caseSaving.value = false
+  }
 }
 
 async function submitExecution() {
@@ -399,6 +630,22 @@ onMounted(() => {
                 <div class="execution-card-label">更新时间</div>
                 <div class="execution-card-value">{{ formatDateTime(detail?.updatedAt || null) }}</div>
               </section>
+              <section class="execution-card">
+                <div class="execution-card-label">评审结果</div>
+                <div class="execution-card-value">
+                  <el-tag
+                    effect="plain"
+                    :type="reviewStatusTagType(detail?.reviewStatus || 'PENDING')"
+                    :class="reviewStatusTagClass(detail?.reviewStatus || 'PENDING')"
+                  >
+                    {{ reviewStatusLabel(detail?.reviewStatus || 'PENDING') }}
+                  </el-tag>
+                </div>
+              </section>
+              <section class="execution-card">
+                <div class="execution-card-label">评审人</div>
+                <div class="execution-card-value">{{ detail?.reviewedByName || '-' }}</div>
+              </section>
             </div>
           </el-tab-pane>
 
@@ -441,15 +688,34 @@ onMounted(() => {
           </el-tab-pane>
 
           <el-tab-pane label="缺陷列表" name="bugs">
-            <section class="execution-detail-card">
+            <section class="execution-detail-card" v-loading="bugListLoading">
               <div class="execution-tab-header">
                 <div>
                   <div class="execution-card-title">关联缺陷</div>
-                  <div class="execution-card-meta">V1 先预留缺陷位，后续补真实关联流程。</div>
+                  <div class="execution-card-meta">仅展示当前模块范围内可关联的缺陷；模块路径过滤口已预留。</div>
                 </div>
-                <el-button disabled>添加缺陷</el-button>
+                <div class="execution-bug-actions">
+                  <el-button @click="openLinkBugDialog">关联缺陷</el-button>
+                  <el-button disabled>添加缺陷</el-button>
+                </div>
               </div>
-              <el-empty description="暂无关联缺陷" :image-size="84" />
+              <div v-if="associatedBugs.length" class="execution-bug-list">
+                <article v-for="bug in associatedBugs" :key="bug.id" class="execution-bug-item">
+                  <div class="execution-bug-item-top">
+                    <div>
+                      <div class="execution-bug-no">{{ bug.bugNo }}</div>
+                      <div class="execution-bug-title">{{ bug.title }}</div>
+                    </div>
+                    <el-tag size="small" effect="plain">{{ bug.status }}</el-tag>
+                  </div>
+                  <div class="execution-bug-meta">
+                    <span>优先级：{{ bug.priority }}</span>
+                    <span>严重程度：{{ bug.severity }}</span>
+                    <span>负责人：{{ bug.assigneeName || '-' }}</span>
+                  </div>
+                </article>
+              </div>
+              <el-empty v-else description="暂无关联缺陷" :image-size="84" />
             </section>
           </el-tab-pane>
 
@@ -477,7 +743,7 @@ onMounted(() => {
         </el-tabs>
       </div>
 
-      <footer class="execution-footer">
+      <footer v-if="activeTab === 'detail'" class="execution-footer">
         <div class="execution-footer-bar">
           <div class="execution-footer-nav">
             <el-button :disabled="!canPreviewPreviousCase" @click="moveCase(-1)">
@@ -504,6 +770,59 @@ onMounted(() => {
       </footer>
     </section>
   </section>
+
+  <el-dialog v-model="bugLinkDialogVisible" title="关联缺陷" width="720px">
+    <div class="execution-bug-dialog-toolbar">
+      <el-input
+        v-model="bugLinkKeyword"
+        placeholder="通过缺陷编号 / 标题搜索"
+        clearable
+        :prefix-icon="Search"
+      />
+    </div>
+    <div v-if="availableLinkBugs.length" class="execution-bug-dialog-list">
+      <article v-for="bug in availableLinkBugs" :key="bug.id" class="execution-bug-dialog-item">
+        <div class="execution-bug-item-top">
+          <div>
+            <div class="execution-bug-no">{{ bug.bugNo }}</div>
+            <div class="execution-bug-title">{{ bug.title }}</div>
+          </div>
+          <el-tag size="small" effect="plain">{{ bug.status }}</el-tag>
+        </div>
+        <div class="execution-bug-meta">
+          <span>优先级：{{ bug.priority }}</span>
+          <span>严重程度：{{ bug.severity }}</span>
+          <span>负责人：{{ bug.assigneeName || '-' }}</span>
+        </div>
+        <div class="execution-bug-dialog-actions">
+          <el-button
+            type="primary"
+            :loading="bugLinkLoading && linkingBugId === bug.id"
+            :disabled="bugLinkLoading && linkingBugId !== bug.id"
+            @click="associateBug(bug.id)"
+          >
+            关联到当前用例
+          </el-button>
+        </div>
+      </article>
+    </div>
+    <el-empty v-else description="暂无可关联缺陷" :image-size="72" />
+  </el-dialog>
+
+  <CaseEditorDrawer
+    v-model="caseEditorVisible"
+    title="编辑用例"
+    :form="caseEditorForm"
+    :saving="caseSaving"
+    :can-submit="canSubmitCaseEdit"
+    submit-text="保存"
+    :workspace-name="caseEditorWorkspaceName"
+    :directory-tree="caseModuleDirectoryTree"
+    :module-picker-loading="caseModulePickerLoading"
+    :resolve-directory-path="resolveCaseEditorDirectoryPath"
+    @open-module-picker="ensureCaseModuleDirectoriesLoaded"
+    @submit="submitCaseEdit"
+  />
 </template>
 
 <style scoped>
@@ -835,6 +1154,71 @@ onMounted(() => {
   min-height: 64px;
 }
 
+.execution-bug-actions,
+.execution-bug-item-top,
+.execution-bug-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.execution-bug-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.execution-bug-list,
+.execution-bug-dialog-list {
+  display: grid;
+  gap: 12px;
+}
+
+.execution-bug-list {
+  margin-top: 16px;
+}
+
+.execution-bug-item,
+.execution-bug-dialog-item {
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: #fcfcfd;
+  padding: 14px 16px;
+}
+
+.execution-bug-no {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6941c6;
+}
+
+.execution-bug-title {
+  margin-top: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: #101828;
+}
+
+.execution-bug-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #667085;
+}
+
+.execution-bug-dialog-toolbar {
+  margin-bottom: 16px;
+}
+
+.execution-bug-dialog-actions {
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
 .execution-history-list {
   display: grid;
   gap: 12px;
@@ -958,6 +1342,10 @@ onMounted(() => {
   }
 
   .execution-detail-row {
+    grid-template-columns: 1fr;
+  }
+
+  .case-detail-form {
     grid-template-columns: 1fr;
   }
 

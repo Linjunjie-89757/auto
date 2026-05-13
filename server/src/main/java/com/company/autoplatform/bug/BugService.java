@@ -117,11 +117,15 @@ public class BugService {
         if (request.assigneeId() != null) {
             userService.requireUser(request.assigneeId());
         }
+        if (request.relatedCaseId() != null) {
+            caseService.requireCase(request.relatedCaseId());
+        }
         entity.setTitle(request.title());
         entity.setDescription(request.description());
         entity.setPriority(request.priority().name());
         entity.setSeverity(request.severity().name());
         entity.setAssigneeId(request.assigneeId());
+        entity.setRelatedCaseId(request.relatedCaseId());
         entity.setTagsJson(JsonUtils.toJson(request.tags()));
         entity.setUpdatedAt(LocalDateTime.now());
         bugMapper.updateById(entity);
@@ -298,6 +302,7 @@ public class BugService {
                 BugStatus.valueOf(entity.getStatus()),
                 assignee == null ? "-" : assignee.getDisplayName(),
                 reporter.getDisplayName(),
+                entity.getRelatedCaseId(),
                 workspace.getWorkspaceCode(),
                 workspace.getWorkspaceName()
         );

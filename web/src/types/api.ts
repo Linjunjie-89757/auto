@@ -540,6 +540,7 @@ export interface BugSummary {
   status: string
   assigneeName: string
   reporterName: string
+  relatedCaseId: number | null
   workspaceCode: string
   workspaceName: string
 }
@@ -594,5 +595,16 @@ export interface CreateBugPayload {
   relatedCaseId?: number | null
   relatedReportId?: number | null
   relatedTaskId?: number | null
+  tags: string[]
+}
+
+export interface UpdateBugPayload {
+  workspaceCode?: string
+  title: string
+  description: string
+  priority: string
+  severity: string
+  assigneeId: number | null
+  relatedCaseId?: number | null
   tags: string[]
 }

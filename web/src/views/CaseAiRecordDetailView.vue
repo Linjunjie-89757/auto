@@ -22,7 +22,7 @@ import AiGenerationProcessDialog from '../components/AiGenerationProcessDialog.v
 import TableSettingsDrawer from '../components/TableSettingsDrawer.vue'
 import { useTableSettings, type TableSettingsColumn } from '../composables/useTableSettings'
 import { useWorkspace } from '../composables/useWorkspace'
-import type { AiGeneratedCase, CaseDirectoryNode, CreateCasePayload } from '../types/api'
+import type { AiGeneratedCase, CaseDirectoryNode, CaseDirectoryWorkspace, CreateCasePayload, WorkspaceItem } from '../types/api'
 import type { AiGenerationTaskRecord } from '../utils/caseAiGenerationRecords'
 import {
   cancelAiGenerationRecord,
@@ -40,6 +40,11 @@ type DetailCaseRow = AiGeneratedCase & {
 type DirectoryOption = {
   value: number | null
   label: string
+}
+
+type WorkspaceOption = {
+  code: string
+  name: string
 }
 
 const route = useRoute()
@@ -69,8 +74,13 @@ const adoptDialogVisible = ref(false)
 const pathDialogVisible = ref(false)
 const processDialogVisible = ref(false)
 const activeCaseCursor = ref(-1)
-const directoryOptions = ref<DirectoryOption[]>([])
-const loadingDirectories = ref(false)
+const adoptDirectoryOptions = ref<DirectoryOption[]>([])
+const pathDirectoryOptions = ref<DirectoryOption[]>([])
+const directoryWorkspaces = ref<CaseDirectoryWorkspace[]>([])
+const pathWorkspaceOptions = ref<WorkspaceOption[]>([])
+const loadingAdoptDirectories = ref(false)
+const loadingPathDirectories = ref(false)
+const loadingPathWorkspaces = ref(false)
 const adopting = ref(false)
 const savingPath = ref(false)
 const savingCaseEdit = ref(false)
@@ -87,6 +97,7 @@ const adoptForm = reactive({
 const adoptPathTouched = ref(false)
 
 const pathForm = reactive({
+  workspaceCode: '',
   directoryId: null as number | null,
 })
 const pathTouched = ref(false)
@@ -284,18 +295,62 @@ function handleSelectionChange(rows: DetailCaseRow[]) {
 }
 
 async function loadDirectoryOptions(record: AiGenerationTaskRecord) {
-  loadingDirectories.value = true
+  loadingAdoptDirectories.value = true
   try {
     const workspaces = await platformApi.getCaseDirectories(record.workspaceCode)
     const current = workspaces.find(item => item.workspaceCode === record.workspaceCode)
-    directoryOptions.value = flattenDirectories(current?.children ?? [])
-    const fallbackOption = directoryOptions.value.find(item => item.label === normalizeDirectoryLabel(record.directoryName))
+    adoptDirectoryOptions.value = flattenDirectories(current?.children ?? [])
+    const fallbackOption = adoptDirectoryOptions.value.find(item => item.label === normalizeDirectoryLabel(record.directoryName))
     adoptForm.directoryId = record.directoryId ?? fallbackOption?.value ?? null
   } catch (error) {
-    directoryOptions.value = []
+    adoptDirectoryOptions.value = []
     ElMessage.error((error as Error).message)
   } finally {
-    loadingDirectories.value = false
+    loadingAdoptDirectories.value = false
+  }
+}
+
+function getWorkspaceDirectories(targetWorkspaceCode: string) {
+  return directoryWorkspaces.value.find(item => item.workspaceCode === targetWorkspaceCode)?.children ?? []
+}
+
+async function ensurePathWorkspaceData() {
+  if (directoryWorkspaces.value.length && pathWorkspaceOptions.value.length) {
+    return
+  }
+  loadingPathWorkspaces.value = true
+  try {
+    const [workspaces, directories] = await Promise.all([
+      platformApi.getWorkspaces(),
+      platformApi.getCaseDirectories('ALL'),
+    ])
+    pathWorkspaceOptions.value = workspaces.map((item: WorkspaceItem) => ({
+      code: item.code,
+      name: item.name,
+    }))
+    directoryWorkspaces.value = directories
+  } finally {
+    loadingPathWorkspaces.value = false
+  }
+}
+
+function syncPathDirectoryOptions(targetWorkspaceCode: string, preferredDirectoryName?: string | null, preferredDirectoryId?: number | null) {
+  pathDirectoryOptions.value = flattenDirectories(getWorkspaceDirectories(targetWorkspaceCode))
+  const fallbackOption = pathDirectoryOptions.value.find(item => item.label === normalizeDirectoryLabel(preferredDirectoryName))
+  pathForm.directoryId = preferredDirectoryId ?? fallbackOption?.value ?? null
+}
+
+async function loadPathDirectoryOptions(targetWorkspaceCode: string, preferredDirectoryName?: string | null, preferredDirectoryId?: number | null) {
+  loadingPathDirectories.value = true
+  try {
+    await ensurePathWorkspaceData()
+    syncPathDirectoryOptions(targetWorkspaceCode, preferredDirectoryName, preferredDirectoryId)
+  } catch (error) {
+    pathDirectoryOptions.value = []
+    pathForm.directoryId = null
+    ElMessage.error((error as Error).message)
+  } finally {
+    loadingPathDirectories.value = false
   }
 }
 
@@ -366,14 +421,28 @@ async function openPathDialog(record: AiGenerationTaskRecord) {
     return
   }
   pathTouched.value = false
-  await loadDirectoryOptions(activeRecord.value)
-  pathForm.directoryId = adoptForm.directoryId
+  pathForm.workspaceCode = activeRecord.value.workspaceCode
+  await loadPathDirectoryOptions(
+    activeRecord.value.workspaceCode,
+    activeRecord.value.directoryName,
+    activeRecord.value.directoryId,
+  )
   pathDialogVisible.value = true
+}
+
+function handlePathWorkspaceChange(value: string) {
+  pathTouched.value = true
+  syncPathDirectoryOptions(value, null, null)
 }
 
 async function confirmPathChange() {
   if (!activeRecord.value) {
     ElMessage.warning('当前任务记录不存在，请关闭弹窗后重试')
+    return
+  }
+  if (!pathForm.workspaceCode) {
+    pathTouched.value = true
+    ElMessage.warning('请先选择空间')
     return
   }
   if (pathForm.directoryId == null) {
@@ -384,13 +453,20 @@ async function confirmPathChange() {
 
   savingPath.value = true
   try {
-    const selectedOption = directoryOptions.value.find(item => item.value === pathForm.directoryId)
+    const selectedOption = pathDirectoryOptions.value.find(item => item.value === pathForm.directoryId)
     activeRecord.value = await patchAiGenerationRecord(workspaceCode.value, activeRecord.value.id, {
+      workspaceCode: pathForm.workspaceCode,
       directoryId: pathForm.directoryId,
       directoryName: formatDirectoryNameFromOption(selectedOption) ?? activeRecord.value.directoryName,
     })
-    adoptForm.directoryId = pathForm.directoryId
+    adoptForm.directoryId = activeRecord.value.directoryId
     pathDialogVisible.value = false
+    await router.replace({
+      query: {
+        ...route.query,
+        workspace: workspaceCode.value === 'ALL' ? 'ALL' : activeRecord.value.workspaceCode,
+      },
+    })
     ElMessage.success('默认保存路径已更新')
     await loadRecord()
   } catch (error) {
@@ -436,7 +512,7 @@ async function confirmAdoptAll() {
 
     const adopted = new Set(activeRecord.value.adoptedCaseIndexes ?? [])
     adoptDialogCases.value.forEach(item => adopted.add(item.index))
-    const selectedOption = directoryOptions.value.find(item => item.value === adoptForm.directoryId)
+    const selectedOption = adoptDirectoryOptions.value.find(item => item.value === adoptForm.directoryId)
     const directoryName = formatDirectoryNameFromOption(selectedOption) ?? activeRecord.value.directoryName
     const adoptedCaseIndexes = adoptDialogCases.value.map(item => item.index)
     activeRecord.value = await patchAiGenerationRecord(workspaceCode.value, activeRecord.value.id, {
@@ -1076,12 +1152,12 @@ onBeforeUnmount(() => {
                 <el-select
                   v-model="adoptForm.directoryId"
                   :class="{ 'is-invalid-select': adoptPathTouched && adoptForm.directoryId == null }"
-                  :loading="loadingDirectories"
+                  :loading="loadingAdoptDirectories"
                   placeholder="请选择保存路径"
                   @change="adoptPathTouched = true"
                 >
                   <el-option
-                    v-for="item in directoryOptions"
+                    v-for="item in adoptDirectoryOptions"
                     :key="String(item.value)"
                     :label="item.label"
                     :value="item.value"
@@ -1121,17 +1197,37 @@ onBeforeUnmount(() => {
             <el-form label-position="top">
               <el-form-item required>
                 <template #label>
+                  <span>当前空间 <span class="dialog-required">*</span></span>
+                </template>
+                <el-select
+                  v-model="pathForm.workspaceCode"
+                  :class="{ 'is-invalid-select': pathTouched && !pathForm.workspaceCode }"
+                  :loading="loadingPathWorkspaces"
+                  placeholder="请选择空间"
+                  @change="handlePathWorkspaceChange"
+                >
+                  <el-option
+                    v-for="item in pathWorkspaceOptions"
+                    :key="item.code"
+                    :label="item.name"
+                    :value="item.code"
+                  />
+                </el-select>
+                <div v-if="pathTouched && !pathForm.workspaceCode" class="dialog-field-error">请选择空间</div>
+              </el-form-item>
+              <el-form-item required>
+                <template #label>
                   <span>新保存路径 <span class="dialog-required">*</span></span>
                 </template>
                 <el-select
                   v-model="pathForm.directoryId"
                   :class="{ 'is-invalid-select': pathTouched && pathForm.directoryId == null }"
-                  :loading="loadingDirectories"
+                  :loading="loadingPathDirectories"
                   placeholder="请选择新的保存路径"
                   @change="pathTouched = true"
                 >
                   <el-option
-                    v-for="item in directoryOptions"
+                    v-for="item in pathDirectoryOptions"
                     :key="`path-${String(item.value)}`"
                     :label="item.label"
                     :value="item.value"
@@ -1187,6 +1283,10 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.dialog-footer {
+  justify-content: flex-end;
 }
 
 .detail-toolbar-row,

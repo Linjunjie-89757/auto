@@ -189,10 +189,14 @@ public class AiGenerationTaskService {
 
     public AiGenerationTaskResponse updateTask(String taskId, String workspaceCode, UpdateAiGenerationTaskRequest request) {
         AiGenerationTaskEntity entity = requireTask(taskId);
-        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
-                workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode()
-        );
-        validateReadableWorkspaceScope(workspaceCode, workspace);
+        WorkspaceEntity currentWorkspace = workspaceService.requireWorkspaceById(entity.getWorkspaceId());
+        validateReadableWorkspaceScope(workspaceCode, currentWorkspace);
+        WorkspaceEntity workspace = request.workspaceCode() == null || request.workspaceCode().isBlank()
+                ? workspaceService.requireWritableWorkspace(currentWorkspace.getWorkspaceCode())
+                : workspaceService.requireWritableWorkspace(request.workspaceCode().trim());
+        if (!workspace.getId().equals(entity.getWorkspaceId())) {
+            entity.setWorkspaceId(workspace.getId());
+        }
         if (request.directoryId() != null) {
             validateDirectory(workspace, request.directoryId());
             entity.setDirectoryId(request.directoryId());

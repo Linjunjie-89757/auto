@@ -307,6 +307,7 @@ export interface CreateAiGenerationTaskPayload {
 }
 
 export interface UpdateAiGenerationTaskPayload {
+  workspaceCode?: string
   directoryId?: number | null
   directoryName?: string | null
   generatedCases?: AiGeneratedCase[]

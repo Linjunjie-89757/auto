@@ -9,7 +9,6 @@ import {
   Check,
   CircleClose,
   CopyDocument,
-  Delete,
   Download,
   FolderOpened,
   Memo,
@@ -36,6 +35,8 @@ type DetailCaseRow = AiGeneratedCase & {
   deleted: boolean
   manualEdited?: boolean
 }
+
+type CaseReviewState = 'PENDING' | 'ADOPTED' | 'DISCARDED'
 
 type DirectoryOption = {
   value: number | null
@@ -159,18 +160,61 @@ const detailCases = computed<DetailCaseRow[]>(() => {
   }))
 })
 
-const availableCases = computed(() => detailCases.value.filter(item => !item.deleted))
+const availableCases = computed(() => detailCases.value)
 const activeCase = computed<DetailCaseRow | null>(() => availableCases.value[activeCaseCursor.value] ?? null)
 const activeCaseDisplayIndex = computed(() => (activeCase.value ? activeCaseCursor.value + 1 : 0))
 const canPreviewPreviousCase = computed(() => activeCaseCursor.value > 0)
 const canPreviewNextCase = computed(() => activeCaseCursor.value >= 0 && activeCaseCursor.value < availableCases.value.length - 1)
-const adoptableCases = computed(() => availableCases.value.filter(item => !item.adopted))
+const adoptableCases = computed(() => availableCases.value.filter(item => getCaseReviewState(item) === 'PENDING'))
 const selectedCases = computed(() => availableCases.value.filter(item => selectedCaseIndexes.value.includes(item.index)))
-const selectedAdoptableCases = computed(() => selectedCases.value.filter(item => !item.adopted))
+const selectedAdoptableCases = computed(() => selectedCases.value.filter(item => getCaseReviewState(item) === 'PENDING'))
+const selectedDiscardableCases = computed(() => selectedCases.value.filter(item => getCaseReviewState(item) === 'PENDING'))
 const selectedCount = computed(() => selectedCases.value.length)
+const pendingCaseCount = computed(() => availableCases.value.filter(item => getCaseReviewState(item) === 'PENDING').length)
+const adoptedCaseCount = computed(() => availableCases.value.filter(item => getCaseReviewState(item) === 'ADOPTED').length)
+const discardedCaseCount = computed(() => availableCases.value.filter(item => getCaseReviewState(item) === 'DISCARDED').length)
 const adoptDialogCases = computed(() => (
   adoptDialogMode.value === 'selected' ? selectedAdoptableCases.value : adoptableCases.value
 ))
+
+function getCaseReviewState(row: DetailCaseRow | null | undefined): CaseReviewState {
+  if (!row) {
+    return 'PENDING'
+  }
+  if (row.adopted) {
+    return 'ADOPTED'
+  }
+  if (row.deleted) {
+    return 'DISCARDED'
+  }
+  return 'PENDING'
+}
+
+function getCaseReviewStateLabel(row: DetailCaseRow | null | undefined) {
+  const state = getCaseReviewState(row)
+  if (state === 'ADOPTED') {
+    return '已采纳'
+  }
+  if (state === 'DISCARDED') {
+    return '已弃用'
+  }
+  return '未采纳'
+}
+
+function getCaseReviewStateClass(row: DetailCaseRow | null | undefined) {
+  const state = getCaseReviewState(row)
+  if (state === 'ADOPTED') {
+    return 'status-success'
+  }
+  if (state === 'DISCARDED') {
+    return 'status-neutral'
+  }
+  return 'status-info'
+}
+
+function canEditCase(row: DetailCaseRow | null | undefined) {
+  return !!row && getCaseReviewState(row) !== 'ADOPTED'
+}
 
 function startPolling() {
   stopPolling()
@@ -326,7 +370,7 @@ function formatCaseCellText(value: string | null | undefined) {
 }
 
 function getCaseSavedDirectoryName(row: DetailCaseRow) {
-  return row.savedDirectoryName || (row.adopted ? getDefaultDirectoryPath(activeRecord.value) : '-')
+  return row.adopted ? (row.savedDirectoryName || getDefaultDirectoryPath(activeRecord.value)) : '-'
 }
 
 function handleSelectionChange(rows: DetailCaseRow[]) {
@@ -459,6 +503,10 @@ function moveCasePreview(offset: -1 | 1) {
 
 function startCaseEditing() {
   if (!activeCase.value) {
+    return
+  }
+  if (!canEditCase(activeCase.value)) {
+    ElMessage.info('已采纳用例不允许直接编辑，请先撤销采纳')
     return
   }
   syncCaseEditForm(activeCase.value)
@@ -599,7 +647,9 @@ async function confirmAdoptAll() {
     }
 
     const adopted = new Set(activeRecord.value.adoptedCaseIndexes ?? [])
+    const discarded = new Set(activeRecord.value.deletedCaseIndexes ?? [])
     adoptDialogCases.value.forEach(item => adopted.add(item.index))
+    adoptDialogCases.value.forEach(item => discarded.delete(item.index))
     const selectedOption = adoptDirectoryOptions.value.find(item => item.value === adoptForm.directoryId)
     const directoryName = formatDirectoryNameFromOption(selectedOption) ?? activeRecord.value.directoryName
     const adoptedCaseIndexes = adoptDialogCases.value.map(item => item.index)
@@ -612,6 +662,7 @@ async function confirmAdoptAll() {
           : item
       )),
       adoptedCaseIndexes: [...adopted],
+      deletedCaseIndexes: [...discarded],
       savedCaseCount: adopted.size,
     })
 
@@ -661,75 +712,63 @@ async function saveCasePreviewEdit() {
   }
 }
 
-function updatePreviewCursorAfterDelete(deletedIndex: number, previousCursor: number) {
-  if (!casePreviewVisible.value || activeCase.value?.index !== deletedIndex) {
-    return
-  }
-  if (!availableCases.value.length) {
-    casePreviewVisible.value = false
-    casePreviewEditing.value = false
-    activeCaseCursor.value = -1
-    return
-  }
-  activeCaseCursor.value = Math.min(previousCursor, availableCases.value.length - 1)
-  casePreviewEditing.value = false
-  syncCaseEditForm(activeCase.value)
-}
-
-async function deleteSingleCase(row: DetailCaseRow) {
+async function discardSingleCase(row: DetailCaseRow) {
   if (!activeRecord.value) {
     return
   }
-  await ElMessageBox.confirm('确定删除这条生成用例吗？', '删除用例', {
+  if (getCaseReviewState(row) !== 'PENDING') {
+    return
+  }
+  await ElMessageBox.confirm('确定弃用这条生成用例吗？弃用后仍可查看并支持取消弃用。', '弃用用例', {
     type: 'warning',
-    confirmButtonText: '删除',
+    confirmButtonText: '弃用',
     cancelButtonText: '取消',
   })
 
   const deleted = new Set(activeRecord.value.deletedCaseIndexes ?? [])
-  const previousCursor = availableCases.value.findIndex(item => item.index === row.index)
   deleted.add(row.index)
   activeRecord.value = await patchAiGenerationRecord(workspaceCode.value, activeRecord.value.id, {
     deletedCaseIndexes: [...deleted],
   })
-  selectedCaseIndexes.value = selectedCaseIndexes.value.filter(index => index !== row.index)
-  updatePreviewCursorAfterDelete(row.index, previousCursor)
-  ElMessage.success('用例已删除')
+  casePreviewEditing.value = false
+  syncCaseEditForm(activeCase.value)
+  ElMessage.success('用例已弃用')
 }
 
-async function deleteSelectedCases() {
+async function discardSelectedCases() {
   if (!activeRecord.value) {
     ElMessage.warning('当前任务记录不存在，请刷新后重试')
     return
   }
-  if (!selectedCount.value) {
-    ElMessage.info('请先勾选需要删除的用例')
+  if (!selectedDiscardableCases.value.length) {
+    ElMessage.info(selectedCount.value ? '当前选中的用例里没有可弃用项' : '请先勾选需要弃用的用例')
     return
   }
 
-  const deleteCount = selectedCount.value
+  const discardCount = selectedDiscardableCases.value.length
   await ElMessageBox.confirm(
-    `确定删除已选中的 ${deleteCount} 条生成用例吗？`,
-    '批量删除用例',
+    `确定弃用已选中的 ${discardCount} 条生成用例吗？弃用后仍可查看并支持取消弃用。`,
+    '批量弃用用例',
     {
       type: 'warning',
-      confirmButtonText: '删除',
+      confirmButtonText: '弃用',
       cancelButtonText: '取消',
     },
   )
 
   const deleted = new Set(activeRecord.value.deletedCaseIndexes ?? [])
-  selectedCaseIndexes.value.forEach(index => deleted.add(index))
+  selectedDiscardableCases.value.forEach(item => deleted.add(item.index))
   activeRecord.value = await patchAiGenerationRecord(workspaceCode.value, activeRecord.value.id, {
     deletedCaseIndexes: [...deleted],
   })
-  selectedCaseIndexes.value = []
-  ElMessage.success(`已删除 ${deleteCount} 条生成用例`)
+  casePreviewEditing.value = false
+  syncCaseEditForm(activeCase.value)
+  ElMessage.success(`已弃用 ${discardCount} 条生成用例`)
   await loadRecord()
 }
 
 async function adoptSingleCase(row: DetailCaseRow) {
-  if (!activeRecord.value || row.adopted || row.deleted) {
+  if (!activeRecord.value || getCaseReviewState(row) !== 'PENDING') {
     return
   }
 
@@ -749,19 +788,57 @@ async function adoptSingleCase(row: DetailCaseRow) {
   try {
     await platformApi.createCase(activeRecord.value.workspaceCode, payload)
     const adopted = new Set(activeRecord.value.adoptedCaseIndexes ?? [])
+    const discarded = new Set(activeRecord.value.deletedCaseIndexes ?? [])
     adopted.add(row.index)
+    discarded.delete(row.index)
     const savedDirectoryName = activeRecord.value.directoryName ?? getDefaultDirectoryPath(activeRecord.value)
     activeRecord.value = await patchAiGenerationRecord(workspaceCode.value, activeRecord.value.id, {
       generatedCases: activeRecord.value.generatedCases.map((item, index) => (
         index === row.index ? { ...item, savedDirectoryName } : item
       )),
       adoptedCaseIndexes: [...adopted],
+      deletedCaseIndexes: [...discarded],
       savedCaseCount: adopted.size,
     })
     ElMessage.success('用例已采纳')
   } catch (error) {
     ElMessage.error((error as Error).message)
   }
+}
+
+async function revokeSingleCase(row: DetailCaseRow) {
+  if (!activeRecord.value || getCaseReviewState(row) !== 'ADOPTED') {
+    return
+  }
+  await ElMessageBox.confirm('确定撤销采纳这条生成用例吗？撤销后可继续编辑或重新采纳。', '撤销采纳', {
+    type: 'warning',
+    confirmButtonText: '撤销采纳',
+    cancelButtonText: '取消',
+  })
+
+  const adopted = new Set(activeRecord.value.adoptedCaseIndexes ?? [])
+  adopted.delete(row.index)
+  activeRecord.value = await patchAiGenerationRecord(workspaceCode.value, activeRecord.value.id, {
+    adoptedCaseIndexes: [...adopted],
+    savedCaseCount: adopted.size,
+  })
+  casePreviewEditing.value = false
+  syncCaseEditForm(activeCase.value)
+  ElMessage.success('已撤销采纳')
+}
+
+async function restoreSingleCase(row: DetailCaseRow) {
+  if (!activeRecord.value || getCaseReviewState(row) !== 'DISCARDED') {
+    return
+  }
+  const deleted = new Set(activeRecord.value.deletedCaseIndexes ?? [])
+  deleted.delete(row.index)
+  activeRecord.value = await patchAiGenerationRecord(workspaceCode.value, activeRecord.value.id, {
+    deletedCaseIndexes: [...deleted],
+  })
+  casePreviewEditing.value = false
+  syncCaseEditForm(activeCase.value)
+  ElMessage.success('已取消弃用')
 }
 
 async function cancelGeneration() {
@@ -811,17 +888,17 @@ function exportExcel() {
   }
   exporting.value = true
   try {
-    const rows = availableCases.value.map((item) => `
-      <tr>
-        <td>${escapeHtml(`CASE_${String(item.index + 1).padStart(3, '0')}`)}</td>
-        <td>${escapeHtml(item.title ?? '')}</td>
-        <td>${escapeHtml(item.precondition ?? '')}</td>
-        <td>${escapeHtml(item.steps ?? '')}</td>
-        <td>${escapeHtml(item.expectedResult ?? '')}</td>
-        <td>${escapeHtml(item.priority ?? '')}</td>
-        <td>${escapeHtml(item.adopted ? '已采纳' : '未采纳')}</td>
-      </tr>
-    `).join('')
+      const rows = detailCases.value.map((item) => `
+        <tr>
+          <td>${escapeHtml(`CASE_${String(item.index + 1).padStart(3, '0')}`)}</td>
+          <td>${escapeHtml(item.title ?? '')}</td>
+          <td>${escapeHtml(item.precondition ?? '')}</td>
+          <td>${escapeHtml(item.steps ?? '')}</td>
+          <td>${escapeHtml(item.expectedResult ?? '')}</td>
+          <td>${escapeHtml(item.priority ?? '')}</td>
+          <td>${escapeHtml(getCaseReviewStateLabel(item))}</td>
+        </tr>
+      `).join('')
 
     const html = `
       <html xmlns:o="urn:schemas-microsoft-com:office:office"
@@ -845,7 +922,7 @@ function exportExcel() {
               <th>操作步骤</th>
               <th>预期结果</th>
               <th>优先级</th>
-              <th>采纳状态</th>
+              <th>用例状态</th>
             </tr>
             ${rows}
           </table>
@@ -978,12 +1055,12 @@ onBeforeUnmount(() => {
 
     <div v-if="activeRecord" class="panel-card detail-toolbar-card">
       <div class="detail-toolbar-row">
-        <div class="detail-toolbar-meta">
-          <span>生成用例数：{{ activeRecord.generatedCases.length }}</span>
-          <span>当前用例数：{{ availableCases.length }}</span>
-          <span>已采纳：{{ activeRecord.adoptedCaseIndexes.length }}</span>
-          <span>已删除：{{ activeRecord.deletedCaseIndexes.length }}</span>
-        </div>
+          <div class="detail-toolbar-meta">
+            <span>生成用例数：{{ activeRecord.generatedCases.length }}</span>
+            <span>待处理：{{ pendingCaseCount }}</span>
+            <span>已采纳：{{ adoptedCaseCount }}</span>
+            <span>已弃用：{{ discardedCaseCount }}</span>
+          </div>
 
         <div class="detail-toolbar-actions">
           <el-button
@@ -998,11 +1075,11 @@ onBeforeUnmount(() => {
           <el-button
             class="batch-action-button batch-action-button-delete"
             :icon="CircleClose"
-            :disabled="selectedCount === 0"
-            :class="{ 'is-active': selectedCount > 0 }"
-            @click="deleteSelectedCases"
+            :disabled="selectedDiscardableCases.length === 0"
+            :class="{ 'is-active': selectedDiscardableCases.length > 0 }"
+            @click="discardSelectedCases"
           >
-            批量删除（{{ selectedCount }}）
+            批量弃用（{{ selectedDiscardableCases.length }}）
           </el-button>
         </div>
       </div>
@@ -1046,8 +1123,8 @@ onBeforeUnmount(() => {
             </el-table-column>
             <el-table-column v-else-if="column.key === 'status'" label="状态" width="100" align="center">
               <template #default="{ row }">
-                <span class="status-pill" :class="row.adopted ? 'status-success' : 'status-neutral'">
-                  {{ row.adopted ? '已采纳' : '未采纳' }}
+                <span class="status-pill" :class="getCaseReviewStateClass(row)">
+                  {{ getCaseReviewStateLabel(row) }}
                 </span>
               </template>
             </el-table-column>
@@ -1062,7 +1139,7 @@ onBeforeUnmount(() => {
               </template>
             </el-table-column>
           </template>
-          <el-table-column width="168" fixed="right" align="center">
+          <el-table-column width="120" fixed="right" align="center">
             <template #header>
               <div class="table-action-header">
                 <span>操作</span>
@@ -1077,9 +1154,11 @@ onBeforeUnmount(() => {
             </template>
             <template #default="{ row }">
               <div class="table-action-row table-action-row-text">
-                <el-button type="primary" text @click="openCasePreview(row)">查看详情</el-button>
-                <el-button type="success" text :disabled="row.adopted" @click="adoptSingleCase(row)">采纳</el-button>
-                <el-button type="danger" text @click="deleteSingleCase(row)">删除</el-button>
+                <el-button class="table-action-link" type="primary" text @click="openCasePreview(row)">查看详情</el-button>
+                <el-button v-if="getCaseReviewState(row) === 'PENDING'" class="table-action-link" type="success" text @click="adoptSingleCase(row)">采纳</el-button>
+                <el-button v-if="getCaseReviewState(row) === 'PENDING'" class="table-action-link" type="danger" text @click="discardSingleCase(row)">弃用</el-button>
+                <el-button v-if="getCaseReviewState(row) === 'ADOPTED'" class="table-action-link table-action-link-warning" text @click="revokeSingleCase(row)">撤销采纳</el-button>
+                <el-button v-if="getCaseReviewState(row) === 'DISCARDED'" class="table-action-link table-action-link-neutral" text @click="restoreSingleCase(row)">取消弃用</el-button>
               </div>
             </template>
           </el-table-column>
@@ -1183,28 +1262,58 @@ onBeforeUnmount(() => {
           <div class="case-review-footer-right">
             <el-button v-if="casePreviewEditing" :icon="CircleClose" @click="cancelCaseEditing">取消编辑</el-button>
             <el-button
-              v-else
+              v-else-if="activeCase && canEditCase(activeCase)"
               :icon="Memo"
               @click="startCaseEditing"
             >
               编辑
             </el-button>
             <el-button
+              v-if="!casePreviewEditing && activeCase && getCaseReviewState(activeCase) === 'PENDING'"
               type="success"
               :icon="Check"
-              :disabled="!activeCase || activeCase.adopted"
-              @click="activeCase && adoptSingleCase(activeCase)"
+              @click="adoptSingleCase(activeCase)"
             >
-              {{ activeCase?.adopted ? '已采纳' : '采纳' }}
+              采纳
             </el-button>
             <el-button
+              v-if="!casePreviewEditing && activeCase && getCaseReviewState(activeCase) === 'PENDING'"
               type="danger"
               plain
-              :icon="Delete"
-              :disabled="!activeCase"
-              @click="activeCase && deleteSingleCase(activeCase)"
+              :icon="CircleClose"
+              @click="discardSingleCase(activeCase)"
             >
-              删除
+              弃用
+            </el-button>
+            <el-button
+              v-if="!casePreviewEditing && activeCase && getCaseReviewState(activeCase) === 'ADOPTED'"
+              type="success"
+              :icon="Check"
+              disabled
+            >
+              已采纳
+            </el-button>
+            <el-button
+              v-if="!casePreviewEditing && activeCase && getCaseReviewState(activeCase) === 'ADOPTED'"
+              class="case-review-action-warning"
+              @click="revokeSingleCase(activeCase)"
+            >
+              撤销采纳
+            </el-button>
+            <el-button
+              v-if="!casePreviewEditing && activeCase && getCaseReviewState(activeCase) === 'DISCARDED'"
+              type="info"
+              :icon="CircleClose"
+              disabled
+            >
+              已弃用
+            </el-button>
+            <el-button
+              v-if="!casePreviewEditing && activeCase && getCaseReviewState(activeCase) === 'DISCARDED'"
+              class="case-review-action-neutral"
+              @click="restoreSingleCase(activeCase)"
+            >
+              取消弃用
             </el-button>
             <el-button
               v-if="casePreviewEditing"
@@ -1802,6 +1911,32 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 
+.case-review-action-warning {
+  color: #dc6803;
+  border-color: rgba(220, 104, 3, 0.24);
+  background: rgba(255, 250, 235, 0.92);
+}
+
+.case-review-action-warning:hover,
+.case-review-action-warning:focus-visible {
+  color: #b54708;
+  border-color: rgba(181, 71, 8, 0.32);
+  background: rgba(255, 244, 229, 0.96);
+}
+
+.case-review-action-neutral {
+  color: #667085;
+  border-color: rgba(208, 213, 221, 0.92);
+  background: #ffffff;
+}
+
+.case-review-action-neutral:hover,
+.case-review-action-neutral:focus-visible {
+  color: #475467;
+  border-color: rgba(152, 162, 179, 0.96);
+  background: #f8fafc;
+}
+
 .case-cell-clamp {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -1921,8 +2056,39 @@ onBeforeUnmount(() => {
 }
 
 .table-action-row-text {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  grid-auto-rows: 24px;
+  gap: 4px;
+  min-height: 80px;
+  flex-wrap: nowrap;
+}
+
+.table-action-link {
+  width: 72px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
   justify-content: center;
-  flex-wrap: wrap;
+}
+
+.table-action-link-warning {
+  color: #dc6803;
+}
+
+.table-action-link-warning:hover,
+.table-action-link-warning:focus-visible {
+  color: #b54708;
+}
+
+.table-action-link-neutral {
+  color: #667085;
+}
+
+.table-action-link-neutral:hover,
+.table-action-link-neutral:focus-visible {
+  color: #475467;
 }
 
 .priority-chip {

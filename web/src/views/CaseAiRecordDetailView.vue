@@ -133,6 +133,7 @@ const pathPickerSelection = reactive<PathPickerSelection>({
 })
 const caseEditForm = reactive({
   title: '',
+  priority: 'P3',
   precondition: '',
   steps: '',
   expectedResult: '',
@@ -486,6 +487,7 @@ function openCasePreview(row: DetailCaseRow) {
 
 function syncCaseEditForm(row: DetailCaseRow | null) {
   caseEditForm.title = row?.title ?? ''
+  caseEditForm.priority = row?.priority ?? 'P3'
   caseEditForm.precondition = row?.precondition ?? ''
   caseEditForm.steps = row?.steps ?? ''
   caseEditForm.expectedResult = row?.expectedResult ?? ''
@@ -506,7 +508,7 @@ function startCaseEditing() {
     return
   }
   if (!canEditCase(activeCase.value)) {
-    ElMessage.info('已采纳用例不允许直接编辑，请先撤销采纳')
+    ElMessage.info('已采纳用例请前往用例管理进行后续处理')
     return
   }
   syncCaseEditForm(activeCase.value)
@@ -690,6 +692,7 @@ async function saveCasePreviewEdit() {
           ? {
               ...item,
               title: caseEditForm.title.trim(),
+              priority: caseEditForm.priority,
               precondition: caseEditForm.precondition.trim(),
               steps: caseEditForm.steps.trim(),
               expectedResult: caseEditForm.expectedResult.trim(),
@@ -804,27 +807,6 @@ async function adoptSingleCase(row: DetailCaseRow) {
   } catch (error) {
     ElMessage.error((error as Error).message)
   }
-}
-
-async function revokeSingleCase(row: DetailCaseRow) {
-  if (!activeRecord.value || getCaseReviewState(row) !== 'ADOPTED') {
-    return
-  }
-  await ElMessageBox.confirm('确定撤销采纳这条生成用例吗？撤销后可继续编辑或重新采纳。', '撤销采纳', {
-    type: 'warning',
-    confirmButtonText: '撤销采纳',
-    cancelButtonText: '取消',
-  })
-
-  const adopted = new Set(activeRecord.value.adoptedCaseIndexes ?? [])
-  adopted.delete(row.index)
-  activeRecord.value = await patchAiGenerationRecord(workspaceCode.value, activeRecord.value.id, {
-    adoptedCaseIndexes: [...adopted],
-    savedCaseCount: adopted.size,
-  })
-  casePreviewEditing.value = false
-  syncCaseEditForm(activeCase.value)
-  ElMessage.success('已撤销采纳')
 }
 
 async function restoreSingleCase(row: DetailCaseRow) {
@@ -1157,7 +1139,6 @@ onBeforeUnmount(() => {
                 <el-button class="table-action-link" type="primary" text @click="openCasePreview(row)">查看详情</el-button>
                 <el-button v-if="getCaseReviewState(row) === 'PENDING'" class="table-action-link" type="success" text @click="adoptSingleCase(row)">采纳</el-button>
                 <el-button v-if="getCaseReviewState(row) === 'PENDING'" class="table-action-link" type="danger" text @click="discardSingleCase(row)">弃用</el-button>
-                <el-button v-if="getCaseReviewState(row) === 'ADOPTED'" class="table-action-link table-action-link-warning" text @click="revokeSingleCase(row)">撤销采纳</el-button>
                 <el-button v-if="getCaseReviewState(row) === 'DISCARDED'" class="table-action-link table-action-link-neutral" text @click="restoreSingleCase(row)">取消弃用</el-button>
               </div>
             </template>
@@ -1208,6 +1189,20 @@ onBeforeUnmount(() => {
                 placeholder="请输入测试场景"
               />
               <div v-else class="case-preview-content">{{ activeCase.title || '-' }}</div>
+            </div>
+            <div class="case-preview-item case-preview-item-priority">
+              <div class="case-preview-label">用例优先级</div>
+              <el-segmented
+                v-if="casePreviewEditing"
+                v-model="caseEditForm.priority"
+                :options="['P0', 'P1', 'P2', 'P3']"
+                class="case-preview-priority-segmented"
+              />
+              <div v-else class="case-preview-priority-display">
+                <span class="priority-chip" :class="`priority-${activeCase.priority?.toLowerCase?.() || 'p3'}`">
+                  {{ activeCase.priority || 'P3' }}
+                </span>
+              </div>
             </div>
             <div class="case-preview-item">
               <div class="case-preview-label">前置条件</div>
@@ -1292,13 +1287,6 @@ onBeforeUnmount(() => {
               disabled
             >
               已采纳
-            </el-button>
-            <el-button
-              v-if="!casePreviewEditing && activeCase && getCaseReviewState(activeCase) === 'ADOPTED'"
-              class="case-review-action-warning"
-              @click="revokeSingleCase(activeCase)"
-            >
-              撤销采纳
             </el-button>
             <el-button
               v-if="!casePreviewEditing && activeCase && getCaseReviewState(activeCase) === 'DISCARDED'"
@@ -1856,6 +1844,20 @@ onBeforeUnmount(() => {
   grid-column: auto;
 }
 
+.case-preview-item-priority {
+  align-content: start;
+}
+
+.case-preview-priority-display {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+}
+
+.case-preview-priority-segmented {
+  width: fit-content;
+}
+
 .case-preview-content {
   min-height: 72px;
   padding: 14px 16px;
@@ -1909,19 +1911,6 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-}
-
-.case-review-action-warning {
-  color: #dc6803;
-  border-color: rgba(220, 104, 3, 0.24);
-  background: rgba(255, 250, 235, 0.92);
-}
-
-.case-review-action-warning:hover,
-.case-review-action-warning:focus-visible {
-  color: #b54708;
-  border-color: rgba(181, 71, 8, 0.32);
-  background: rgba(255, 244, 229, 0.96);
 }
 
 .case-review-action-neutral {
@@ -2071,15 +2060,6 @@ onBeforeUnmount(() => {
   margin: 0;
   padding: 0;
   justify-content: center;
-}
-
-.table-action-link-warning {
-  color: #dc6803;
-}
-
-.table-action-link-warning:hover,
-.table-action-link-warning:focus-visible {
-  color: #b54708;
 }
 
 .table-action-link-neutral {

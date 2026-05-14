@@ -6,6 +6,8 @@ import {
   ArrowRight,
   Delete,
   Edit,
+  Folder,
+  FolderOpened,
   Fold,
   MoreFilled,
   Plus,
@@ -348,6 +350,24 @@ function findParentNode(targetId: string): TreeNode | null {
   }
   return null
 }
+function findTreeNode(targetId: string): TreeNode | null {
+  return flatTreeNodes.value.find(item => item.id === targetId) ?? null
+}
+function collectDescendantNodeIds(node: TreeNode): string[] {
+  const ids: string[] = []
+  const stack = [...node.children]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    ids.push(current.id)
+    if (current.children.length) {
+      stack.push(...current.children)
+    }
+  }
+  return ids
+}
 const selectedNodePath = computed(() => {
   const node = selectedNode.value
   if (!node || node.type === 'root') {
@@ -662,6 +682,9 @@ function shouldUseCellTooltip(key: CaseColumnKey) {
   return key === 'title'
     || key === 'directoryName'
 }
+function isTreeNodeExpanded(nodeId: string) {
+  return expandedTreeKeys.value.includes(nodeId)
+}
 async function loadCases() {
   loading.value = true
   try {
@@ -954,7 +977,15 @@ function handleTreeNodeExpand(_: TreeNode, treeNode: { key: string }) {
   persistCaseViewMemory()
 }
 function handleTreeNodeCollapse(_: TreeNode, treeNode: { key: string }) {
-  expandedTreeKeys.value = expandedTreeKeys.value.filter(key => key !== String(treeNode.key))
+  const collapsedKey = String(treeNode.key)
+  const currentNode = findTreeNode(collapsedKey)
+  if (!currentNode) {
+    expandedTreeKeys.value = expandedTreeKeys.value.filter(key => key !== collapsedKey)
+    persistCaseViewMemory()
+    return
+  }
+  const blockedKeys = new Set([collapsedKey, ...collectDescendantNodeIds(currentNode)])
+  expandedTreeKeys.value = expandedTreeKeys.value.filter(key => !blockedKeys.has(key))
   persistCaseViewMemory()
 }
 function openCreateModuleForNode(node: TreeNode) {
@@ -1273,8 +1304,17 @@ onMounted(bootstrap)
           <template #default="{ data }">
             <div class="tree-node">
               <div class="tree-node-main">
-                <span :class="['tree-node-dot', 'tree-node-dot-' + data.type]" />
-                <span class="tree-node-label">{{ data.label }}</span>
+                <span
+                  v-if="data.type === 'workspace'"
+                  :class="['tree-node-folder-svg', { 'is-open': isTreeNodeExpanded(data.id) }]"
+                  aria-hidden="true"
+                >
+                  <el-icon class="tree-node-folder-icon">
+                    <FolderOpened v-if="isTreeNodeExpanded(data.id)" />
+                    <Folder v-else />
+                  </el-icon>
+                </span>
+                <span :class="['tree-node-label', { 'tree-node-label-root': data.type === 'root' }]">{{ data.label }}</span>
               </div>
               <div class="tree-node-actions" @click.stop>
                 <el-button
@@ -1804,28 +1844,32 @@ onMounted(bootstrap)
 .tree-node-main {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
-.tree-node-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
+.tree-node-folder-svg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
 }
-.tree-node-dot-root {
-  background: #246bff;
+.tree-node-folder-icon {
+  font-size: 16px;
+  color: #d7a12b;
 }
-.tree-node-dot-workspace {
-  background: #7f56d9;
-}
-.tree-node-dot-module {
-  background: #14a36d;
+.tree-node-folder-svg.is-open .tree-node-folder-icon {
+  color: #c98312;
 }
 .tree-node-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.tree-node-label-root {
+  font-weight: 700;
+  color: #101828;
 }
 .tree-node-actions {
   display: inline-flex;

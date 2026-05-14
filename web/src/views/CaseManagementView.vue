@@ -1566,12 +1566,12 @@ onMounted(bootstrap)
     />
 
     <el-dialog v-model="moduleDialogVisible" :title="moduleDialogMode === 'create' ? '新建子模块' : '重命名子模块'" width="420px">
-      <el-form label-width="90px">
+      <el-form label-width="90px" @submit.prevent="submitModule">
         <el-form-item label="所属位置">
           <span>{{ selectedNodePath }}</span>
         </el-form-item>
         <el-form-item label="模块名称" required>
-          <el-input v-model="moduleForm.label" maxlength="30" show-word-limit />
+          <el-input v-model="moduleForm.label" maxlength="30" show-word-limit @keydown.enter.prevent="submitModule" />
         </el-form-item>
       </el-form>
       <template #footer>

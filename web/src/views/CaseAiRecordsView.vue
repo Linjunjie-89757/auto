@@ -1000,8 +1000,12 @@ onBeforeUnmount(() => {
 }
 
 .record-table :deep(.el-table-fixed-column--right) {
-  background: var(--bg-panel);
-  box-shadow: -8px 0 16px rgba(15, 23, 42, 0.06);
+  background: transparent;
+  box-shadow: none;
+}
+
+.record-table :deep(.el-table__fixed-right-patch) {
+  background: rgba(248, 250, 252, 0.96);
 }
 
 .record-table :deep(.el-table__body-wrapper .el-scrollbar__wrap) {

@@ -77,7 +77,7 @@ const activeMeta = computed(() => tabMeta[activeTab.value] ?? tabMeta.manage)
 .case-center-shell {
   height: 100%;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .case-center-content {
@@ -85,7 +85,7 @@ const activeMeta = computed(() => tabMeta[activeTab.value] ?? tabMeta.manage)
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .case-center-content > :deep(*) {

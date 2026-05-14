@@ -11,6 +11,7 @@ import com.company.autoplatform.workspace.WorkspaceEntity;
 import com.company.autoplatform.workspace.WorkspaceScope;
 import com.company.autoplatform.workspace.WorkspaceService;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -35,17 +36,23 @@ public class CaseService {
 
     private final CaseMapper caseMapper;
     private final CaseDirectoryMapper caseDirectoryMapper;
+    private final CaseExecutionAttachmentMapper caseExecutionAttachmentMapper;
+    private final CaseExecutionAttachmentStorageService caseExecutionAttachmentStorageService;
     private final UserService userService;
     private final WorkspaceService workspaceService;
 
     public CaseService(
             CaseMapper caseMapper,
             CaseDirectoryMapper caseDirectoryMapper,
+            CaseExecutionAttachmentMapper caseExecutionAttachmentMapper,
+            CaseExecutionAttachmentStorageService caseExecutionAttachmentStorageService,
             UserService userService,
             WorkspaceService workspaceService
     ) {
         this.caseMapper = caseMapper;
         this.caseDirectoryMapper = caseDirectoryMapper;
+        this.caseExecutionAttachmentMapper = caseExecutionAttachmentMapper;
+        this.caseExecutionAttachmentStorageService = caseExecutionAttachmentStorageService;
         this.userService = userService;
         this.workspaceService = workspaceService;
     }
@@ -195,6 +202,73 @@ public class CaseService {
         entity.setUpdatedBy(CurrentUserContext.get());
         caseMapper.updateById(entity);
         return toCaseDetail(entity);
+    }
+
+    public List<CaseExecutionAttachmentResponse> uploadExecutionAttachments(Long caseId, String workspaceCode, List<MultipartFile> files) {
+        CaseEntity entity = requireCase(caseId);
+        validateReadable(entity, workspaceCode);
+        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
+
+        List<StoredCaseExecutionFile> storedFiles = caseExecutionAttachmentStorageService.storeAll(entity.getWorkspaceId(), caseId, files);
+        List<CaseExecutionAttachmentEntity> createdAttachments = new ArrayList<>();
+        try {
+            for (int i = 0; i < storedFiles.size(); i++) {
+                MultipartFile file = files.get(i);
+                StoredCaseExecutionFile storedFile = storedFiles.get(i);
+                CaseExecutionAttachmentEntity attachment = new CaseExecutionAttachmentEntity();
+                attachment.setCaseId(caseId);
+                attachment.setWorkspaceId(entity.getWorkspaceId());
+                attachment.setFileName(file.getOriginalFilename());
+                attachment.setStoredPath(storedFile.storedPath());
+                attachment.setContentType(storedFile.contentType());
+                attachment.setFileSize(storedFile.fileSize());
+                attachment.setCreatedAt(LocalDateTime.now());
+                attachment.setUpdatedAt(LocalDateTime.now());
+                caseExecutionAttachmentMapper.insert(attachment);
+                createdAttachments.add(attachment);
+            }
+        } catch (RuntimeException exception) {
+            for (CaseExecutionAttachmentEntity attachment : createdAttachments) {
+                if (attachment.getId() != null) {
+                    caseExecutionAttachmentMapper.deleteById(attachment.getId());
+                }
+                caseExecutionAttachmentStorageService.delete(attachment.getStoredPath());
+            }
+            for (StoredCaseExecutionFile storedFile : storedFiles) {
+                caseExecutionAttachmentStorageService.delete(storedFile.storedPath());
+            }
+            throw exception;
+        }
+
+        entity.setUpdatedAt(LocalDateTime.now());
+        entity.setUpdatedBy(CurrentUserContext.get());
+        caseMapper.updateById(entity);
+        return createdAttachments.stream().map(attachment -> toAttachmentResponse(entity, attachment)).toList();
+    }
+
+    public void deleteExecutionAttachment(Long caseId, Long attachmentId, String workspaceCode) {
+        CaseEntity entity = requireCase(caseId);
+        validateReadable(entity, workspaceCode);
+        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
+        CaseExecutionAttachmentEntity attachment = requireExecutionAttachment(attachmentId);
+        if (!attachment.getCaseId().equals(caseId)) {
+            throw new BadRequestException("执行附件不属于当前用例");
+        }
+        caseExecutionAttachmentMapper.deleteById(attachmentId);
+        caseExecutionAttachmentStorageService.delete(attachment.getStoredPath());
+        entity.setUpdatedAt(LocalDateTime.now());
+        entity.setUpdatedBy(CurrentUserContext.get());
+        caseMapper.updateById(entity);
+    }
+
+    public CaseExecutionFileDownload downloadExecutionAttachment(Long caseId, Long attachmentId, String workspaceCode) {
+        CaseEntity entity = requireCase(caseId);
+        validateReadable(entity, workspaceCode);
+        CaseExecutionAttachmentEntity attachment = requireExecutionAttachment(attachmentId);
+        if (!attachment.getCaseId().equals(caseId)) {
+            throw new BadRequestException("执行附件不属于当前用例");
+        }
+        return caseExecutionAttachmentStorageService.load(attachment);
     }
 
     public PageResponse<CaseSummaryResponse> batchMoveCases(String workspaceCode, BatchMoveCasesRequest request) {
@@ -363,6 +437,14 @@ public class CaseService {
         return entity;
     }
 
+    private CaseExecutionAttachmentEntity requireExecutionAttachment(Long attachmentId) {
+        CaseExecutionAttachmentEntity attachment = caseExecutionAttachmentMapper.selectById(attachmentId);
+        if (attachment == null) {
+            throw new NotFoundException("执行附件不存在");
+        }
+        return attachment;
+    }
+
     public CaseDirectoryEntity requireDirectory(Long id) {
         CaseDirectoryEntity entity = caseDirectoryMapper.selectById(id);
         if (entity == null) {
@@ -489,6 +571,12 @@ public class CaseService {
         UserEntity executor = item.getExecutorId() == null ? null : userService.requireUser(item.getExecutorId());
         UserEntity creator = item.getCreatedBy() == null ? null : userService.requireUser(item.getCreatedBy());
         UserEntity updater = item.getUpdatedBy() == null ? null : userService.requireUser(item.getUpdatedBy());
+        List<CaseExecutionAttachmentResponse> attachments = caseExecutionAttachmentMapper.selectList(new LambdaQueryWrapper<CaseExecutionAttachmentEntity>()
+                        .eq(CaseExecutionAttachmentEntity::getCaseId, item.getId())
+                        .orderByAsc(CaseExecutionAttachmentEntity::getId))
+                .stream()
+                .map(attachment -> toAttachmentResponse(item, attachment))
+                .toList();
         return new CaseDetailResponse(
                 item.getId(),
                 item.getCaseNo(),
@@ -521,7 +609,19 @@ public class CaseService {
                 item.getReviewedAt() == null ? null : item.getReviewedAt().toString(),
                 item.getPrecondition(),
                 item.getSteps(),
-                item.getExpectedResult()
+                item.getExpectedResult(),
+                attachments
+        );
+    }
+
+    private CaseExecutionAttachmentResponse toAttachmentResponse(CaseEntity item, CaseExecutionAttachmentEntity attachment) {
+        return new CaseExecutionAttachmentResponse(
+                attachment.getId(),
+                attachment.getFileName(),
+                attachment.getContentType(),
+                attachment.getFileSize(),
+                "/api/cases/" + item.getId() + "/attachments/" + attachment.getId() + "/download",
+                attachment.getCreatedAt()
         );
     }
 

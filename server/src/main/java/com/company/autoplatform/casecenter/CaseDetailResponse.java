@@ -32,6 +32,7 @@ public record CaseDetailResponse(
         String reviewedAt,
         String precondition,
         String steps,
-        String expectedResult
+        String expectedResult,
+        java.util.List<CaseExecutionAttachmentResponse> attachments
 ) {
 }

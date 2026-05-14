@@ -21,6 +21,7 @@ public record BugDetailResponse(
         List<String> tags,
         String workspaceCode,
         String workspaceName,
+        List<BugAttachmentResponse> attachments,
         List<BugFlowResponse> flows,
         List<BugCommentResponse> comments
 ) {

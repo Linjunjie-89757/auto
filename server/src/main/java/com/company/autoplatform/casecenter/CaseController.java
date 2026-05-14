@@ -6,8 +6,14 @@ import com.company.autoplatform.common.ApiResponse;
 import com.company.autoplatform.common.PageResponse;
 import com.company.autoplatform.workspace.WorkspaceScope;
 import jakarta.validation.Valid;
+import org.springframework.core.io.Resource;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -16,7 +22,9 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 @RestController
@@ -124,6 +132,42 @@ public class CaseController {
             @Valid @RequestBody ExecuteCaseRequest request
     ) {
         return ApiResponse.ok(caseService.executeCase(id, workspaceCode, request), "用例执行结果已更新");
+    }
+
+    @PostMapping(value = "/{id}/attachments", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<List<CaseExecutionAttachmentResponse>> uploadExecutionAttachment(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @ModelAttribute("files") List<MultipartFile> files
+    ) {
+        return ApiResponse.ok(caseService.uploadExecutionAttachments(id, workspaceCode, files), "执行附件上传成功");
+    }
+
+    @DeleteMapping("/{id}/attachments/{attachmentId}")
+    public ApiResponse<Void> deleteExecutionAttachment(
+            @PathVariable Long id,
+            @PathVariable Long attachmentId,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        caseService.deleteExecutionAttachment(id, attachmentId, workspaceCode);
+        return ApiResponse.ok(null, "执行附件删除成功");
+    }
+
+    @GetMapping("/{id}/attachments/{attachmentId}/download")
+    public ResponseEntity<Resource> downloadExecutionAttachment(
+            @PathVariable Long id,
+            @PathVariable Long attachmentId,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        CaseExecutionFileDownload download = caseService.downloadExecutionAttachment(id, attachmentId, workspaceCode);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(download.contentType()))
+                .contentLength(download.fileSize())
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(download.fileName(), StandardCharsets.UTF_8)
+                        .build()
+                        .toString())
+                .body(download.resource());
     }
 
     @PostMapping("/batch/move")

@@ -8,9 +8,11 @@ import type {
   AiRequirementAsset,
   ImportRequirementDocumentResponse,
   AiReviewResult,
+  BugAttachment,
   BugDetail,
   BugStats,
   BugSummary,
+  CaseExecutionAttachment,
   CaseDirectoryNode,
   CaseDirectoryWorkspace,
   CaseDetail,
@@ -60,6 +62,7 @@ import type {
 } from '../types/api'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080/api'
+const API_ORIGIN = new URL(API_BASE).origin
 
 export function resolveApiUrl(path: string) {
   if (!path) {
@@ -67,6 +70,9 @@ export function resolveApiUrl(path: string) {
   }
   if (/^https?:\/\//i.test(path)) {
     return path
+  }
+  if (path.startsWith('/api/')) {
+    return `${API_ORIGIN}${path}`
   }
   return `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`
 }
@@ -338,6 +344,50 @@ export const platformApi = {
       body: JSON.stringify(payload),
     })
   },
+  uploadCaseExecutionAttachment(workspaceCode: string, id: number, files: File[]) {
+    const formData = new FormData()
+    files.forEach(file => formData.append('files', file))
+    return request<CaseExecutionAttachment[]>(`/cases/${id}/attachments`, {
+      method: 'POST',
+      workspaceCode,
+      body: formData,
+    })
+  },
+  deleteCaseExecutionAttachment(workspaceCode: string, caseId: number, attachmentId: number) {
+    return request<void>(`/cases/${caseId}/attachments/${attachmentId}`, {
+      method: 'DELETE',
+      workspaceCode,
+    })
+  },
+  async downloadCaseExecutionAttachment(workspaceCode: string, caseId: number, attachmentId: number, fileName: string) {
+    const response = await fetch(`${API_BASE}/cases/${caseId}/attachments/${attachmentId}/download`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        'X-Workspace-Code': workspaceCode,
+      },
+    })
+    if (!response.ok) {
+      let message = '执行附件下载失败'
+      try {
+        const payload = await response.json() as ApiResponse<null>
+        message = payload.message || message
+      }
+      catch {
+        // ignore json parse failure for binary response
+      }
+      throw buildError(message, response.status)
+    }
+    const blob = await response.blob()
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = fileName
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+  },
   batchMoveCases(workspaceCode: string, payload: BatchMoveCasesPayload) {
     return request<PageResponse<CaseItem>>('/cases/batch/move', {
       method: 'POST',
@@ -468,6 +518,50 @@ export const platformApi = {
   },
   async downloadReportAttachment(workspaceCode: string, reportId: number, attachmentId: number, fileName: string) {
     const response = await fetch(`${API_BASE}/reports/${reportId}/attachments/${attachmentId}/download`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        'X-Workspace-Code': workspaceCode,
+      },
+    })
+    if (!response.ok) {
+      let message = '附件下载失败'
+      try {
+        const payload = await response.json() as ApiResponse<null>
+        message = payload.message || message
+      }
+      catch {
+        // ignore json parse failure for binary response
+      }
+      throw buildError(message, response.status)
+    }
+    const blob = await response.blob()
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = fileName
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+  },
+  async uploadBugAttachment(workspaceCode: string, id: number, files: File[]) {
+    const formData = new FormData()
+    files.forEach(file => formData.append('files', file))
+    return request<BugAttachment[]>(`/bugs/${id}/attachments`, {
+      method: 'POST',
+      workspaceCode,
+      body: formData,
+    })
+  },
+  deleteBugAttachment(workspaceCode: string, bugId: number, attachmentId: number) {
+    return request<void>(`/bugs/${bugId}/attachments/${attachmentId}`, {
+      method: 'DELETE',
+      workspaceCode,
+    })
+  },
+  async downloadBugAttachment(workspaceCode: string, bugId: number, attachmentId: number, fileName: string) {
+    const response = await fetch(`${API_BASE}/bugs/${bugId}/attachments/${attachmentId}/download`, {
       method: 'GET',
       credentials: 'include',
       headers: {

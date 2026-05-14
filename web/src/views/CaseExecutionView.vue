@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ArrowLeft, ArrowRight, Edit, Filter, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
-import { platformApi } from '../api/platform'
+import { platformApi, resolveApiUrl } from '../api/platform'
+import BugDetailDrawer from '../components/BugDetailDrawer.vue'
+import BugEditorDrawer from '../components/BugEditorDrawer.vue'
 import CaseEditorDrawer from '../components/CaseEditorDrawer.vue'
 import { useCaseCenterShared } from '../composables/useCaseCenterShared'
 import { loadCaseExecutionContext, type CaseExecutionContext } from '../utils/caseExecutionContext'
@@ -17,11 +19,11 @@ import {
   reviewStatusTagType,
   type ExecutionStatus,
 } from '../utils/casePresentation'
-import type { BugDetail, BugSummary, CaseDetail, CaseDirectoryNode, CaseItem, CreateCasePayload, UpdateBugPayload } from '../types/api'
+import type { BugDetail, BugSummary, CaseDetail, CaseDirectoryNode, CaseItem, CreateBugPayload, CreateCasePayload, UpdateBugPayload } from '../types/api'
 
 const route = useRoute()
 const router = useRouter()
-const { workspaceCode, canWriteWorkspace, loadSharedBase, workspaces } = useCaseCenterShared()
+const { workspaceCode, canWriteWorkspace, loadSharedBase, workspaces, users } = useCaseCenterShared()
 
 const loading = ref(false)
 const caseSaving = ref(false)
@@ -41,7 +43,32 @@ const bugLinkDialogVisible = ref(false)
 const bugLinkLoading = ref(false)
 const bugLinkKeyword = ref('')
 const linkingBugId = ref<number | null>(null)
+const bugCreateVisible = ref(false)
+const bugDetailVisible = ref(false)
+const bugSaving = ref(false)
+const bugTransitioning = ref(false)
+const bugCommenting = ref(false)
+const bugAttachmentUploading = ref(false)
+const bugAttachmentRemovingId = ref<number | null>(null)
+const bugEditorMode = ref<'create' | 'edit'>('create')
+const activeBugDetail = ref<BugDetail | null>(null)
+const relatedBugDetails = ref<Record<number, BugDetail>>({})
+const executionAttachmentUploading = ref(false)
+const executionAttachmentRemovingId = ref<number | null>(null)
+const executionAttachmentInput = ref<HTMLInputElement | null>(null)
+const executionAttachmentDropActive = ref(false)
+const executionAttachmentImageUrls = ref<Record<number, string>>({})
+const activeExecutionImageAttachmentId = ref<number | null>(null)
+const executionImagePreviewVisible = ref(false)
+const executionImagePreviewTitle = ref('')
+const executionImagePreviewUrl = ref('')
+const executionImagePreviewScale = ref(1)
+const executionImagePreviewOffset = ref({ x: 0, y: 0 })
+const executionImagePreviewDragging = ref(false)
+const executionImagePreviewDragOrigin = ref({ x: 0, y: 0, offsetX: 0, offsetY: 0 })
 const caseEditorVisible = ref(false)
+const EXECUTION_ATTACHMENT_MAX_COUNT = 15
+const EXECUTION_ATTACHMENT_MAX_SIZE = 10 * 1024 * 1024
 const caseModulePickerLoading = ref(false)
 const caseModuleDirectoryTree = ref<CaseDirectoryNode[]>([])
 const caseEditorForm = ref({
@@ -55,6 +82,16 @@ const caseEditorForm = ref({
   precondition: '',
   steps: '',
   expectedResult: '',
+})
+const bugForm = ref<CreateBugPayload & { workspaceCode: string }>({
+  workspaceCode: '',
+  title: '',
+  description: '',
+  priority: 'P1',
+  severity: 'HIGH',
+  assigneeId: null,
+  relatedCaseId: null,
+  tags: [],
 })
 
 const sidebarStatusOptions: Array<{ label: string, value: ExecutionStatus | '' }> = [
@@ -145,6 +182,40 @@ const availableLinkBugs = computed(() => {
       return item.bugNo.toLowerCase().includes(keyword) || item.title.toLowerCase().includes(keyword)
     })
 })
+const bugAssigneeOptions = computed(() => {
+  if (!detail.value?.workspaceCode) {
+    return []
+  }
+  return users.value.filter(item => item.workspaceCodes.includes(detail.value!.workspaceCode))
+})
+const canSubmitBugCreate = computed(() => (
+  !!bugForm.value.workspaceCode
+  && !!bugForm.value.title.trim()
+  && !!bugForm.value.description.trim()
+))
+const executionBugSourceContext = computed(() => ({
+  caseNo: detail.value?.caseNo || '-',
+  caseTitle: detail.value?.title || '-',
+  modulePath: modulePath.value,
+  executionStatus: executionStatusLabel(selectedExecutionStatus.value || detail.value?.executionStatus || 'NOT_RUN'),
+  actualResult: executionComment.value.trim() || '-',
+}))
+const executionImageAttachments = computed(() => (
+  detail.value?.attachments.filter(item => isImageAttachment(item.contentType, item.fileName)) ?? []
+))
+const activeExecutionImageIndex = computed(() => (
+  executionImageAttachments.value.findIndex(item => item.id === activeExecutionImageAttachmentId.value)
+))
+const canPreviewPreviousExecutionImage = computed(() => activeExecutionImageIndex.value > 0)
+const canPreviewNextExecutionImage = computed(() => (
+  activeExecutionImageIndex.value >= 0 && activeExecutionImageIndex.value < executionImageAttachments.value.length - 1
+))
+const executionImagePreviewCounter = computed(() => {
+  if (activeExecutionImageIndex.value < 0) {
+    return ''
+  }
+  return `${activeExecutionImageIndex.value + 1} / ${executionImageAttachments.value.length}`
+})
 
 function buildFallbackCase(detailRow: CaseDetail): CaseItem {
   return {
@@ -184,6 +255,26 @@ function normalizeDirectoryLabel(path: string | null | undefined) {
     .map(segment => segment.trim())
     .filter(Boolean)
     .join(' / ')
+}
+
+function buildExecutionBugDescription(target: CaseDetail) {
+  return [
+    `用例编号：${target.caseNo || '-'}`,
+    `用例标题：${target.title || '-'}`,
+    `用例模块：${modulePath.value}`,
+    '',
+    '前置条件：',
+    target.precondition || '-',
+    '',
+    '测试步骤：',
+    target.steps || '-',
+    '',
+    '预期结果：',
+    target.expectedResult || '-',
+    '',
+    '实际结果：',
+    executionComment.value.trim() || '-',
+  ].join('\n')
 }
 
 function findDirectoryNameById(nodes: CaseDirectoryNode[], directoryId: number | null, trail: string[] = []): string {
@@ -345,6 +436,43 @@ function openLinkBugDialog() {
   bugLinkDialogVisible.value = true
 }
 
+function openCreateBugDrawer() {
+  if (!detail.value) {
+    return
+  }
+  bugEditorMode.value = 'create'
+  bugForm.value = {
+    workspaceCode: detail.value.workspaceCode,
+    title: '',
+    description: buildExecutionBugDescription(detail.value),
+    priority: 'P1',
+    severity: 'HIGH',
+    assigneeId: null,
+    relatedCaseId: detail.value.id,
+    tags: [],
+  }
+  bugCreateVisible.value = true
+}
+
+function openEditBugDrawer() {
+  if (!activeBugDetail.value) {
+    return
+  }
+  bugDetailVisible.value = false
+  bugEditorMode.value = 'edit'
+  bugForm.value = {
+    workspaceCode: activeBugDetail.value.workspaceCode,
+    title: activeBugDetail.value.title,
+    description: activeBugDetail.value.description,
+    priority: activeBugDetail.value.priority,
+    severity: activeBugDetail.value.severity,
+    assigneeId: activeBugDetail.value.assigneeId,
+    relatedCaseId: activeBugDetail.value.relatedCaseId,
+    tags: [...activeBugDetail.value.tags],
+  }
+  bugCreateVisible.value = true
+}
+
 async function associateBug(bugId: number) {
   if (!currentCaseId.value || !detail.value) {
     return
@@ -364,6 +492,530 @@ async function associateBug(bugId: number) {
   finally {
     linkingBugId.value = null
     bugLinkLoading.value = false
+  }
+}
+
+async function openBugDetail(bugId: number) {
+  if (!detail.value) {
+    return
+  }
+  bugDetailVisible.value = true
+  try {
+    activeBugDetail.value = await platformApi.getBugDetail(detail.value.workspaceCode, bugId)
+    relatedBugDetails.value = {
+      ...relatedBugDetails.value,
+      [activeBugDetail.value.id]: activeBugDetail.value,
+    }
+  }
+  catch (error) {
+    bugDetailVisible.value = false
+    ElMessage.error((error as Error).message)
+  }
+}
+
+async function openBugDetailForEdit(bugId: number) {
+  await openBugDetail(bugId)
+  openEditBugDrawer()
+}
+
+async function reloadActiveBugDetail() {
+  if (!detail.value || !activeBugDetail.value) {
+    return
+  }
+  activeBugDetail.value = await platformApi.getBugDetail(detail.value.workspaceCode, activeBugDetail.value.id)
+  relatedBugDetails.value = {
+    ...relatedBugDetails.value,
+    [activeBugDetail.value.id]: activeBugDetail.value,
+  }
+}
+
+async function submitCreateBug() {
+  if (!detail.value || !currentCaseId.value) {
+    return
+  }
+  if (!bugForm.value.title.trim()) {
+    ElMessage.error('请输入缺陷标题')
+    return
+  }
+  if (!bugForm.value.description.trim()) {
+    ElMessage.error('请输入缺陷描述')
+    return
+  }
+  bugSaving.value = true
+  try {
+    const payload = {
+      workspaceCode: bugForm.value.workspaceCode,
+      title: bugForm.value.title.trim(),
+      description: bugForm.value.description.trim(),
+      priority: bugForm.value.priority,
+      severity: bugForm.value.severity,
+      assigneeId: bugForm.value.assigneeId,
+      tags: bugForm.value.tags,
+    }
+    if (bugEditorMode.value === 'create') {
+      await platformApi.createBugFromCase(detail.value.workspaceCode, currentCaseId.value, {
+        ...payload,
+        relatedCaseId: currentCaseId.value,
+      })
+      ElMessage.success('已从用例创建缺陷')
+    }
+    else if (activeBugDetail.value) {
+      activeBugDetail.value = await platformApi.updateBug(detail.value.workspaceCode, activeBugDetail.value.id, {
+        ...payload,
+        relatedCaseId: currentCaseId.value,
+      })
+      ElMessage.success('缺陷已更新')
+    }
+    bugCreateVisible.value = false
+    activeTab.value = 'bugs'
+    await loadRelatedBugs(currentCaseId.value, detail.value.workspaceCode)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    bugSaving.value = false
+  }
+}
+
+async function unlinkBug(bug: BugSummary | BugDetail) {
+  if (!detail.value) {
+    return
+  }
+  try {
+    const target = 'description' in bug
+      ? bug
+      : await platformApi.getBugDetail(detail.value.workspaceCode, bug.id)
+    await platformApi.updateBug(detail.value.workspaceCode, target.id, {
+      workspaceCode: target.workspaceCode,
+      title: target.title,
+      description: target.description,
+      priority: target.priority,
+      severity: target.severity,
+      assigneeId: target.assigneeId,
+      relatedCaseId: null,
+      tags: target.tags,
+    })
+    ElMessage.success('已取消关联缺陷')
+    if (activeBugDetail.value?.id === target.id) {
+      bugDetailVisible.value = false
+      activeBugDetail.value = null
+    }
+    await loadRelatedBugs(currentCaseId.value ?? detail.value.id, detail.value.workspaceCode)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+}
+
+async function submitBugTransition(payload: { status: string, comment: string }) {
+  if (!detail.value || !activeBugDetail.value) {
+    return
+  }
+  bugTransitioning.value = true
+  try {
+    activeBugDetail.value = await platformApi.transitionBug(
+      detail.value.workspaceCode,
+      activeBugDetail.value.id,
+      payload.status,
+      payload.comment,
+    )
+    ElMessage.success('缺陷状态已更新')
+    await loadRelatedBugs(currentCaseId.value ?? detail.value.id, detail.value.workspaceCode)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    bugTransitioning.value = false
+  }
+}
+
+async function submitBugComment(content: string) {
+  if (!detail.value || !activeBugDetail.value) {
+    return
+  }
+  bugCommenting.value = true
+  try {
+    await platformApi.addBugComment(detail.value.workspaceCode, activeBugDetail.value.id, content)
+    activeBugDetail.value = await platformApi.getBugDetail(detail.value.workspaceCode, activeBugDetail.value.id)
+    ElMessage.success('评论已添加')
+    await loadRelatedBugs(currentCaseId.value ?? detail.value.id, detail.value.workspaceCode)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    bugCommenting.value = false
+  }
+}
+
+async function uploadBugAttachments(files: File[]) {
+  if (!detail.value || !activeBugDetail.value) {
+    return
+  }
+  bugAttachmentUploading.value = true
+  try {
+    await platformApi.uploadBugAttachment(detail.value.workspaceCode, activeBugDetail.value.id, files)
+    await reloadActiveBugDetail()
+    await loadRelatedBugs(currentCaseId.value ?? detail.value.id, detail.value.workspaceCode)
+    ElMessage.success(`已上传 ${files.length} 个附件`)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    bugAttachmentUploading.value = false
+  }
+}
+
+async function downloadBugAttachment(attachmentId: number) {
+  if (!detail.value) {
+    return
+  }
+  const attachment = activeBugDetail.value?.attachments.find(item => item.id === attachmentId)
+  const sourceBug = activeBugDetail.value
+  if (!attachment || !sourceBug) {
+    return
+  }
+  try {
+    await platformApi.downloadBugAttachment(detail.value.workspaceCode, sourceBug.id, attachmentId, attachment.fileName)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+}
+
+function isImageAttachment(contentType: string | null | undefined, fileName: string) {
+  if (contentType?.toLowerCase().startsWith('image/')) {
+    return true
+  }
+  return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(fileName)
+}
+
+function revokeExecutionAttachmentImageUrls(keepIds: number[] = []) {
+  const keep = new Set(keepIds)
+  const nextUrls: Record<number, string> = {}
+  Object.entries(executionAttachmentImageUrls.value).forEach(([key, value]) => {
+    const attachmentId = Number(key)
+    if (keep.has(attachmentId)) {
+      nextUrls[attachmentId] = value
+      return
+    }
+    URL.revokeObjectURL(value)
+  })
+  executionAttachmentImageUrls.value = nextUrls
+}
+
+async function ensureExecutionAttachmentImageUrl(attachmentId: number) {
+  const cached = executionAttachmentImageUrls.value[attachmentId]
+  if (cached) {
+    return cached
+  }
+  const attachment = detail.value?.attachments.find(item => item.id === attachmentId)
+  const workspace = detail.value?.workspaceCode
+  if (!attachment || !detail.value || !workspace || !isImageAttachment(attachment.contentType, attachment.fileName)) {
+    return ''
+  }
+  const response = await fetch(resolveApiUrl(
+    attachment.downloadUrl || `/cases/${detail.value.id}/attachments/${attachment.id}/download`,
+  ), {
+    method: 'GET',
+    credentials: 'include',
+    headers: {
+      'X-Workspace-Code': workspace,
+    },
+  })
+  if (!response.ok) {
+    throw new Error('图片预览加载失败')
+  }
+  const blob = await response.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  executionAttachmentImageUrls.value = {
+    ...executionAttachmentImageUrls.value,
+    [attachmentId]: objectUrl,
+  }
+  return objectUrl
+}
+
+async function syncExecutionAttachmentImageUrls(attachments: CaseDetail['attachments']) {
+  const imageAttachments = attachments.filter(item => isImageAttachment(item.contentType, item.fileName))
+  revokeExecutionAttachmentImageUrls(imageAttachments.map(item => item.id))
+  await Promise.all(imageAttachments.map(async (attachment) => {
+    try {
+      await ensureExecutionAttachmentImageUrl(attachment.id)
+    }
+    catch {
+      // Let individual previews surface a user-facing error on demand.
+    }
+  }))
+}
+
+function openExecutionAttachmentPicker() {
+  executionAttachmentInput.value?.click()
+}
+
+function filterExecutionAttachmentsForUpload(files: File[]) {
+  const currentCount = detail.value?.attachments.length ?? 0
+  const remainingCount = Math.max(0, EXECUTION_ATTACHMENT_MAX_COUNT - currentCount)
+  if (remainingCount <= 0) {
+    ElMessage.warning(`当前用例最多上传 ${EXECUTION_ATTACHMENT_MAX_COUNT} 个附件`)
+    return []
+  }
+
+  const oversizedFiles = files.filter(file => file.size > EXECUTION_ATTACHMENT_MAX_SIZE)
+  const validFiles = files.filter(file => file.size <= EXECUTION_ATTACHMENT_MAX_SIZE)
+
+  if (oversizedFiles.length) {
+    ElMessage.warning(`单个附件不能超过 ${Math.floor(EXECUTION_ATTACHMENT_MAX_SIZE / 1024 / 1024)}MB`)
+  }
+
+  if (!validFiles.length) {
+    return []
+  }
+
+  if (validFiles.length > remainingCount) {
+    ElMessage.warning(`当前用例最多上传 ${EXECUTION_ATTACHMENT_MAX_COUNT} 个附件，超出部分未添加`)
+  }
+
+  return validFiles.slice(0, remainingCount)
+}
+
+function handleExecutionAttachmentChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = input.files ? Array.from(input.files) : []
+  input.value = ''
+  if (!files.length) {
+    return
+  }
+  const acceptedFiles = filterExecutionAttachmentsForUpload(files)
+  if (!acceptedFiles.length) {
+    return
+  }
+  void uploadExecutionAttachments(acceptedFiles)
+}
+
+function handleExecutionAttachmentPaste(event: ClipboardEvent) {
+  if (!detail.value) {
+    return
+  }
+  const files = Array.from(event.clipboardData?.items || [])
+    .filter(item => item.kind === 'file')
+    .map(item => item.getAsFile())
+    .filter((item): item is File => !!item && item.type.startsWith('image/'))
+    .map((file, index) => new File([file], `${detail.value!.caseNo.toLowerCase()}-paste-${Date.now()}-${index + 1}.png`, { type: file.type || 'image/png' }))
+  if (!files.length) {
+    return
+  }
+  event.preventDefault()
+  const acceptedFiles = filterExecutionAttachmentsForUpload(files)
+  if (!acceptedFiles.length) {
+    return
+  }
+  void uploadExecutionAttachments(acceptedFiles)
+}
+
+function handleExecutionAttachmentDragEnter() {
+  executionAttachmentDropActive.value = true
+}
+
+function handleExecutionAttachmentDragLeave(event: DragEvent) {
+  const currentTarget = event.currentTarget as HTMLElement | null
+  const relatedTarget = event.relatedTarget as Node | null
+  if (currentTarget && relatedTarget && currentTarget.contains(relatedTarget)) {
+    return
+  }
+  executionAttachmentDropActive.value = false
+}
+
+function handleExecutionAttachmentDrop(event: DragEvent) {
+  executionAttachmentDropActive.value = false
+  const files = Array.from(event.dataTransfer?.files || [])
+  if (!files.length) {
+    return
+  }
+  const acceptedFiles = filterExecutionAttachmentsForUpload(files)
+  if (!acceptedFiles.length) {
+    return
+  }
+  void uploadExecutionAttachments(acceptedFiles)
+}
+
+async function previewExecutionAttachment(attachmentId: number) {
+  const attachment = detail.value?.attachments.find(item => item.id === attachmentId)
+  if (!attachment || !detail.value) {
+    return
+  }
+  if (!isImageAttachment(attachment.contentType, attachment.fileName)) {
+    void downloadExecutionAttachment(attachmentId)
+    return
+  }
+  try {
+    resetExecutionImagePreview()
+    activeExecutionImageAttachmentId.value = attachment.id
+    executionImagePreviewTitle.value = attachment.fileName
+    executionImagePreviewUrl.value = await ensureExecutionAttachmentImageUrl(attachment.id)
+    executionImagePreviewVisible.value = true
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message || '图片预览加载失败')
+  }
+}
+
+function resolveExecutionAttachmentUrl(attachmentId: number) {
+  return executionAttachmentImageUrls.value[attachmentId] || ''
+}
+
+function resetExecutionImagePreview() {
+  executionImagePreviewScale.value = 1
+  executionImagePreviewOffset.value = { x: 0, y: 0 }
+  executionImagePreviewDragging.value = false
+}
+
+function zoomExecutionImagePreview(delta: number) {
+  const nextScale = Math.min(4, Math.max(1, Number((executionImagePreviewScale.value + delta).toFixed(2))))
+  executionImagePreviewScale.value = nextScale
+  if (nextScale === 1) {
+    executionImagePreviewOffset.value = { x: 0, y: 0 }
+  }
+}
+
+function handleExecutionImagePreviewWheel(event: WheelEvent) {
+  event.preventDefault()
+  zoomExecutionImagePreview(event.deltaY < 0 ? 0.2 : -0.2)
+}
+
+function handleExecutionImagePreviewPointerDown(event: MouseEvent) {
+  if (executionImagePreviewScale.value <= 1) {
+    return
+  }
+  executionImagePreviewDragging.value = true
+  executionImagePreviewDragOrigin.value = {
+    x: event.clientX,
+    y: event.clientY,
+    offsetX: executionImagePreviewOffset.value.x,
+    offsetY: executionImagePreviewOffset.value.y,
+  }
+}
+
+function handleExecutionImagePreviewPointerMove(event: MouseEvent) {
+  if (!executionImagePreviewDragging.value) {
+    return
+  }
+  executionImagePreviewOffset.value = {
+    x: executionImagePreviewDragOrigin.value.offsetX + event.clientX - executionImagePreviewDragOrigin.value.x,
+    y: executionImagePreviewDragOrigin.value.offsetY + event.clientY - executionImagePreviewDragOrigin.value.y,
+  }
+}
+
+function handleExecutionImagePreviewPointerUp() {
+  executionImagePreviewDragging.value = false
+}
+
+function toggleExecutionImagePreviewZoom() {
+  if (executionImagePreviewScale.value > 1) {
+    resetExecutionImagePreview()
+    return
+  }
+  executionImagePreviewScale.value = 2
+}
+
+async function openExecutionImagePreviewByOffset(offset: -1 | 1) {
+  const currentIndex = activeExecutionImageIndex.value
+  if (currentIndex < 0) {
+    return
+  }
+  const nextAttachment = executionImageAttachments.value[currentIndex + offset]
+  if (!nextAttachment) {
+    return
+  }
+  await previewExecutionAttachment(nextAttachment.id)
+}
+
+function handleExecutionImagePreviewKeydown(event: KeyboardEvent) {
+  if (!executionImagePreviewVisible.value) {
+    return
+  }
+  if (event.key === 'ArrowLeft') {
+    event.preventDefault()
+    void openExecutionImagePreviewByOffset(-1)
+    return
+  }
+  if (event.key === 'ArrowRight') {
+    event.preventDefault()
+    void openExecutionImagePreviewByOffset(1)
+  }
+}
+
+async function removeBugAttachment(attachmentId: number) {
+  if (!detail.value || !activeBugDetail.value) {
+    return
+  }
+  bugAttachmentRemovingId.value = attachmentId
+  try {
+    await platformApi.deleteBugAttachment(detail.value.workspaceCode, activeBugDetail.value.id, attachmentId)
+    await reloadActiveBugDetail()
+    ElMessage.success('附件已删除')
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    bugAttachmentRemovingId.value = null
+  }
+}
+
+async function uploadExecutionAttachments(files: File[]) {
+  if (!detail.value) {
+    return
+  }
+  executionAttachmentUploading.value = true
+  try {
+    await platformApi.uploadCaseExecutionAttachment(detail.value.workspaceCode, detail.value.id, files)
+    detail.value = await platformApi.getCaseDetail(detail.value.workspaceCode, detail.value.id)
+    updateExecutionCollection(detail.value)
+    ElMessage.success(`已上传 ${files.length} 个执行附件`)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    executionAttachmentUploading.value = false
+  }
+}
+
+async function downloadExecutionAttachment(attachmentId: number) {
+  if (!detail.value) {
+    return
+  }
+  const attachment = detail.value.attachments.find(item => item.id === attachmentId)
+  if (!attachment) {
+    return
+  }
+  try {
+    await platformApi.downloadCaseExecutionAttachment(detail.value.workspaceCode, detail.value.id, attachmentId, attachment.fileName)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+}
+
+async function removeExecutionAttachment(attachmentId: number) {
+  if (!detail.value) {
+    return
+  }
+  executionAttachmentRemovingId.value = attachmentId
+  try {
+    await platformApi.deleteCaseExecutionAttachment(detail.value.workspaceCode, detail.value.id, attachmentId)
+    detail.value = await platformApi.getCaseDetail(detail.value.workspaceCode, detail.value.id)
+    updateExecutionCollection(detail.value)
+    ElMessage.success('执行附件已删除')
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    executionAttachmentRemovingId.value = null
   }
 }
 
@@ -508,8 +1160,32 @@ watch(visibleExecutionCases, (rows) => {
   }
 }, { flush: 'sync' })
 
+watch(
+  () => detail.value?.attachments ?? [],
+  (attachments) => {
+    void syncExecutionAttachmentImageUrls(attachments)
+  },
+  { deep: true },
+)
+
+watch(executionImagePreviewVisible, (visible) => {
+  if (!visible) {
+    resetExecutionImagePreview()
+    activeExecutionImageAttachmentId.value = null
+  }
+})
+
 onMounted(() => {
+  window.addEventListener('keydown', handleExecutionImagePreviewKeydown)
   void bootstrap()
+})
+
+onBeforeUnmount(() => {
+  revokeExecutionAttachmentImageUrls()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleExecutionImagePreviewKeydown)
 })
 </script>
 
@@ -676,9 +1352,76 @@ onMounted(() => {
                   />
                 </div>
               </section>
-              <section class="execution-detail-card">
-                <div class="execution-card-label">附件 / 截图</div>
-                <el-empty description="附件功能将在后续版本开放" :image-size="84" />
+              <section
+                class="execution-detail-card execution-evidence-card"
+                :class="{ 'is-drop-active': executionAttachmentDropActive }"
+                tabindex="0"
+                @paste="handleExecutionAttachmentPaste"
+                @dragenter.prevent="handleExecutionAttachmentDragEnter"
+                @dragover.prevent="executionAttachmentDropActive = true"
+                @dragleave="handleExecutionAttachmentDragLeave"
+                @drop.prevent="handleExecutionAttachmentDrop"
+              >
+                <div class="execution-evidence-header">
+                  <div>
+                    <div class="execution-card-label">执行附件（{{ detail?.attachments?.length || 0 }}）</div>
+                    <div class="execution-evidence-meta">点击加号上传，或在此区域按 Ctrl+V 粘贴图片</div>
+                  </div>
+                </div>
+                <input
+                  ref="executionAttachmentInput"
+                  type="file"
+                  multiple
+                  style="display: none"
+                  @change="handleExecutionAttachmentChange"
+                >
+                <div class="execution-evidence-files">
+                  <div
+                    v-for="attachment in detail?.attachments ?? []"
+                    :key="attachment.id"
+                    class="execution-evidence-file"
+                  >
+                    <button
+                      type="button"
+                      class="execution-evidence-file-remove"
+                      :disabled="executionAttachmentRemovingId === attachment.id"
+                      @click.stop="removeExecutionAttachment(attachment.id)"
+                    >
+                      ×
+                    </button>
+                    <div class="execution-evidence-file-preview">
+                      <button
+                        v-if="isImageAttachment(attachment.contentType, attachment.fileName)"
+                        type="button"
+                        class="execution-evidence-thumb"
+                        @click="previewExecutionAttachment(attachment.id)"
+                      >
+                        <img :src="resolveExecutionAttachmentUrl(attachment.id)" :alt="attachment.fileName" class="execution-evidence-thumb-image">
+                      </button>
+                      <div v-else class="execution-evidence-file-fallback">
+                        {{ (attachment.fileName.split('.').pop() || 'FILE').slice(0, 6).toUpperCase() }}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      class="execution-evidence-file-trigger"
+                      @click="previewExecutionAttachment(attachment.id)"
+                    >
+                      <span class="execution-evidence-file-name" :title="attachment.fileName">{{ attachment.fileName }}</span>
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    class="execution-evidence-add"
+                    :disabled="executionAttachmentUploading"
+                    @click="openExecutionAttachmentPicker"
+                  >
+                    <span class="execution-evidence-add-plus">+</span>
+                    <span class="execution-evidence-add-text">
+                      {{ executionAttachmentUploading ? '上传中...' : '上传附件' }}
+                    </span>
+                  </button>
+                </div>
               </section>
               <section class="execution-detail-card">
                 <div class="execution-card-label">备注</div>
@@ -696,7 +1439,7 @@ onMounted(() => {
                 </div>
                 <div class="execution-bug-actions">
                   <el-button @click="openLinkBugDialog">关联缺陷</el-button>
-                  <el-button disabled>添加缺陷</el-button>
+                  <el-button type="primary" @click="openCreateBugDrawer">新建缺陷</el-button>
                 </div>
               </div>
               <div v-if="associatedBugs.length" class="execution-bug-list">
@@ -712,6 +1455,11 @@ onMounted(() => {
                     <span>优先级：{{ bug.priority }}</span>
                     <span>严重程度：{{ bug.severity }}</span>
                     <span>负责人：{{ bug.assigneeName || '-' }}</span>
+                  </div>
+                  <div class="execution-bug-item-actions">
+                    <el-button text type="primary" @click="openBugDetail(bug.id)">查看详情</el-button>
+                    <el-button text type="primary" @click="openBugDetailForEdit(bug.id)">编辑</el-button>
+                    <el-button text type="danger" @click="unlinkBug(bug)">取消关联</el-button>
                   </div>
                 </article>
               </div>
@@ -761,7 +1509,7 @@ onMounted(() => {
             </div>
           </div>
           <div class="execution-submit-actions">
-            <el-button disabled>添加缺陷</el-button>
+            <el-button @click="openCreateBugDrawer">添加缺陷</el-button>
             <el-button type="danger" plain :loading="submitting" @click="selectedExecutionStatus = 'FAILED'; submitExecution()">失败</el-button>
             <el-button type="primary" plain :loading="submitting" @click="selectedExecutionStatus = 'BLOCKED'; submitExecution()">阻塞</el-button>
             <el-button type="success" :loading="submitting" @click="selectedExecutionStatus = 'PASSED'; submitExecution()">通过</el-button>
@@ -823,6 +1571,77 @@ onMounted(() => {
     @open-module-picker="ensureCaseModuleDirectoriesLoaded"
     @submit="submitCaseEdit"
   />
+
+  <BugEditorDrawer
+    v-model="bugCreateVisible"
+    :title="bugEditorMode === 'create' ? '新建缺陷' : '编辑缺陷'"
+    :form="bugForm"
+    :saving="bugSaving"
+    :can-submit="canSubmitBugCreate"
+    :users="bugAssigneeOptions"
+    :source-context="executionBugSourceContext"
+    @submit="submitCreateBug"
+  />
+
+  <BugDetailDrawer
+    v-model="bugDetailVisible"
+    :detail="activeBugDetail"
+    :source-context="executionBugSourceContext"
+    :transitioning="bugTransitioning"
+    :commenting="bugCommenting"
+    :attachment-uploading="bugAttachmentUploading"
+    :attachment-removing-id="bugAttachmentRemovingId"
+    @edit="openEditBugDrawer"
+    @unlink="activeBugDetail && unlinkBug(activeBugDetail)"
+    @upload-attachments="uploadBugAttachments"
+    @download-attachment="downloadBugAttachment"
+    @remove-attachment="removeBugAttachment"
+    @transition="submitBugTransition"
+    @comment="submitBugComment"
+  />
+
+  <el-dialog
+    v-model="executionImagePreviewVisible"
+    :title="executionImagePreviewTitle"
+    width="min(960px, 92vw)"
+    class="execution-evidence-preview-dialog"
+  >
+    <div class="execution-evidence-preview-toolbar">
+      <div class="execution-evidence-preview-nav" v-if="executionImageAttachments.length > 1">
+        <el-button plain size="small" :disabled="!canPreviewPreviousExecutionImage" @click="openExecutionImagePreviewByOffset(-1)">上一张</el-button>
+        <div v-if="executionImagePreviewCounter" class="execution-evidence-preview-counter">{{ executionImagePreviewCounter }}</div>
+        <el-button plain size="small" :disabled="!canPreviewNextExecutionImage" @click="openExecutionImagePreviewByOffset(1)">下一张</el-button>
+      </div>
+      <div v-else class="execution-evidence-preview-tip">滚轮缩放，拖拽查看局部</div>
+      <div class="execution-evidence-preview-actions">
+        <el-button plain size="small" class="execution-evidence-preview-icon-button" @click="zoomExecutionImagePreview(-0.2)">-</el-button>
+        <span class="execution-evidence-preview-scale">{{ Math.round(executionImagePreviewScale * 100) }}%</span>
+        <el-button plain size="small" class="execution-evidence-preview-icon-button" @click="zoomExecutionImagePreview(0.2)">+</el-button>
+        <el-button plain size="small" @click="resetExecutionImagePreview">重置</el-button>
+      </div>
+    </div>
+    <div class="execution-evidence-preview-shell">
+      <div
+        class="execution-evidence-preview-canvas"
+        :class="{ 'is-draggable': executionImagePreviewScale > 1, 'is-dragging': executionImagePreviewDragging }"
+        @wheel="handleExecutionImagePreviewWheel"
+        @mousedown="handleExecutionImagePreviewPointerDown"
+        @mousemove="handleExecutionImagePreviewPointerMove"
+        @mouseup="handleExecutionImagePreviewPointerUp"
+        @mouseleave="handleExecutionImagePreviewPointerUp"
+        @dblclick="toggleExecutionImagePreviewZoom"
+      >
+        <img
+          :src="executionImagePreviewUrl"
+          :alt="executionImagePreviewTitle"
+          class="execution-evidence-preview-image"
+          :style="{
+            transform: `translate(${executionImagePreviewOffset.x}px, ${executionImagePreviewOffset.y}px) scale(${executionImagePreviewScale})`,
+          }"
+        >
+      </div>
+    </div>
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -1217,6 +2036,401 @@ onMounted(() => {
 .execution-bug-dialog-actions {
   margin-top: 12px;
   justify-content: flex-end;
+}
+
+.execution-bug-item-actions {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.execution-evidence-files {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 104px));
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 3px;
+  max-height: 296px;
+  overflow: auto;
+  padding-right: 4px;
+  align-items: start;
+}
+
+.execution-evidence-card {
+  outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.execution-evidence-card.is-drop-active {
+  border-color: rgba(64, 158, 255, 0.55);
+  background: rgba(239, 246, 255, 0.72);
+  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.12);
+}
+
+.execution-evidence-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.execution-evidence-header {
+  align-items: flex-start;
+}
+
+.execution-evidence-hint,
+.execution-evidence-meta,
+.execution-evidence-file-meta {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #667085;
+}
+
+.execution-evidence-hint {
+  margin-top: 4px;
+}
+
+.execution-evidence-file {
+  position: relative;
+  display: grid;
+  grid-template-rows: 104px auto;
+  gap: 6px;
+  width: 104px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.execution-evidence-file:hover {
+  transform: translateY(-1px);
+}
+
+.execution-evidence-file-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.68);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease, background 0.18s ease;
+}
+
+.execution-evidence-file:hover .execution-evidence-file-remove,
+.execution-evidence-file:focus-within .execution-evidence-file-remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.execution-evidence-file-remove:disabled {
+  cursor: wait;
+  opacity: 0.7;
+  pointer-events: auto;
+}
+
+.execution-evidence-file-preview {
+  display: flex;
+  min-height: 0;
+  width: 104px;
+  height: 104px;
+}
+
+.execution-evidence-file-fallback,
+.execution-evidence-thumb {
+  width: 100%;
+  height: 100%;
+}
+
+.execution-evidence-thumb {
+  flex: none;
+  padding: 0;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: #f8fafc;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.execution-evidence-thumb-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.execution-evidence-file-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(15, 23, 42, 0.14);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #f8fafc 0%, #f2f6fb 100%);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: #667085;
+}
+
+.execution-evidence-file-trigger {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  align-self: end;
+}
+
+.execution-evidence-file-name {
+  font-size: 11px;
+  line-height: 1.45;
+  color: #98a2b3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.18s ease;
+}
+
+.execution-evidence-file:hover .execution-evidence-file-name,
+.execution-evidence-file:focus-within .execution-evidence-file-name {
+  color: #667085;
+}
+
+.execution-evidence-add {
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  width: 104px;
+  height: 104px;
+  padding: 10px;
+  border: 1px dashed #d0d5dd;
+  border-radius: 8px;
+  background: #fcfcfd;
+  color: #667085;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.execution-evidence-add:hover {
+  border-color: #98a2b3;
+  background: #f8fafc;
+  transform: translateY(-1px);
+  box-shadow: inset 0 0 0 1px rgba(208, 213, 221, 0.45);
+}
+
+.execution-evidence-add:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.execution-evidence-add-plus {
+  font-size: 28px;
+  line-height: 1;
+  font-weight: 500;
+  color: #475467;
+}
+
+.execution-evidence-add-text {
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+  color: #667085;
+}
+
+.execution-evidence-preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  min-height: 32px;
+}
+
+.execution-evidence-preview-nav,
+.execution-evidence-preview-actions {
+  display: flex;
+  align-items: center;
+}
+
+.execution-evidence-preview-nav {
+  gap: 8px;
+}
+
+.execution-evidence-preview-actions {
+  gap: 6px;
+  margin-left: auto;
+}
+
+.execution-evidence-preview-tip,
+.execution-evidence-preview-scale {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #667085;
+}
+
+.execution-evidence-preview-counter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(208, 213, 221, 0.9);
+  border-radius: 8px;
+  background: #f2f4f7;
+}
+
+:global(.execution-evidence-preview-dialog .el-button.is-plain) {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 12px;
+  border-color: rgba(208, 213, 221, 0.9);
+  background: #ffffff;
+  color: #475467;
+  border-radius: 8px;
+}
+
+:global(.execution-evidence-preview-dialog .el-button.is-plain:hover),
+:global(.execution-evidence-preview-dialog .el-button.is-plain:focus-visible) {
+  border-color: rgba(127, 86, 217, 0.45);
+  background: #f8f5ff;
+  color: #6941c6;
+}
+
+:global(.execution-evidence-preview-dialog .el-button.is-disabled) {
+  border-color: rgba(208, 213, 221, 0.7);
+  background: #f8fafc;
+  color: #98a2b3;
+}
+
+:global(.execution-evidence-preview-dialog .execution-evidence-preview-icon-button) {
+  min-width: 32px;
+  padding: 0 8px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.execution-evidence-preview-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+  height: min(68vh, 640px);
+  max-height: 68vh;
+  overflow: hidden;
+  background: #f8fafc;
+  border-radius: 12px;
+}
+
+.execution-evidence-preview-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-in;
+}
+
+.execution-evidence-preview-canvas.is-draggable {
+  cursor: grab;
+}
+
+.execution-evidence-preview-canvas.is-dragging {
+  cursor: grabbing;
+}
+
+.execution-evidence-preview-image {
+  display: block;
+  max-width: min(100%, 1000px);
+  max-height: 100%;
+  object-fit: contain;
+  transform-origin: center center;
+  transition: transform 0.16s ease;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+:global(.execution-evidence-preview-dialog) {
+  margin-top: 6vh;
+}
+
+:global(.execution-evidence-preview-dialog .el-dialog) {
+  margin: 0 auto 5vh !important;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+
+:global(.execution-evidence-preview-dialog .el-dialog__body) {
+  padding-top: 16px;
+}
+
+@media (max-width: 960px) {
+  .execution-evidence-files {
+    grid-template-columns: repeat(auto-fill, minmax(96px, 96px));
+  }
+
+  .execution-evidence-file,
+  .execution-evidence-add {
+    width: 96px;
+  }
+
+  .execution-evidence-file {
+    grid-template-rows: 96px auto;
+  }
+
+  .execution-evidence-file-preview,
+  .execution-evidence-add {
+    height: 96px;
+  }
+
+  .execution-evidence-file-preview {
+    width: 96px;
+  }
+
+  .execution-evidence-preview-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .execution-evidence-preview-nav {
+    justify-content: flex-start;
+  }
+
+  .execution-evidence-preview-actions {
+    justify-content: flex-end;
+    margin-left: 0;
+  }
+
+  .execution-evidence-preview-shell {
+    min-height: 280px;
+    height: min(62vh, 520px);
+    max-height: 62vh;
+  }
+
+  :global(.execution-evidence-preview-dialog) {
+    margin-top: 4vh;
+  }
+
+  :global(.execution-evidence-preview-dialog .el-dialog) {
+    margin-bottom: 4vh !important;
+    max-height: 90vh;
+  }
 }
 
 .execution-history-list {

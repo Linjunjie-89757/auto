@@ -16,7 +16,9 @@ import com.company.autoplatform.workspace.WorkspaceEntity;
 import com.company.autoplatform.workspace.WorkspaceScope;
 import com.company.autoplatform.workspace.WorkspaceService;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.util.ArrayList;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -27,17 +29,22 @@ public class BugService {
     private final BugMapper bugMapper;
     private final BugFlowMapper bugFlowMapper;
     private final BugCommentMapper bugCommentMapper;
+    private final BugAttachmentMapper bugAttachmentMapper;
+    private final BugAttachmentStorageService bugAttachmentStorageService;
     private final UserService userService;
     private final WorkspaceService workspaceService;
     private final CaseService caseService;
     private final ExecutionService executionService;
 
     public BugService(BugMapper bugMapper, BugFlowMapper bugFlowMapper, BugCommentMapper bugCommentMapper,
+                      BugAttachmentMapper bugAttachmentMapper, BugAttachmentStorageService bugAttachmentStorageService,
                       UserService userService, WorkspaceService workspaceService, CaseService caseService,
                       ExecutionService executionService) {
         this.bugMapper = bugMapper;
         this.bugFlowMapper = bugFlowMapper;
         this.bugCommentMapper = bugCommentMapper;
+        this.bugAttachmentMapper = bugAttachmentMapper;
+        this.bugAttachmentStorageService = bugAttachmentStorageService;
         this.userService = userService;
         this.workspaceService = workspaceService;
         this.caseService = caseService;
@@ -181,6 +188,71 @@ public class BugService {
         return toComment(comment);
     }
 
+    public List<BugAttachmentResponse> uploadBugAttachments(Long bugId, String workspaceCode, List<MultipartFile> files) {
+        BugEntity bug = requireBug(bugId);
+        validateReadable(bug, workspaceCode);
+        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(bug.getWorkspaceId()).getWorkspaceCode());
+
+        List<StoredBugFile> storedFiles = bugAttachmentStorageService.storeAll(bug.getWorkspaceId(), bugId, files);
+        List<BugAttachmentEntity> createdAttachments = new ArrayList<>();
+        try {
+            for (int i = 0; i < storedFiles.size(); i++) {
+                MultipartFile file = files.get(i);
+                StoredBugFile storedFile = storedFiles.get(i);
+                BugAttachmentEntity attachment = new BugAttachmentEntity();
+                attachment.setBugId(bugId);
+                attachment.setWorkspaceId(bug.getWorkspaceId());
+                attachment.setFileName(file.getOriginalFilename());
+                attachment.setStoredPath(storedFile.storedPath());
+                attachment.setContentType(storedFile.contentType());
+                attachment.setFileSize(storedFile.fileSize());
+                attachment.setCreatedAt(LocalDateTime.now());
+                attachment.setUpdatedAt(LocalDateTime.now());
+                bugAttachmentMapper.insert(attachment);
+                createdAttachments.add(attachment);
+            }
+        } catch (RuntimeException exception) {
+            for (BugAttachmentEntity attachment : createdAttachments) {
+                if (attachment.getId() != null) {
+                    bugAttachmentMapper.deleteById(attachment.getId());
+                }
+                bugAttachmentStorageService.delete(attachment.getStoredPath());
+            }
+            for (StoredBugFile storedFile : storedFiles) {
+                bugAttachmentStorageService.delete(storedFile.storedPath());
+            }
+            throw exception;
+        }
+
+        bug.setUpdatedAt(LocalDateTime.now());
+        bugMapper.updateById(bug);
+        return createdAttachments.stream().map(attachment -> toAttachmentResponse(bug, attachment)).toList();
+    }
+
+    public void deleteBugAttachment(Long bugId, Long attachmentId, String workspaceCode) {
+        BugEntity bug = requireBug(bugId);
+        validateReadable(bug, workspaceCode);
+        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(bug.getWorkspaceId()).getWorkspaceCode());
+        BugAttachmentEntity attachment = requireAttachment(attachmentId);
+        if (!attachment.getBugId().equals(bugId)) {
+            throw new BadRequestException("附件不属于当前缺陷");
+        }
+        bugAttachmentMapper.deleteById(attachmentId);
+        bugAttachmentStorageService.delete(attachment.getStoredPath());
+        bug.setUpdatedAt(LocalDateTime.now());
+        bugMapper.updateById(bug);
+    }
+
+    public BugFileDownload downloadBugAttachment(Long bugId, Long attachmentId, String workspaceCode) {
+        BugEntity bug = requireBug(bugId);
+        validateReadable(bug, workspaceCode);
+        BugAttachmentEntity attachment = requireAttachment(attachmentId);
+        if (!attachment.getBugId().equals(bugId)) {
+            throw new BadRequestException("附件不属于当前缺陷");
+        }
+        return bugAttachmentStorageService.load(attachment);
+    }
+
     public BugStatisticsResponse statistics(String workspaceCode) {
         WorkspaceEntity workspace = resolveScopedWorkspace(workspaceCode);
         LambdaQueryWrapper<BugEntity> query = new LambdaQueryWrapper<>();
@@ -249,6 +321,14 @@ public class BugService {
         return entity;
     }
 
+    private BugAttachmentEntity requireAttachment(Long attachmentId) {
+        BugAttachmentEntity attachment = bugAttachmentMapper.selectById(attachmentId);
+        if (attachment == null) {
+            throw new NotFoundException("附件不存在");
+        }
+        return attachment;
+    }
+
     private WorkspaceEntity resolveScopedWorkspace(String workspaceCode) {
         String normalized = WorkspaceScope.normalize(workspaceCode);
         return WorkspaceScope.isAll(normalized) ? null : workspaceService.requireReadableWorkspace(normalized);
@@ -287,6 +367,12 @@ public class BugService {
         return bugCommentMapper.selectList(new LambdaQueryWrapper<BugCommentEntity>()
                 .eq(BugCommentEntity::getBugId, bugId)
                 .orderByAsc(BugCommentEntity::getId));
+    }
+
+    private List<BugAttachmentEntity> listAttachmentEntities(Long bugId) {
+        return bugAttachmentMapper.selectList(new LambdaQueryWrapper<BugAttachmentEntity>()
+                .eq(BugAttachmentEntity::getBugId, bugId)
+                .orderByAsc(BugAttachmentEntity::getId));
     }
 
     private BugSummaryResponse toSummary(BugEntity entity) {
@@ -331,6 +417,7 @@ public class BugService {
                 JsonUtils.toStringList(entity.getTagsJson()),
                 workspace.getWorkspaceCode(),
                 workspace.getWorkspaceName(),
+                listAttachmentEntities(entity.getId()).stream().map(item -> toAttachmentResponse(entity, item)).toList(),
                 listFlowEntities(entity.getId()).stream().map(this::toFlow).toList(),
                 listCommentEntities(entity.getId()).stream().map(this::toComment).toList()
         );
@@ -357,6 +444,17 @@ public class BugService {
                 entity.getCommenterId(),
                 commenter.getDisplayName(),
                 entity.getCreatedAt()
+        );
+    }
+
+    private BugAttachmentResponse toAttachmentResponse(BugEntity bug, BugAttachmentEntity attachment) {
+        return new BugAttachmentResponse(
+                attachment.getId(),
+                attachment.getFileName(),
+                attachment.getContentType(),
+                attachment.getFileSize(),
+                "/api/bugs/" + bug.getId() + "/attachments/" + attachment.getId() + "/download",
+                attachment.getCreatedAt()
         );
     }
 

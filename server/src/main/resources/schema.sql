@@ -110,6 +110,30 @@ CREATE TABLE IF NOT EXISTS tb_bug_comment (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS tb_bug_attachment (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bug_id BIGINT NOT NULL,
+    workspace_id BIGINT NOT NULL,
+    file_name VARCHAR(255) NOT NULL,
+    stored_path VARCHAR(512) NOT NULL,
+    content_type VARCHAR(128),
+    file_size BIGINT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS tb_case_execution_attachment (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    case_id BIGINT NOT NULL,
+    workspace_id BIGINT NOT NULL,
+    file_name VARCHAR(255) NOT NULL,
+    stored_path VARCHAR(512) NOT NULL,
+    content_type VARCHAR(128),
+    file_size BIGINT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS tb_env_config (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     workspace_id BIGINT NOT NULL,

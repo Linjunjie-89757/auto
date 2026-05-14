@@ -92,6 +92,16 @@ export interface CaseDetail extends CaseItem {
   precondition: string
   steps: string
   expectedResult: string
+  attachments: CaseExecutionAttachment[]
+}
+
+export interface CaseExecutionAttachment {
+  id: number
+  fileName: string
+  contentType: string | null
+  fileSize: number | null
+  downloadUrl: string | null
+  createdAt: string | null
 }
 
 export interface AiReviewResult {
@@ -553,6 +563,15 @@ export interface BugComment {
   createdAt: string
 }
 
+export interface BugAttachment {
+  id: number
+  fileName: string
+  contentType: string | null
+  fileSize: number | null
+  downloadUrl: string | null
+  createdAt: string | null
+}
+
 export interface BugFlow {
   id: number
   fromStatus: string
@@ -572,6 +591,7 @@ export interface BugDetail extends BugSummary {
   relatedReportId: number | null
   relatedTaskId: number | null
   tags: string[]
+  attachments: BugAttachment[]
   flows: BugFlow[]
   comments: BugComment[]
 }

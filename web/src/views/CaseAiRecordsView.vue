@@ -584,7 +584,7 @@ onBeforeUnmount(() => {
                   <span class="task-code-text">{{ makeTaskCode(row.id) }}</span>
                 </template>
               </el-table-column>
-              <el-table-column v-else-if="column.key === 'workspaceName'" label="所属空间" min-width="140" show-overflow-tooltip>
+              <el-table-column v-else-if="column.key === 'workspaceName'" label="所属空间" min-width="140">
                 <template #default="{ row }">
                   <span class="workspace-text">{{ row.workspaceName || row.workspaceCode }}</span>
                 </template>
@@ -632,7 +632,7 @@ onBeforeUnmount(() => {
                 </template>
               </el-table-column>
             </template>
-            <el-table-column width="240" fixed="right" align="center">
+            <el-table-column width="252" fixed="right" align="center">
               <template #header>
                 <div class="table-action-header">
                   <span>操作</span>
@@ -1000,8 +1000,16 @@ onBeforeUnmount(() => {
 }
 
 .record-table :deep(.el-table-fixed-column--right) {
-  background: transparent;
+  background: var(--bg-panel);
   box-shadow: none;
+}
+
+.record-table :deep(.el-table__fixed-right) {
+  box-shadow: -1px 0 0 rgba(221, 229, 240, 0.9);
+}
+
+.record-table :deep(.el-table__fixed-right::before) {
+  display: none;
 }
 
 .record-table :deep(.el-table__fixed-right-patch) {
@@ -1286,12 +1294,21 @@ onBeforeUnmount(() => {
 
 .record-table .table-action-row {
   justify-content: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: nowrap;
 }
 
 .record-table .table-action-row-text {
   gap: 0;
+}
+
+.record-table :deep(.el-table__fixed-right .cell) {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.record-table .table-action-row :deep(.el-button) {
+  font-size: 13px;
 }
 
 .process-dialog-meta {

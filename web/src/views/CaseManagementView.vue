@@ -118,6 +118,7 @@ const reviewDrawerVisible = ref(false)
 const batchMoveVisible = ref(false)
 const batchEditVisible = ref(false)
 const bugVisible = ref(false)
+const caseCellOverflowState = reactive<Record<string, boolean>>({})
 const moduleForm = reactive({
   label: '',
 })
@@ -681,6 +682,19 @@ function getCaseColumnValue(row: CaseItem, key: CaseColumnKey) {
 function shouldUseCellTooltip(key: CaseColumnKey) {
   return key === 'title'
     || key === 'directoryName'
+}
+function makeCaseCellOverflowKey(caseId: number, key: CaseColumnKey) {
+  return `${caseId}:${key}`
+}
+function updateCaseCellOverflow(caseId: number, key: CaseColumnKey, event: MouseEvent) {
+  const target = event.currentTarget as HTMLElement | null
+  if (!target) {
+    return
+  }
+  caseCellOverflowState[makeCaseCellOverflowKey(caseId, key)] = target.scrollWidth > target.clientWidth
+}
+function shouldShowCaseCellTooltip(caseId: number, key: CaseColumnKey) {
+  return !!caseCellOverflowState[makeCaseCellOverflowKey(caseId, key)]
 }
 function isTreeNodeExpanded(nodeId: string) {
   return expandedTreeKeys.value.includes(nodeId)
@@ -1470,8 +1484,8 @@ onMounted(bootstrap)
                     </el-tag>
                   </template>
                   <template v-else-if="shouldUseCellTooltip(column.key)">
-                    <el-tooltip :content="getCaseColumnValue(row, column.key)" placement="top" :show-after="180">
-                      <span class="case-cell-text">{{ getCaseColumnValue(row, column.key) }}</span>
+                    <el-tooltip :content="getCaseColumnValue(row, column.key)" placement="top" :show-after="180" :disabled="!shouldShowCaseCellTooltip(row.id, column.key)">
+                      <span class="case-cell-text" @mouseenter="updateCaseCellOverflow(row.id, column.key, $event)">{{ getCaseColumnValue(row, column.key) }}</span>
                     </el-tooltip>
                   </template>
                   <template v-else>

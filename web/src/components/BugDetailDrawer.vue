@@ -59,6 +59,8 @@ const selectableStatusOptions = computed(() => {
   return statusOptions.filter(item => item.value !== currentStatus)
 })
 
+const formattedDescription = computed(() => sanitizeRichHtml(props.detail?.description || '-'))
+
 watch(
   () => props.modelValue,
   (visible) => {
@@ -78,6 +80,129 @@ function submitTransition() {
     status: transitionStatus.value,
     comment: transitionComment.value.trim(),
   })
+}
+
+function sanitizeRichHtml(content: string) {
+  if (!content.trim()) {
+    return '-'
+  }
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(`<div>${content}</div>`, 'text/html')
+  const allowedTags = new Set([
+    'DIV',
+    'BR',
+    'P',
+    'SPAN',
+    'STRONG',
+    'B',
+    'EM',
+    'I',
+    'U',
+    'S',
+    'MARK',
+    'UL',
+    'OL',
+    'LI',
+    'H1',
+    'H2',
+    'H3',
+    'H4',
+    'H5',
+    'H6',
+    'LABEL',
+    'INPUT',
+  ])
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_ELEMENT)
+  const toUnwrap: Element[] = []
+
+  while (walker.nextNode()) {
+    const element = walker.currentNode as HTMLElement
+    if (!allowedTags.has(element.tagName)) {
+      toUnwrap.push(element)
+      continue
+    }
+    Array.from(element.attributes).forEach((attr) => {
+      if (attr.name.startsWith('on')) {
+        element.removeAttribute(attr.name)
+        return
+      }
+
+      if (attr.name === 'style') {
+        const safeStyle = sanitizeStyle(attr.value)
+        if (safeStyle) {
+          element.setAttribute('style', safeStyle)
+        } else {
+          element.removeAttribute('style')
+        }
+        return
+      }
+
+      if (attr.name === 'data-type' && /^(taskList|taskItem)$/i.test(attr.value)) {
+        return
+      }
+
+      if (attr.name === 'data-checked' && /^(true|false)$/i.test(attr.value)) {
+        return
+      }
+
+      if (element.tagName === 'INPUT' && attr.name === 'type' && attr.value === 'checkbox') {
+        return
+      }
+
+      if (element.tagName === 'INPUT' && ['checked', 'disabled'].includes(attr.name)) {
+        return
+      }
+
+      element.removeAttribute(attr.name)
+    })
+
+    if (element.tagName === 'INPUT') {
+      element.setAttribute('disabled', 'disabled')
+    }
+  }
+
+  toUnwrap.forEach((element) => {
+    const parent = element.parentNode
+    if (!parent) {
+      return
+    }
+    while (element.firstChild) {
+      parent.insertBefore(element.firstChild, element)
+    }
+    parent.removeChild(element)
+  })
+
+  return doc.body.innerHTML || '-'
+}
+
+function sanitizeStyle(value: string) {
+  const rules = value
+    .split(';')
+    .map(item => item.trim())
+    .filter(Boolean)
+  const safeRules: string[] = []
+
+  rules.forEach((rule) => {
+    const [rawName, rawValue] = rule.split(':')
+    const name = rawName?.trim().toLowerCase()
+    const styleValue = rawValue?.trim()
+    if (!name || !styleValue) {
+      return
+    }
+    if (name === 'font-size' && /^(12|14|16|18)px$/i.test(styleValue)) {
+      safeRules.push(`font-size: ${styleValue}`)
+      return
+    }
+    if (name === 'font-family' && /^(Arial|"PingFang SC"|"Microsoft YaHei"|SimSun|monospace)$/i.test(styleValue)) {
+      safeRules.push(`font-family: ${styleValue}`)
+      return
+    }
+    if (name === 'text-align' && /^(left|center|right|justify)$/i.test(styleValue)) {
+      safeRules.push(`text-align: ${styleValue}`)
+    }
+  })
+
+  return safeRules.join('; ')
 }
 
 function submitComment() {
@@ -153,7 +278,7 @@ function handleUploadChange(event: Event) {
             </div>
           </div>
           <div class="bug-detail-label">缺陷描述</div>
-          <div class="bug-detail-description">{{ detail.description || '-' }}</div>
+          <div class="bug-detail-description" v-html="formattedDescription"></div>
         </section>
 
         <section v-if="sourceContext" class="bug-detail-card">
@@ -364,6 +489,50 @@ function handleUploadChange(event: Event) {
 .bug-detail-value-block,
 .bug-detail-list-text {
   white-space: pre-wrap;
+}
+
+.bug-detail-description :deep(strong) {
+  font-weight: 700;
+}
+
+.bug-detail-description :deep(h1),
+.bug-detail-description :deep(h2),
+.bug-detail-description :deep(h3),
+.bug-detail-description :deep(h4),
+.bug-detail-description :deep(h5),
+.bug-detail-description :deep(h6) {
+  margin: 0 0 8px;
+  line-height: 1.45;
+}
+
+.bug-detail-description :deep(p),
+.bug-detail-description :deep(ul),
+.bug-detail-description :deep(ol) {
+  margin: 0 0 14px;
+}
+
+.bug-detail-description :deep(mark) {
+  padding: 0 2px;
+  background: #fff3bf;
+}
+
+.bug-detail-description :deep(ul[data-type="taskList"]) {
+  list-style: none;
+  padding-left: 0;
+}
+
+.bug-detail-description :deep(ul[data-type="taskList"] li) {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.bug-detail-description :deep(ul[data-type="taskList"] li > label) {
+  margin-top: 2px;
+}
+
+.bug-detail-description :deep(ul[data-type="taskList"] li > div) {
+  flex: 1;
 }
 
 .bug-detail-inline-form {

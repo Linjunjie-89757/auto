@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { platformApi, resolveApiUrl } from '../api/platform'
 import BugDetailDrawer from '../components/BugDetailDrawer.vue'
 import BugEditorDrawer from '../components/BugEditorDrawer.vue'
+import BugLinkDrawer from '../components/BugLinkDrawer.vue'
 import CaseEditorDrawer from '../components/CaseEditorDrawer.vue'
 import { useCaseCenterShared } from '../composables/useCaseCenterShared'
 import { loadCaseExecutionContext, type CaseExecutionContext } from '../utils/caseExecutionContext'
@@ -19,7 +20,7 @@ import {
   reviewStatusTagType,
   type ExecutionStatus,
 } from '../utils/casePresentation'
-import type { BugDetail, BugSummary, CaseDetail, CaseDirectoryNode, CaseItem, CreateBugPayload, CreateCasePayload, UpdateBugPayload } from '../types/api'
+import type { BugAttachment, BugDetail, BugSummary, CaseDetail, CaseDirectoryNode, CaseItem, CreateBugPayload, CreateCasePayload, UpdateBugPayload } from '../types/api'
 
 const route = useRoute()
 const router = useRouter()
@@ -40,7 +41,7 @@ const executionComment = ref('')
 const executionNoteDraft = ref('')
 const relatedBugs = ref<BugSummary[]>([])
 const bugListLoading = ref(false)
-const bugLinkDialogVisible = ref(false)
+const bugLinkDrawerVisible = ref(false)
 const bugLinkLoading = ref(false)
 const bugLinkKeyword = ref('')
 const linkingBugId = ref<number | null>(null)
@@ -51,6 +52,12 @@ const bugTransitioning = ref(false)
 const bugCommenting = ref(false)
 const bugAttachmentUploading = ref(false)
 const bugAttachmentRemovingId = ref<number | null>(null)
+const pendingBugFiles = ref<Array<{
+  id: string
+  file: File
+  kind: 'attachment' | 'screenshot'
+  previewUrl: string | null
+}>>([])
 const bugEditorMode = ref<'create' | 'edit'>('create')
 const activeBugDetail = ref<BugDetail | null>(null)
 const relatedBugDetails = ref<Record<number, BugDetail>>({})
@@ -192,7 +199,7 @@ const bugAssigneeOptions = computed(() => {
 const canSubmitBugCreate = computed(() => (
   !!bugForm.value.workspaceCode
   && !!bugForm.value.title.trim()
-  && !!bugForm.value.description.trim()
+  && !!extractPlainTextFromHtml(bugForm.value.description)
 ))
 const executionBugSourceContext = computed(() => ({
   caseNo: detail.value?.caseNo || '-',
@@ -200,6 +207,9 @@ const executionBugSourceContext = computed(() => ({
   modulePath: modulePath.value,
   executionStatus: executionStatusLabel(selectedExecutionStatus.value || detail.value?.executionStatus || 'NOT_RUN'),
   actualResult: executionComment.value.trim() || '-',
+  precondition: detail.value?.precondition || '',
+  steps: detail.value?.steps || '',
+  expectedResult: detail.value?.expectedResult || '',
 }))
 const executionImageAttachments = computed(() => (
   detail.value?.attachments.filter(item => isImageAttachment(item.contentType, item.fileName)) ?? []
@@ -259,24 +269,35 @@ function normalizeDirectoryLabel(path: string | null | undefined) {
     .join(' / ')
 }
 
+function escapeBugDescriptionHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/\r?\n/g, '<br>')
+}
+
 function buildExecutionBugDescription(target: CaseDetail) {
   return [
-    `用例编号：${target.caseNo || '-'}`,
-    `用例标题：${target.title || '-'}`,
-    `用例模块：${modulePath.value}`,
-    '',
-    '前置条件：',
-    target.precondition || '-',
-    '',
-    '测试步骤：',
-    target.steps || '-',
-    '',
-    '预期结果：',
-    target.expectedResult || '-',
-    '',
-    '实际结果：',
-    executionComment.value.trim() || '-',
-  ].join('\n')
+    { label: '用例标题：', content: target.title || '-' },
+    { label: '前置条件：', content: target.precondition || '-' },
+    { label: '测试步骤：', content: target.steps || '-' },
+    { label: '预期结果：', content: target.expectedResult || '-' },
+    { label: '实际结果：', content: executionComment.value.trim() || '-' },
+  ]
+    .map(item => `<p><strong>${item.label}</strong><br>${escapeBugDescriptionHtml(item.content)}</p>`)
+    .join('')
+}
+
+function extractPlainTextFromHtml(content: string) {
+  return content
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(div|p|li|ul|ol)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .trim()
 }
 
 function findDirectoryNameById(nodes: CaseDirectoryNode[], directoryId: number | null, trail: string[] = []): string {
@@ -422,6 +443,16 @@ function navigateToCase(caseId: number) {
   })
 }
 
+function goBackToCaseManagement() {
+  const returnQuery = contextState.value?.returnQuery
+  void router.push({
+    name: 'cases-manage',
+    query: returnQuery && Object.keys(returnQuery).length
+      ? returnQuery
+      : (effectiveWorkspaceCode.value ? { workspace: effectiveWorkspaceCode.value } : {}),
+  })
+}
+
 function moveCase(offset: -1 | 1) {
   const nextRow = visibleExecutionCases.value[currentVisibleIndex.value + offset]
   if (!nextRow) {
@@ -436,7 +467,7 @@ function applySidebarExecutionStatus(value: string | number | object) {
 
 function openLinkBugDialog() {
   bugLinkKeyword.value = ''
-  bugLinkDialogVisible.value = true
+  bugLinkDrawerVisible.value = true
 }
 
 function openCreateBugDrawer() {
@@ -444,6 +475,12 @@ function openCreateBugDrawer() {
     return
   }
   bugEditorMode.value = 'create'
+  pendingBugFiles.value.forEach(item => {
+    if (item.previewUrl) {
+      URL.revokeObjectURL(item.previewUrl)
+    }
+  })
+  pendingBugFiles.value = []
   bugForm.value = {
     workspaceCode: detail.value.workspaceCode,
     title: '',
@@ -463,6 +500,12 @@ function openEditBugDrawer() {
   }
   bugDetailVisible.value = false
   bugEditorMode.value = 'edit'
+  pendingBugFiles.value.forEach(item => {
+    if (item.previewUrl) {
+      URL.revokeObjectURL(item.previewUrl)
+    }
+  })
+  pendingBugFiles.value = []
   bugForm.value = {
     workspaceCode: activeBugDetail.value.workspaceCode,
     title: activeBugDetail.value.title,
@@ -486,7 +529,7 @@ async function associateBug(bugId: number) {
     const bug = await platformApi.getBugDetail(detail.value.workspaceCode, bugId)
     await platformApi.updateBug(detail.value.workspaceCode, bugId, buildUpdateBugPayload(bug, currentCaseId.value))
     ElMessage.success('关联缺陷成功')
-    bugLinkDialogVisible.value = false
+    bugLinkDrawerVisible.value = false
     await loadRelatedBugs(currentCaseId.value, detail.value.workspaceCode)
   }
   catch (error) {
@@ -532,7 +575,47 @@ async function reloadActiveBugDetail() {
   }
 }
 
-async function submitCreateBug() {
+function addPendingBugFiles(files: File[]) {
+  const nextItems = files.map((file, index) => {
+    const isImage = file.type.startsWith('image/')
+    return {
+      id: `${isImage ? 'screenshot' : 'attachment'}-${Date.now()}-${index}-${file.name}`,
+      file,
+      kind: isImage ? 'screenshot' as const : 'attachment' as const,
+      previewUrl: isImage ? URL.createObjectURL(file) : null,
+    }
+  })
+  pendingBugFiles.value = [...pendingBugFiles.value, ...nextItems]
+}
+
+function clearPendingBugFiles() {
+  pendingBugFiles.value.forEach(item => {
+    if (item.previewUrl) {
+      URL.revokeObjectURL(item.previewUrl)
+    }
+  })
+  pendingBugFiles.value = []
+}
+
+function removePendingBugFile(id: string) {
+  const target = pendingBugFiles.value.find(item => item.id === id)
+  if (target?.previewUrl) {
+    URL.revokeObjectURL(target.previewUrl)
+  }
+  pendingBugFiles.value = pendingBugFiles.value.filter(item => item.id !== id)
+}
+
+async function uploadPendingBugFiles(workspaceCode: string, bugId: number) {
+  if (!pendingBugFiles.value.length) {
+    return [] as BugAttachment[]
+  }
+  const files = pendingBugFiles.value.map(item => item.file)
+  const uploaded = await platformApi.uploadBugAttachment(workspaceCode, bugId, files)
+  clearPendingBugFiles()
+  return uploaded
+}
+
+async function submitCreateBug(keepOpen = false) {
   if (!detail.value || !currentCaseId.value) {
     return
   }
@@ -540,7 +623,7 @@ async function submitCreateBug() {
     ElMessage.error('请输入缺陷标题')
     return
   }
-  if (!bugForm.value.description.trim()) {
+  if (!extractPlainTextFromHtml(bugForm.value.description)) {
     ElMessage.error('请输入缺陷描述')
     return
   }
@@ -556,20 +639,29 @@ async function submitCreateBug() {
       tags: bugForm.value.tags,
     }
     if (bugEditorMode.value === 'create') {
-      await platformApi.createBugFromCase(detail.value.workspaceCode, currentCaseId.value, {
+      const createdBug = await platformApi.createBugFromCase(detail.value.workspaceCode, currentCaseId.value, {
         ...payload,
         relatedCaseId: currentCaseId.value,
       })
+      await uploadPendingBugFiles(detail.value.workspaceCode, createdBug.id)
       ElMessage.success('已从用例创建缺陷')
+      if (keepOpen) {
+        openCreateBugDrawer()
+        activeTab.value = 'bugs'
+        await loadRelatedBugs(currentCaseId.value, detail.value.workspaceCode)
+        return
+      }
     }
     else if (activeBugDetail.value) {
       activeBugDetail.value = await platformApi.updateBug(detail.value.workspaceCode, activeBugDetail.value.id, {
         ...payload,
         relatedCaseId: currentCaseId.value,
       })
+      await uploadPendingBugFiles(detail.value.workspaceCode, activeBugDetail.value.id)
       ElMessage.success('缺陷已更新')
     }
     bugCreateVisible.value = false
+    clearPendingBugFiles()
     activeTab.value = 'bugs'
     await loadRelatedBugs(currentCaseId.value, detail.value.workspaceCode)
   }
@@ -1190,6 +1282,7 @@ onBeforeUnmount(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleExecutionImagePreviewKeydown)
+  clearPendingBugFiles()
 })
 </script>
 
@@ -1259,6 +1352,9 @@ onUnmounted(() => {
     </aside>
 
     <section class="execution-main">
+      <div class="execution-main-backbar">
+        <el-button class="execution-back-button" text :icon="ArrowLeft" @click="goBackToCaseManagement">返回用例管理</el-button>
+      </div>
       <div class="execution-main-header">
         <div class="execution-main-header-content">
           <div class="execution-main-header-top">
@@ -1269,12 +1365,11 @@ onUnmounted(() => {
             >
               {{ executionStatusLabel(detail?.executionStatus || 'NOT_RUN') }}
             </el-tag>
+            <div class="execution-main-title">
+              <span class="execution-main-case-no">[{{ detail?.caseNo || '-' }}]</span>
+              <span class="execution-main-case-title">{{ detail?.title || '用例详情' }}</span>
+            </div>
           </div>
-          <div class="execution-main-title">
-            <span class="execution-main-case-no">{{ detail?.caseNo || '-' }}</span>
-            <span>{{ detail?.title || '用例详情' }}</span>
-          </div>
-          <div class="execution-main-subtitle">{{ contextState?.sourceLabel || '当前执行视图' }}</div>
         </div>
         <el-button v-if="canEditCurrentCase" @click="openCaseEdit">
           <el-icon><Edit /></el-icon>
@@ -1440,40 +1535,44 @@ onUnmounted(() => {
             </div>
           </el-tab-pane>
 
-          <el-tab-pane label="缺陷列表" name="bugs">
+          <el-tab-pane name="bugs">
+            <template #label>缺陷列表（{{ associatedBugs.length }}）</template>
             <section class="execution-detail-card" v-loading="bugListLoading">
               <div class="execution-tab-header">
-                <div>
-                  <div class="execution-card-title">关联缺陷</div>
-                  <div class="execution-card-meta">仅展示当前模块范围内可关联的缺陷；模块路径过滤口已预留。</div>
-                </div>
                 <div class="execution-bug-actions">
                   <el-button @click="openLinkBugDialog">关联缺陷</el-button>
                   <el-button type="primary" @click="openCreateBugDrawer">新建缺陷</el-button>
                 </div>
               </div>
-              <div v-if="associatedBugs.length" class="execution-bug-list">
-                <article v-for="bug in associatedBugs" :key="bug.id" class="execution-bug-item">
-                  <div class="execution-bug-item-top">
-                    <div>
-                      <div class="execution-bug-no">{{ bug.bugNo }}</div>
-                      <div class="execution-bug-title">{{ bug.title }}</div>
-                    </div>
-                    <el-tag size="small" effect="plain">{{ bug.status }}</el-tag>
-                  </div>
-                  <div class="execution-bug-meta">
-                    <span>优先级：{{ bug.priority }}</span>
-                    <span>严重程度：{{ bug.severity }}</span>
-                    <span>负责人：{{ bug.assigneeName || '-' }}</span>
-                  </div>
-                  <div class="execution-bug-item-actions">
-                    <el-button text type="primary" @click="openBugDetail(bug.id)">查看详情</el-button>
-                    <el-button text type="primary" @click="openBugDetailForEdit(bug.id)">编辑</el-button>
-                    <el-button text type="danger" @click="unlinkBug(bug)">取消关联</el-button>
-                  </div>
-                </article>
-              </div>
-              <el-empty v-else description="暂无关联缺陷" :image-size="84" />
+              <el-table
+                v-if="associatedBugs.length"
+                :data="associatedBugs"
+                size="large"
+                class="execution-bug-table"
+              >
+                <el-table-column prop="bugNo" label="缺陷编号" width="170" />
+                <el-table-column prop="title" label="标题" min-width="260" show-overflow-tooltip />
+                <el-table-column prop="priority" label="优先级" width="90" />
+                <el-table-column prop="severity" label="严重程度" width="110" />
+                <el-table-column label="状态" width="110">
+                  <template #default="{ row }">
+                    <el-tag size="small" effect="plain">{{ row.status }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="assigneeName" label="负责人" width="120">
+                  <template #default="{ row }">
+                    {{ row.assigneeName || '-' }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="220" fixed="right">
+                  <template #default="{ row }">
+                    <el-button text type="primary" @click="openBugDetail(row.id)">查看详情</el-button>
+                    <el-button text type="primary" @click="openBugDetailForEdit(row.id)">编辑</el-button>
+                    <el-button text type="danger" @click="unlinkBug(row)">取消关联</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <el-empty v-else description="暂无关联缺陷" :image-size="84" class="execution-bug-empty" />
             </section>
           </el-tab-pane>
 
@@ -1529,43 +1628,14 @@ onUnmounted(() => {
     </section>
   </section>
 
-  <el-dialog v-model="bugLinkDialogVisible" title="关联缺陷" width="720px">
-    <div class="execution-bug-dialog-toolbar">
-      <el-input
-        v-model="bugLinkKeyword"
-        placeholder="通过缺陷编号 / 标题搜索"
-        clearable
-        :prefix-icon="Search"
-      />
-    </div>
-    <div v-if="availableLinkBugs.length" class="execution-bug-dialog-list">
-      <article v-for="bug in availableLinkBugs" :key="bug.id" class="execution-bug-dialog-item">
-        <div class="execution-bug-item-top">
-          <div>
-            <div class="execution-bug-no">{{ bug.bugNo }}</div>
-            <div class="execution-bug-title">{{ bug.title }}</div>
-          </div>
-          <el-tag size="small" effect="plain">{{ bug.status }}</el-tag>
-        </div>
-        <div class="execution-bug-meta">
-          <span>优先级：{{ bug.priority }}</span>
-          <span>严重程度：{{ bug.severity }}</span>
-          <span>负责人：{{ bug.assigneeName || '-' }}</span>
-        </div>
-        <div class="execution-bug-dialog-actions">
-          <el-button
-            type="primary"
-            :loading="bugLinkLoading && linkingBugId === bug.id"
-            :disabled="bugLinkLoading && linkingBugId !== bug.id"
-            @click="associateBug(bug.id)"
-          >
-            关联到当前用例
-          </el-button>
-        </div>
-      </article>
-    </div>
-    <el-empty v-else description="暂无可关联缺陷" :image-size="72" />
-  </el-dialog>
+  <BugLinkDrawer
+    v-model="bugLinkDrawerVisible"
+    v-model:keyword="bugLinkKeyword"
+    :bugs="availableLinkBugs"
+    :loading="bugLinkLoading"
+    :linking-bug-id="linkingBugId"
+    @associate="associateBug"
+  />
 
   <CaseEditorDrawer
     v-model="caseEditorVisible"
@@ -1584,13 +1654,17 @@ onUnmounted(() => {
 
   <BugEditorDrawer
     v-model="bugCreateVisible"
-    :title="bugEditorMode === 'create' ? '新建缺陷' : '编辑缺陷'"
+    :title="bugEditorMode === 'create' ? '创建缺陷' : '编辑缺陷'"
     :form="bugForm"
     :saving="bugSaving"
     :can-submit="canSubmitBugCreate"
     :users="bugAssigneeOptions"
     :source-context="executionBugSourceContext"
-    @submit="submitCreateBug"
+    :pending-files="pendingBugFiles.map(item => ({ id: item.id, name: item.file.name, size: item.file.size, kind: item.kind, previewUrl: item.previewUrl }))"
+    @submit="submitCreateBug()"
+    @submit-and-continue="submitCreateBug(true)"
+    @add-files="addPendingBugFiles"
+    @remove-file="removePendingBugFile"
   />
 
   <BugDetailDrawer
@@ -1846,6 +1920,24 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
+.execution-main-backbar {
+  display: flex;
+  align-items: center;
+  padding: 12px 24px 0;
+}
+
+.execution-back-button {
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #175cd3;
+}
+
+.execution-back-button:hover,
+.execution-back-button:focus-visible {
+  color: #1849a9;
+}
+
 .execution-main-header {
   display: flex;
   align-items: flex-start;
@@ -1863,12 +1955,25 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 10px;
+  min-width: 0;
   font-size: 16px;
   font-weight: 700;
   line-height: 1.5;
   color: #101828;
   word-break: break-word;
+}
+
+.execution-main-case-no {
+  flex: 0 0 auto;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.execution-main-case-title {
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 700;
 }
 
 .execution-body {
@@ -2008,75 +2113,27 @@ onUnmounted(() => {
   box-shadow: 0 0 0 3px rgba(127, 86, 217, 0.08);
 }
 
-.execution-bug-actions,
-.execution-bug-item-top,
-.execution-bug-dialog-actions {
+.execution-bug-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
 }
 
 .execution-bug-actions {
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
-.execution-bug-list,
-.execution-bug-dialog-list {
-  display: grid;
-  gap: 12px;
-}
-
-.execution-bug-list {
-  margin-top: 16px;
-}
-
-.execution-bug-item,
-.execution-bug-dialog-item {
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  background: #fcfcfd;
-  padding: 14px 16px;
-}
-
-.execution-bug-no {
-  font-size: 12px;
-  font-weight: 600;
-  color: #6941c6;
-}
-
-.execution-bug-title {
-  margin-top: 6px;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.5;
-  color: #101828;
-}
-
-.execution-bug-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  margin-top: 10px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: #667085;
-}
-
-.execution-bug-dialog-toolbar {
-  margin-bottom: 16px;
-}
-
-.execution-bug-dialog-actions {
+.execution-bug-table {
   margin-top: 12px;
-  justify-content: flex-end;
 }
 
-.execution-bug-item-actions {
-  margin-top: 8px;
-  display: flex;
-  justify-content: flex-end;
+.execution-bug-table :deep(.el-table__cell) {
+  vertical-align: middle;
+}
+
+.execution-bug-empty {
+  padding: 20px 0 8px;
 }
 
 .execution-evidence-files {

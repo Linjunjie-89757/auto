@@ -1115,7 +1115,7 @@ onBeforeUnmount(() => {
                 <span class="detail-cell-text">{{ row.manualEdited ? '是' : '否' }}</span>
               </template>
             </el-table-column>
-            <el-table-column v-else-if="column.key === 'manualEditedByName'" label="操作人" width="120" show-overflow-tooltip>
+            <el-table-column v-else-if="column.key === 'manualEditedByName'" label="操作人" width="120">
               <template #default="{ row }">
                 <span class="detail-cell-text">{{ row.manualEditedByName || '-' }}</span>
               </template>

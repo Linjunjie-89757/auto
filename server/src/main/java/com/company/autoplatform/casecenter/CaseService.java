@@ -196,6 +196,7 @@ public class CaseService {
 
         entity.setExecutionStatus(normalizeExecutionStatus(request.executionStatus()));
         entity.setExecutionComment(blankToNull(request.executionComment()));
+        entity.setExecutionNote(blankToNull(request.executionNote()));
         entity.setExecutorId(CurrentUserContext.require().userId());
         entity.setExecutedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
@@ -591,6 +592,7 @@ public class CaseService {
                 item.getExecutorId(),
                 executor == null ? "-" : executor.getDisplayName(),
                 item.getExecutionComment(),
+                item.getExecutionNote(),
                 item.getExecutedAt() == null ? null : item.getExecutedAt().toString(),
                 workspace.getWorkspaceCode(),
                 workspace.getWorkspaceName(),

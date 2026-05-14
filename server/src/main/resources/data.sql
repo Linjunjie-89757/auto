@@ -21,7 +21,10 @@ MERGE INTO tb_sys_workspace_member KEY(id) VALUES
 (6, 3, 1, 'ADMIN', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 (7, 3, 5, 'VIEWER', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 
-MERGE INTO tb_case_info KEY(id) VALUES
+MERGE INTO tb_case_info (
+    id, workspace_id, case_no, title, case_type, priority, source_type, case_status,
+    owner_id, precondition, steps, expected_result, created_at, updated_at
+) KEY(id) VALUES
 (128, 1, 'CASE-00128', '开户成功主流程', 'FUNCTION', 'P0', 'AI生成', '已确认', 2, '客户信息完整', '提交开户申请', '开户成功', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 (129, 1, 'CASE-00129', '开户字段边界长度校验', 'BOUNDARY', 'P1', 'AI追加', '草稿', 3, '验证码已发送', '输入超长字段', '提示字段长度校验失败', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 (130, 2, 'CASE-00130', '短信验证码失效处理', 'EXCEPTION', 'P0', '手工创建', '已确认', 4, '验证码过期', '提交验证码', '提示验证码失效', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),

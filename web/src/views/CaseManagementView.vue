@@ -59,6 +59,7 @@ type CaseColumnKey =
   | 'caseNo'
   | 'title'
   | 'priority'
+  | 'sourceType'
   | 'reviewStatus'
   | 'reviewedByName'
   | 'reviewedAt'
@@ -194,13 +195,14 @@ const caseColumnSettings: CaseColumnSetting[] = [
   { key: 'caseNo', label: '用例编号', width: '168px', required: true },
   { key: 'title', label: '用例名称', width: 'minmax(320px, 1fr)', required: true },
   { key: 'priority', label: '优先级', width: '88px' },
+  { key: 'sourceType', label: '用例来源', width: '120px' },
   { key: 'reviewStatus', label: '评审状态', width: '112px' },
   { key: 'reviewedByName', label: '评审人', width: '110px' },
   { key: 'reviewedAt', label: '评审时间', width: '156px' },
   { key: 'executionStatus', label: '执行状态', width: '112px' },
   { key: 'executorName', label: '执行人', width: '104px' },
   { key: 'executedAt', label: '执行时间', width: '156px' },
-  { key: 'workspaceName', label: '所属空间', width: '128px', allOnly: true },
+  { key: 'workspaceName', label: '所属空间', width: '128px' },
   { key: 'directoryName', label: '所属模块', width: '152px' },
   { key: 'createdByName', label: '创建人', width: '130px' },
   { key: 'createdAt', label: '创建时间', width: '176px' },
@@ -211,13 +213,14 @@ const defaultVisibleColumns: Record<CaseColumnKey, boolean> = {
   caseNo: true,
   title: true,
   priority: true,
+  sourceType: false,
   reviewStatus: true,
   reviewedByName: false,
   reviewedAt: false,
   executionStatus: true,
   executorName: true,
   executedAt: false,
-  workspaceName: true,
+  workspaceName: false,
   directoryName: true,
   createdByName: false,
   createdAt: false,
@@ -237,7 +240,6 @@ const caseListToolbar = useListToolbarState({
   columns: caseTableColumns,
   filters: caseFilters,
   filterDefaults: caseFilterDefaults,
-  isColumnAvailable: column => !column.allOnly || isAllScope.value,
   pageSizeEnabled: true,
   defaultPageSize: DEFAULT_PAGE_SIZE,
   pageSizeOptions: PAGE_SIZE_OPTIONS,
@@ -625,6 +627,8 @@ function getCaseColumnValue(row: CaseItem, key: CaseColumnKey) {
       return row.title
     case 'priority':
       return row.priority
+    case 'sourceType':
+      return row.sourceType || '-'
     case 'reviewStatus':
       return reviewStatusLabel(row.reviewStatus)
     case 'reviewedByName':
@@ -640,7 +644,7 @@ function getCaseColumnValue(row: CaseItem, key: CaseColumnKey) {
     case 'workspaceName':
       return row.workspaceName
     case 'directoryName':
-      return row.directoryName || '-'
+      return formatCaseModulePath(row.workspaceCode, row.directoryId)
     case 'createdByName':
       return row.createdByName || '-'
     case 'createdAt':
@@ -652,6 +656,11 @@ function getCaseColumnValue(row: CaseItem, key: CaseColumnKey) {
     default:
       return '-'
   }
+}
+
+function shouldUseCellTooltip(key: CaseColumnKey) {
+  return key === 'title'
+    || key === 'directoryName'
 }
 async function loadCases() {
   loading.value = true
@@ -1420,6 +1429,11 @@ onMounted(bootstrap)
                       {{ executionStatusLabel(row.executionStatus) }}
                     </el-tag>
                   </template>
+                  <template v-else-if="shouldUseCellTooltip(column.key)">
+                    <el-tooltip :content="getCaseColumnValue(row, column.key)" placement="top" :show-after="180">
+                      <span class="case-cell-text">{{ getCaseColumnValue(row, column.key) }}</span>
+                    </el-tooltip>
+                  </template>
                   <template v-else>
                     {{ getCaseColumnValue(row, column.key) }}
                   </template>
@@ -1895,6 +1909,14 @@ onMounted(bootstrap)
 .case-cell-workspaceName,
 .case-cell-createdAt,
 .case-cell-updatedAt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.case-cell-text {
+  display: block;
+  width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

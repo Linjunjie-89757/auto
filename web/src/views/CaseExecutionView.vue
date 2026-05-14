@@ -37,6 +37,7 @@ const executionCases = ref<CaseItem[]>([])
 const detail = ref<CaseDetail | null>(null)
 const selectedExecutionStatus = ref<ExecutionStatus | ''>('')
 const executionComment = ref('')
+const executionNoteDraft = ref('')
 const relatedBugs = ref<BugSummary[]>([])
 const bugListLoading = ref(false)
 const bugLinkDialogVisible = ref(false)
@@ -230,6 +231,7 @@ function buildFallbackCase(detailRow: CaseDetail): CaseItem {
     ownerName: detailRow.ownerName,
     executorName: detailRow.executorName,
     executionComment: detailRow.executionComment,
+    executionNote: detailRow.executionNote,
     executedAt: detailRow.executedAt,
     workspaceCode: detailRow.workspaceCode,
     workspaceName: detailRow.workspaceName,
@@ -296,6 +298,7 @@ function findDirectoryNameById(nodes: CaseDirectoryNode[], directoryId: number |
 
 function syncExecutionInputs(target: CaseDetail | null) {
   executionComment.value = target?.executionComment ?? ''
+  executionNoteDraft.value = target?.executionNote ?? ''
   if (target?.executionStatus === 'PASSED' || target?.executionStatus === 'BLOCKED' || target?.executionStatus === 'FAILED') {
     selectedExecutionStatus.value = target.executionStatus
     return
@@ -1121,6 +1124,7 @@ async function submitExecution() {
     const response = await platformApi.executeCase(effectiveWorkspaceCode.value, currentCaseId.value, {
       executionStatus: selectedExecutionStatus.value,
       executionComment: executionComment.value.trim(),
+      executionNote: executionNoteDraft.value.trim(),
     })
     detail.value = response
     updateExecutionCollection(response)
@@ -1291,20 +1295,12 @@ onUnmounted(() => {
                 <div class="execution-card-value">{{ detail?.priority || '-' }}</div>
               </section>
               <section class="execution-card">
-                <div class="execution-card-label">创建人</div>
-                <div class="execution-card-value">{{ detail?.createdByName || '-' }}</div>
+                <div class="execution-card-label">用例来源</div>
+                <div class="execution-card-value">{{ detail?.sourceType || '-' }}</div>
               </section>
               <section class="execution-card">
                 <div class="execution-card-label">创建时间</div>
                 <div class="execution-card-value">{{ formatDateTime(detail?.createdAt || null) }}</div>
-              </section>
-              <section class="execution-card">
-                <div class="execution-card-label">更新人</div>
-                <div class="execution-card-value">{{ detail?.updatedByName || '-' }}</div>
-              </section>
-              <section class="execution-card">
-                <div class="execution-card-label">更新时间</div>
-                <div class="execution-card-value">{{ formatDateTime(detail?.updatedAt || null) }}</div>
               </section>
               <section class="execution-card">
                 <div class="execution-card-label">评审结果</div>
@@ -1321,6 +1317,14 @@ onUnmounted(() => {
               <section class="execution-card">
                 <div class="execution-card-label">评审人</div>
                 <div class="execution-card-value">{{ detail?.reviewedByName || '-' }}</div>
+              </section>
+              <section class="execution-card">
+                <div class="execution-card-label">执行人</div>
+                <div class="execution-card-value">{{ detail?.executorName || '-' }}</div>
+              </section>
+              <section class="execution-card">
+                <div class="execution-card-label">执行时间</div>
+                <div class="execution-card-value">{{ formatDateTime(detail?.executedAt || null) }}</div>
               </section>
             </div>
           </el-tab-pane>
@@ -1425,7 +1429,13 @@ onUnmounted(() => {
               </section>
               <section class="execution-detail-card">
                 <div class="execution-card-label">备注</div>
-                <div class="execution-rich-text execution-note-placeholder">-</div>
+                <el-input
+                  v-model="executionNoteDraft"
+                  type="textarea"
+                  resize="none"
+                  placeholder="请输入备注"
+                  class="execution-note-input"
+                />
               </section>
             </div>
           </el-tab-pane>
@@ -1971,6 +1981,31 @@ onUnmounted(() => {
 
 .execution-note-placeholder {
   min-height: 64px;
+}
+
+.execution-note-input :deep(.el-textarea__inner) {
+  min-height: 64px !important;
+  padding: 14px 16px;
+  border: 1px solid #d0d5dd;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: none;
+  font-size: 13px;
+  line-height: 1.8;
+  color: #344054;
+  caret-color: #7f56d9;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.execution-note-input :deep(.el-textarea__inner:hover) {
+  border-color: #98a2b3;
+  background: #ffffff;
+}
+
+.execution-note-input :deep(.el-textarea__inner:focus) {
+  border-color: #7f56d9;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(127, 86, 217, 0.08);
 }
 
 .execution-bug-actions,

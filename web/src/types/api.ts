@@ -68,6 +68,7 @@ export interface CaseItem {
   ownerName: string
   executorName: string
   executionComment: string | null
+  executionNote: string | null
   executedAt: string | null
   workspaceCode: string
   workspaceName: string
@@ -135,6 +136,7 @@ export interface ReviewCasePayload {
 export interface ExecuteCasePayload {
   executionStatus: string
   executionComment?: string
+  executionNote?: string
 }
 
 export interface AiCaseConfig {

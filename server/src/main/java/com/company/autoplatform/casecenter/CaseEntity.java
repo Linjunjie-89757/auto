@@ -44,6 +44,9 @@ public class CaseEntity extends BaseEntity {
     @TableField("execution_comment")
     private String executionComment;
 
+    @TableField("execution_note")
+    private String executionNote;
+
     @TableField("executed_at")
     private LocalDateTime executedAt;
 

@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS tb_case_info (
     precondition TEXT,
     steps TEXT,
     expected_result TEXT,
+    execution_note TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

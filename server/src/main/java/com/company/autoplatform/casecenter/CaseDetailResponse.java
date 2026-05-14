@@ -14,6 +14,7 @@ public record CaseDetailResponse(
         Long executorId,
         String executorName,
         String executionComment,
+        String executionNote,
         String executedAt,
         String workspaceCode,
         String workspaceName,

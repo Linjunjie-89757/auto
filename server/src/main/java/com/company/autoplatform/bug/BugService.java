@@ -391,20 +391,51 @@ public class BugService {
         WorkspaceEntity workspace = workspaceService.requireWorkspaceById(entity.getWorkspaceId());
         UserEntity assignee = entity.getAssigneeId() == null ? null : userService.requireUser(entity.getAssigneeId());
         UserEntity reporter = userService.requireUser(entity.getReporterId());
+        String updatedByName = resolveUpdatedByName(entity, reporter);
         return new BugSummaryResponse(
                 entity.getId(),
                 entity.getBugNo(),
                 entity.getTitle(),
+                JsonUtils.toStringList(entity.getTagsJson()),
                 BugPriority.valueOf(entity.getPriority()),
                 BugSeverity.valueOf(entity.getSeverity()),
                 BugStatus.valueOf(entity.getStatus()),
                 assignee == null ? "-" : assignee.getDisplayName(),
                 reporter.getDisplayName(),
                 entity.getCreatedAt(),
+                updatedByName,
+                entity.getUpdatedAt(),
                 entity.getRelatedCaseId(),
+                entity.getRelatedCaseId() == null ? 0 : 1,
                 workspace.getWorkspaceCode(),
                 workspace.getWorkspaceName()
         );
+    }
+
+    private String resolveUpdatedByName(BugEntity entity, UserEntity reporter) {
+        LocalDateTime latestTime = entity.getUpdatedAt() == null ? entity.getCreatedAt() : entity.getUpdatedAt();
+        String updatedByName = reporter.getDisplayName();
+
+        BugFlowEntity latestFlow = bugFlowMapper.selectOne(new LambdaQueryWrapper<BugFlowEntity>()
+                .eq(BugFlowEntity::getBugId, entity.getId())
+                .orderByDesc(BugFlowEntity::getCreatedAt)
+                .last("limit 1"));
+        if (latestFlow != null && latestFlow.getCreatedAt() != null
+                && (latestTime == null || !latestFlow.getCreatedAt().isBefore(latestTime))) {
+            latestTime = latestFlow.getCreatedAt();
+            updatedByName = userService.requireUser(latestFlow.getOperatorId()).getDisplayName();
+        }
+
+        BugCommentEntity latestComment = bugCommentMapper.selectOne(new LambdaQueryWrapper<BugCommentEntity>()
+                .eq(BugCommentEntity::getBugId, entity.getId())
+                .orderByDesc(BugCommentEntity::getCreatedAt)
+                .last("limit 1"));
+        if (latestComment != null && latestComment.getCreatedAt() != null
+                && (latestTime == null || latestComment.getCreatedAt().isAfter(latestTime))) {
+            updatedByName = userService.requireUser(latestComment.getCommenterId()).getDisplayName();
+        }
+
+        return updatedByName;
     }
 
     private BugDetailResponse toDetail(BugEntity entity) {

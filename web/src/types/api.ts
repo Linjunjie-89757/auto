@@ -547,13 +547,17 @@ export interface BugSummary {
   id: number
   bugNo: string
   title: string
+  tags: string[]
   priority: string
   severity: string
   status: string
   assigneeName: string
   reporterName: string
   createdAt: string
+  updatedByName: string
+  updatedAt: string
   relatedCaseId: number | null
+  relatedCaseCount: number
   workspaceCode: string
   workspaceName: string
 }

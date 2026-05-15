@@ -273,7 +273,7 @@ public class BugService {
         } else if (!workspaceService.isPlatformAdmin()) {
             List<Long> workspaceIds = workspaceService.listReadableWorkspaceIds();
             if (workspaceIds.isEmpty()) {
-                return new BugStatisticsResponse(0, 0, 0, 0, 0, 0);
+                return new BugStatisticsResponse(0, 0, 0, 0, 0, 0, 0);
             }
             query.in(BugEntity::getWorkspaceId, workspaceIds);
         }
@@ -281,10 +281,8 @@ public class BugService {
         return new BugStatisticsResponse(
                 scoped.size(),
                 scoped.stream().filter(item -> BugStatus.valueOf(item.getStatus()) == BugStatus.TODO).count(),
-                scoped.stream().filter(item -> {
-                    BugStatus status = BugStatus.valueOf(item.getStatus());
-                    return status == BugStatus.ASSIGNED || status == BugStatus.IN_PROGRESS;
-                }).count(),
+                scoped.stream().filter(item -> BugStatus.valueOf(item.getStatus()) == BugStatus.ASSIGNED).count(),
+                scoped.stream().filter(item -> BugStatus.valueOf(item.getStatus()) == BugStatus.IN_PROGRESS).count(),
                 scoped.stream().filter(item -> BugStatus.valueOf(item.getStatus()) == BugStatus.PENDING_VERIFY).count(),
                 scoped.stream().filter(item -> BugStatus.valueOf(item.getStatus()) == BugStatus.CLOSED).count(),
                 scoped.stream().filter(item -> BugStatus.valueOf(item.getStatus()) == BugStatus.REJECTED).count()

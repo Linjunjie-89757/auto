@@ -46,7 +46,7 @@ const commentText = ref('')
 const uploadInput = ref<HTMLInputElement | null>(null)
 
 const statusOptions = [
-  { label: '待处理', value: 'TODO' },
+  { label: '待指派', value: 'TODO' },
   { label: '已指派', value: 'ASSIGNED' },
   { label: '处理中', value: 'IN_PROGRESS' },
   { label: '待验证', value: 'PENDING_VERIFY' },

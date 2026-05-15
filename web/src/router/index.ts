@@ -11,6 +11,7 @@ import CaseExecutionView from '../views/CaseExecutionView.vue'
 import CaseManagementView from '../views/CaseManagementView.vue'
 import AutomationView from '../views/AutomationView.vue'
 import BugManagementView from '../views/BugManagementView.vue'
+import BugCreateView from '../views/BugCreateView.vue'
 import SystemSettingsView from '../views/SystemSettingsView.vue'
 import LoginView from '../views/LoginView.vue'
 
@@ -76,6 +77,11 @@ const router = createRouter({
       path: '/bugs',
       name: 'bugs',
       component: BugManagementView,
+    },
+    {
+      path: '/bugs/create',
+      name: 'bugs-create',
+      component: BugCreateView,
     },
     {
       path: '/automation/api',

@@ -1,7 +1,7 @@
 package com.company.autoplatform.bug;
 
 public enum BugStatus {
-    TODO("待处理"),
+    TODO("待指派"),
     ASSIGNED("已指派"),
     IN_PROGRESS("处理中"),
     PENDING_VERIFY("待验证"),

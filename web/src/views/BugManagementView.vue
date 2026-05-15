@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { Plus, Promotion, RefreshRight, Setting, User } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { platformApi } from '../api/platform'
@@ -36,6 +37,7 @@ type BugColumnSetting = {
 const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50]
 
 const { workspaceCode, isAllScope } = useWorkspace()
+const router = useRouter()
 
 const loading = ref(false)
 const saving = ref(false)
@@ -45,6 +47,7 @@ const workspaces = ref<WorkspaceItem[]>([])
 const stats = ref<BugStats>({
   total: 0,
   todo: 0,
+  assigned: 0,
   inProgress: 0,
   pendingVerify: 0,
   closed: 0,
@@ -81,7 +84,7 @@ const bugFilterDefaults = {
 }
 
 const bugStatusOptions = [
-  { label: '待处理', value: 'TODO' },
+  { label: '待指派', value: 'TODO' },
   { label: '已指派', value: 'ASSIGNED' },
   { label: '处理中', value: 'IN_PROGRESS' },
   { label: '待验证', value: 'PENDING_VERIFY' },
@@ -170,12 +173,30 @@ const sourceBugState = reactive<CreateBugPayload & { workspaceCode: string; sour
   sourceId: null,
 })
 
+const statusCounts = computed(() => bugs.value.reduce<Record<string, number>>((counts, item) => {
+  counts[item.status] = (counts[item.status] ?? 0) + 1
+  return counts
+}, {}))
+
 const statCards = computed(() => [
-  { label: '缺陷总数', value: stats.value.total },
-  { label: '待处理', value: stats.value.todo },
-  { label: '处理中', value: stats.value.inProgress },
-  { label: '待验证', value: stats.value.pendingVerify },
+  { label: '缺陷总数', value: bugs.value.length, status: '', description: '全部缺陷' },
+  { label: '待指派', value: statusCounts.value.TODO ?? 0, status: 'TODO', description: '未分配处理人' },
+  { label: '待处理', value: statusCounts.value.ASSIGNED ?? 0, status: 'ASSIGNED', description: '已指派待处理' },
+  { label: '处理中', value: statusCounts.value.IN_PROGRESS ?? 0, status: 'IN_PROGRESS', description: '正在处理中' },
+  { label: '待验证', value: statusCounts.value.PENDING_VERIFY ?? 0, status: 'PENDING_VERIFY', description: '等待验证结果' },
 ])
+
+function selectStatCard(status: string) {
+  bugFilters.status = status
+  pageNo.value = 1
+}
+
+function isStatCardActive(status: string) {
+  if (status === '') {
+    return !bugFilters.status
+  }
+  return bugFilters.status === status
+}
 
 const filteredBugs = computed(() => bugs.value.filter(item => {
   const keyword = bugFilters.keyword.trim().toLowerCase()
@@ -335,9 +356,7 @@ async function openEditFromRow(id: number) {
 }
 
 function openCreateDialog() {
-  formMode.value = 'create'
-  Object.assign(formState, emptyPayload())
-  formVisible.value = true
+  router.push({ path: '/bugs/create', query: { workspace: workspaceCode.value } })
 }
 
 function openEditDialog() {
@@ -519,11 +538,20 @@ onMounted(() => {
       <div class="page-title">缺陷管理</div>
     </div>
 
-    <div class="stats-grid">
-      <article v-for="item in statCards" :key="item.label" class="metric-card">
+    <div class="stats-grid bug-stats-grid">
+      <article
+        v-for="item in statCards"
+        :key="item.label"
+        :class="['metric-card', 'bug-stat-card', { 'bug-stat-card-active': isStatCardActive(item.status) }]"
+        role="button"
+        tabindex="0"
+        @click="selectStatCard(item.status)"
+        @keydown.enter.prevent="selectStatCard(item.status)"
+        @keydown.space.prevent="selectStatCard(item.status)"
+      >
         <div class="metric-label">{{ item.label }}</div>
         <div class="metric-value">{{ item.value }}</div>
-        <div class="metric-trend">{{ isAllScope ? '全部空间汇总视角' : '当前空间缺陷概览' }}</div>
+        <div class="metric-trend">{{ item.description }}</div>
       </article>
     </div>
 
@@ -537,7 +565,7 @@ onMounted(() => {
               clearable
               class="toolbar-filter-input"
             />
-            <el-select v-model="bugFilters.status" clearable placeholder="状态" class="toolbar-filter-select">
+            <el-select v-model="bugFilters.status" clearable :value-on-clear="''" placeholder="状态" class="toolbar-filter-select">
               <el-option v-for="item in bugStatusOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
             <el-select v-model="bugFilters.priority" clearable placeholder="优先级" class="toolbar-filter-select">
@@ -838,6 +866,42 @@ onMounted(() => {
   align-self: flex-start;
 }
 
+.bug-stats-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.bug-stat-card {
+  position: relative;
+  min-width: 0;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
+}
+
+.bug-stat-card:hover,
+.bug-stat-card:focus-visible {
+  border-color: rgba(64, 158, 255, 0.42);
+  box-shadow: 0 10px 28px rgba(64, 158, 255, 0.12);
+  transform: translateY(-1px);
+}
+
+.bug-stat-card-active {
+  border-color: rgba(64, 158, 255, 0.72);
+  background: linear-gradient(180deg, rgba(64, 158, 255, 0.08), #ffffff 62%);
+  box-shadow: 0 12px 30px rgba(64, 158, 255, 0.14);
+}
+
+.bug-stat-card-active::after {
+  content: '';
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 0;
+  height: 3px;
+  border-radius: 999px 999px 0 0;
+  background: #409eff;
+}
+
 .toolbar-filter-input {
   width: 200px;
 }
@@ -1019,6 +1083,13 @@ onMounted(() => {
 }
 
 @media (max-width: 1200px) {
+  .bug-stats-grid {
+    grid-template-columns: repeat(5, minmax(180px, 1fr));
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: thin;
+  }
+
   .table-pagination,
   .table-pagination-right {
     flex-direction: column;

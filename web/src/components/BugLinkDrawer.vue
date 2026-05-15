@@ -42,7 +42,7 @@ const tableRef = ref<InstanceType<typeof ElTable> | null>(null)
 const selectedBugIds = ref<number[]>([])
 
 const statusLabelMap: Record<string, string> = {
-  TODO: '\u5f85\u5904\u7406',
+  TODO: '\u5f85\u6307\u6d3e',
   ASSIGNED: '\u5df2\u6307\u6d3e',
   IN_PROGRESS: '\u5904\u7406\u4e2d',
   PENDING_VERIFY: '\u5f85\u9a8c\u8bc1',

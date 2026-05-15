@@ -606,6 +606,7 @@ export interface BugDetail extends BugSummary {
 export interface BugStats {
   total: number
   todo: number
+  assigned: number
   inProgress: number
   pendingVerify: number
   closed: number

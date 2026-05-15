@@ -148,7 +148,7 @@ const bugStatus = computed({
 const statusOptions = computed(() => (
   bugStatus.value === 'ASSIGNED'
     ? [{ label: '已指派', value: 'ASSIGNED' }]
-    : [{ label: '待处理', value: 'TODO' }]
+    : [{ label: '待指派', value: 'TODO' }]
 ))
 
 const isEditMode = computed(() => props.title?.includes('编辑'))

@@ -84,6 +84,11 @@ const router = createRouter({
       component: BugCreateView,
     },
     {
+      path: '/bugs/:id/edit',
+      name: 'bugs-edit',
+      component: BugCreateView,
+    },
+    {
       path: '/automation/api',
       name: 'automation-api',
       component: AutomationView,

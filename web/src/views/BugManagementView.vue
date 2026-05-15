@@ -55,8 +55,6 @@ const stats = ref<BugStats>({
 })
 const detail = ref<BugDetail | null>(null)
 const drawerVisible = ref(false)
-const formVisible = ref(false)
-const formMode = ref<'create' | 'edit'>('create')
 const caseBugVisible = ref(false)
 const reportBugVisible = ref(false)
 const commentText = ref('')
@@ -156,6 +154,7 @@ const bugListToolbar = useListToolbarState({
 })
 
 const pageSize = bugListToolbar.pageSize
+const formattedDetailDescription = computed(() => sanitizeBugDescription(detail.value?.description || '-'))
 
 const emptyPayload = (): CreateBugPayload & { workspaceCode: string } => ({
   workspaceCode: workspaceCode.value === 'ALL' ? '' : workspaceCode.value,
@@ -167,7 +166,6 @@ const emptyPayload = (): CreateBugPayload & { workspaceCode: string } => ({
   tags: [],
 })
 
-const formState = reactive<CreateBugPayload & { workspaceCode: string }>(emptyPayload())
 const sourceBugState = reactive<CreateBugPayload & { workspaceCode: string; sourceId: number | null }>({
   ...emptyPayload(),
   sourceId: null,
@@ -274,6 +272,63 @@ function formatSeverity(value: string | null | undefined) {
   return severityLabelMap[value] ?? value
 }
 
+function sanitizeBugDescription(content: string) {
+  if (!content.trim()) {
+    return '-'
+  }
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(`<div>${content}</div>`, 'text/html')
+  const allowedTags = new Set(['DIV', 'BR', 'P', 'SPAN', 'STRONG', 'B', 'EM', 'I', 'U', 'S', 'MARK', 'UL', 'OL', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LABEL', 'INPUT', 'IMG'])
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_ELEMENT)
+  const toUnwrap: Element[] = []
+  while (walker.nextNode()) {
+    const element = walker.currentNode as HTMLElement
+    if (!allowedTags.has(element.tagName)) {
+      toUnwrap.push(element)
+      continue
+    }
+    Array.from(element.attributes).forEach((attr) => {
+      if (attr.name.startsWith('on')) {
+        element.removeAttribute(attr.name)
+        return
+      }
+      if (attr.name === 'style' && /^font-size:\s*(12|14|16|18)px$/i.test(attr.value)) {
+        return
+      }
+      if (attr.name === 'data-type' && /^(taskList|taskItem)$/i.test(attr.value)) {
+        return
+      }
+      if (attr.name === 'data-checked' && /^(true|false)$/i.test(attr.value)) {
+        return
+      }
+      if (element.tagName === 'INPUT' && (attr.name === 'type' || ['checked', 'disabled'].includes(attr.name))) {
+        return
+      }
+      if (element.tagName === 'IMG' && ['alt', 'title'].includes(attr.name)) {
+        return
+      }
+      if (element.tagName === 'IMG' && attr.name === 'src' && /^(https?:\/\/|\/api\/)/i.test(attr.value)) {
+        return
+      }
+      element.removeAttribute(attr.name)
+    })
+    if (element.tagName === 'INPUT') {
+      element.setAttribute('disabled', 'disabled')
+    }
+  }
+  toUnwrap.forEach((element) => {
+    const parent = element.parentNode
+    if (!parent) {
+      return
+    }
+    while (element.firstChild) {
+      parent.insertBefore(element.firstChild, element)
+    }
+    parent.removeChild(element)
+  })
+  return doc.body.innerHTML || '-'
+}
+
 function formatColumnValue(row: BugSummary, key: BugColumnKey) {
   switch (key) {
     case 'bugNo':
@@ -351,65 +406,11 @@ async function openDetail(id: number) {
 }
 
 async function openEditFromRow(id: number) {
-  await openDetail(id)
-  openEditDialog()
+  router.push({ path: `/bugs/${id}/edit`, query: { workspace: workspaceCode.value } })
 }
 
 function openCreateDialog() {
   router.push({ path: '/bugs/create', query: { workspace: workspaceCode.value } })
-}
-
-function openEditDialog() {
-  if (!detail.value) {
-    return
-  }
-  formMode.value = 'edit'
-  Object.assign(formState, {
-    workspaceCode: detail.value.workspaceCode,
-    title: detail.value.title,
-    description: detail.value.description,
-    priority: detail.value.priority,
-    severity: detail.value.severity,
-    assigneeId: detail.value.assigneeId,
-    tags: [...detail.value.tags],
-  })
-  formVisible.value = true
-}
-
-async function submitBug() {
-  if (isAllScope.value && !formState.workspaceCode) {
-    ElMessage.error('全部空间视角下请先选择目标空间')
-    return
-  }
-  saving.value = true
-  try {
-    const payload: CreateBugPayload = {
-      workspaceCode: isAllScope.value ? formState.workspaceCode : undefined,
-      title: formState.title,
-      description: formState.description,
-      priority: formState.priority,
-      severity: formState.severity,
-      assigneeId: formState.assigneeId,
-      tags: formState.tags,
-    }
-    if (formMode.value === 'create') {
-      await platformApi.createBug(workspaceCode.value, payload)
-      ElMessage.success('缺陷创建成功')
-    }
-    else if (detail.value) {
-      await platformApi.updateBug(workspaceCode.value, detail.value.id, payload)
-      ElMessage.success('缺陷更新成功')
-      await openDetail(detail.value.id)
-    }
-    formVisible.value = false
-    await loadBaseData()
-  }
-  catch (error) {
-    ElMessage.error((error as Error).message)
-  }
-  finally {
-    saving.value = false
-  }
 }
 
 async function submitAssign() {
@@ -512,7 +513,6 @@ async function submitReportBug() {
 }
 
 watch(workspaceCode, () => {
-  Object.assign(formState, emptyPayload())
   pageNo.value = 1
   loadBaseData()
 })
@@ -695,48 +695,13 @@ onMounted(() => {
       @reset="bugListToolbar.reset"
     />
 
-    <el-dialog v-model="formVisible" :title="formMode === 'create' ? '新建缺陷' : '编辑缺陷'" width="640px">
-      <el-form label-width="90px">
-        <el-form-item v-if="isAllScope" label="所属空间" required>
-          <el-select v-model="formState.workspaceCode" placeholder="请选择所属空间">
-            <el-option v-for="item in workspaces" :key="item.code" :label="item.name" :value="item.code" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="缺陷名称" required>
-          <el-input v-model="formState.title" />
-        </el-form-item>
-        <el-form-item label="缺陷描述" required>
-          <el-input v-model="formState.description" type="textarea" :rows="4" />
-        </el-form-item>
-        <el-form-item label="优先级">
-          <el-select v-model="formState.priority">
-            <el-option v-for="item in priorityOptions" :key="item" :label="item" :value="item" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="严重程度">
-          <el-select v-model="formState.severity">
-            <el-option v-for="item in severityOptions" :key="item" :label="formatSeverity(item)" :value="item" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="处理人">
-          <el-select v-model="formState.assigneeId" clearable>
-            <el-option v-for="item in users" :key="item.id" :label="item.displayName" :value="item.id" />
-          </el-select>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="formVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitBug">保存</el-button>
-      </template>
-    </el-dialog>
-
     <el-drawer v-model="drawerVisible" title="缺陷详情" size="720px">
       <template v-if="detail">
         <div class="detail-grid">
           <div class="detail-card">
             <div class="detail-title">{{ detail.title }}</div>
             <div class="detail-meta">{{ detail.bugNo }} | {{ detail.workspaceName }} | {{ formatStatus(detail.status) }}</div>
-            <p class="detail-body">{{ detail.description }}</p>
+            <div class="detail-body" v-html="formattedDetailDescription"></div>
           </div>
 
           <div class="detail-card">
@@ -864,6 +829,16 @@ onMounted(() => {
 .bug-create-button {
   flex: 0 0 auto;
   align-self: flex-start;
+}
+
+.detail-body :deep(img) {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  margin: 10px 0 14px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  object-fit: contain;
 }
 
 .bug-stats-grid {

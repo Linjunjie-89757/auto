@@ -111,6 +111,7 @@ function sanitizeRichHtml(content: string) {
     'H6',
     'LABEL',
     'INPUT',
+    'IMG',
   ])
   const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_ELEMENT)
   const toUnwrap: Element[] = []
@@ -153,6 +154,12 @@ function sanitizeRichHtml(content: string) {
         return
       }
 
+      if (element.tagName === 'IMG' && ['src', 'alt', 'title'].includes(attr.name)) {
+        if (attr.name !== 'src' || isSafeImageSrc(attr.value)) {
+          return
+        }
+      }
+
       element.removeAttribute(attr.name)
     })
 
@@ -173,6 +180,10 @@ function sanitizeRichHtml(content: string) {
   })
 
   return doc.body.innerHTML || '-'
+}
+
+function isSafeImageSrc(value: string) {
+  return /^(https?:\/\/|\/api\/)/i.test(value)
 }
 
 function sanitizeStyle(value: string) {
@@ -514,6 +525,16 @@ function handleUploadChange(event: Event) {
 .bug-detail-description :deep(mark) {
   padding: 0 2px;
   background: #fff3bf;
+}
+
+.bug-detail-description :deep(img) {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  margin: 10px 0 14px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  object-fit: contain;
 }
 
 .bug-detail-description :deep(ul[data-type="taskList"]) {

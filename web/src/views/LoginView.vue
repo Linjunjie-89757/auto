@@ -11,8 +11,8 @@ const authStore = useAuthStore()
 const loading = ref(false)
 
 const formState = reactive({
-  username: 'zhangli',
-  password: '123456',
+  username: 'superadmin',
+  password: 'superadmin123',
 })
 
 async function submit() {
@@ -65,7 +65,7 @@ async function submit() {
         </el-button>
       </el-form>
 
-      <div class="login-tip">演示账号默认密码均为 123456</div>
+      <div class="login-tip">默认管理员账号：superadmin / superadmin123</div>
     </div>
   </div>
 </template>

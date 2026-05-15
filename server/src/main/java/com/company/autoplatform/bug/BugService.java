@@ -1,6 +1,7 @@
 package com.company.autoplatform.bug;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.company.autoplatform.auth.CurrentUserContext;
 import com.company.autoplatform.casecenter.CaseEntity;
 import com.company.autoplatform.casecenter.CaseService;
@@ -20,7 +21,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.ArrayList;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 @Service
@@ -135,7 +135,19 @@ public class BugService {
         entity.setRelatedCaseId(request.relatedCaseId());
         entity.setTagsJson(JsonUtils.toJson(request.tags()));
         entity.setUpdatedAt(LocalDateTime.now());
-        bugMapper.updateById(entity);
+        bugMapper.update(
+                null,
+                new LambdaUpdateWrapper<BugEntity>()
+                        .eq(BugEntity::getId, entity.getId())
+                        .set(BugEntity::getTitle, entity.getTitle())
+                        .set(BugEntity::getDescription, entity.getDescription())
+                        .set(BugEntity::getPriority, entity.getPriority())
+                        .set(BugEntity::getSeverity, entity.getSeverity())
+                        .set(BugEntity::getAssigneeId, entity.getAssigneeId())
+                        .set(BugEntity::getRelatedCaseId, entity.getRelatedCaseId())
+                        .set(BugEntity::getTagsJson, entity.getTagsJson())
+                        .set(BugEntity::getUpdatedAt, entity.getUpdatedAt())
+        );
         return toDetail(entity);
     }
 
@@ -388,6 +400,7 @@ public class BugService {
                 BugStatus.valueOf(entity.getStatus()),
                 assignee == null ? "-" : assignee.getDisplayName(),
                 reporter.getDisplayName(),
+                entity.getCreatedAt(),
                 entity.getRelatedCaseId(),
                 workspace.getWorkspaceCode(),
                 workspace.getWorkspaceName()
@@ -459,6 +472,28 @@ public class BugService {
     }
 
     private String generateBugNo() {
-        return "BUG-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmssSSS"));
+        int nextNumber = bugMapper.selectList(new LambdaQueryWrapper<BugEntity>()).stream()
+                .map(BugEntity::getBugNo)
+                .map(this::parseBugSequence)
+                .max(Integer::compareTo)
+                .orElse(0) + 1;
+        return "BUG-" + String.format("%03d", nextNumber);
+    }
+
+    private int parseBugSequence(String bugNo) {
+        if (bugNo == null || !bugNo.startsWith("BUG-")) {
+            return 0;
+        }
+        String suffix = bugNo.substring(4);
+        for (int i = 0; i < suffix.length(); i++) {
+            if (!Character.isDigit(suffix.charAt(i))) {
+                return 0;
+            }
+        }
+        try {
+            return Integer.parseInt(suffix);
+        } catch (NumberFormatException exception) {
+            return 0;
+        }
     }
 }

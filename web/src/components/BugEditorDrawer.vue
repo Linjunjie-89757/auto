@@ -115,8 +115,11 @@ const severityOptions = [
   { label: '低', value: 'LOW' },
 ]
 
-const statusOptions = [
-  { label: '新建', value: 'TODO' },
+const priorityOptions = [
+  { label: 'P0', value: 'P0' },
+  { label: 'P1', value: 'P1' },
+  { label: 'P2', value: 'P2' },
+  { label: 'P3', value: 'P3' },
 ]
 
 const headingOptions = [
@@ -138,9 +141,15 @@ const fontSizeOptions = [
 ]
 
 const bugStatus = computed({
-  get: () => 'TODO',
+  get: () => (props.form.assigneeId === null ? 'TODO' : 'ASSIGNED'),
   set: () => {},
 })
+
+const statusOptions = computed(() => (
+  bugStatus.value === 'ASSIGNED'
+    ? [{ label: '已指派', value: 'ASSIGNED' }]
+    : [{ label: '待处理', value: 'TODO' }]
+))
 
 const isEditMode = computed(() => props.title?.includes('编辑'))
 const primarySubmitText = computed(() => (isEditMode.value ? '保存' : '创建'))
@@ -666,7 +675,7 @@ function handleFileChange(event: Event) {
         </div>
 
         <aside class="bug-editor-side">
-          <el-form-item label="处理人" required class="bug-editor-form-item bug-editor-side-item">
+          <el-form-item label="处理人" class="bug-editor-form-item bug-editor-side-item">
             <el-select v-model="form.assigneeId" clearable placeholder="请选择">
               <el-option
                 v-for="item in users"
@@ -676,9 +685,9 @@ function handleFileChange(event: Event) {
               />
             </el-select>
           </el-form-item>
-
+        
           <el-form-item label="状态" required class="bug-editor-form-item bug-editor-side-item">
-            <el-select v-model="bugStatus" placeholder="请选择">
+            <el-select v-model="bugStatus" placeholder="请选择" disabled>
               <el-option
                 v-for="item in statusOptions"
                 :key="item.value"
@@ -687,7 +696,18 @@ function handleFileChange(event: Event) {
               />
             </el-select>
           </el-form-item>
-
+        
+          <el-form-item label="优先级" required class="bug-editor-form-item bug-editor-side-item">
+            <el-select v-model="form.priority" placeholder="请选择">
+              <el-option
+                v-for="item in priorityOptions"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value"
+              />
+            </el-select>
+          </el-form-item>
+        
           <el-form-item label="严重程度" required class="bug-editor-form-item bug-editor-side-item">
             <el-select v-model="form.severity" placeholder="请选择">
               <el-option
@@ -698,7 +718,7 @@ function handleFileChange(event: Event) {
               />
             </el-select>
           </el-form-item>
-
+        
           <el-form-item label="标签" class="bug-editor-form-item bug-editor-side-item">
             <el-select
               v-model="form.tags"

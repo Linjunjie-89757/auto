@@ -552,6 +552,7 @@ export interface BugSummary {
   status: string
   assigneeName: string
   reporterName: string
+  createdAt: string
   relatedCaseId: number | null
   workspaceCode: string
   workspaceName: string

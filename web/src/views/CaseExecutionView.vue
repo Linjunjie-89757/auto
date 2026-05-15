@@ -44,7 +44,7 @@ const bugListLoading = ref(false)
 const bugLinkDrawerVisible = ref(false)
 const bugLinkLoading = ref(false)
 const bugLinkKeyword = ref('')
-const linkingBugId = ref<number | null>(null)
+const bugLinkAssociating = ref(false)
 const bugCreateVisible = ref(false)
 const bugDetailVisible = ref(false)
 const bugSaving = ref(false)
@@ -174,6 +174,20 @@ const associatedBugs = computed(() => {
   }
   return relatedBugs.value.filter(item => item.relatedCaseId === currentCaseId.value)
 })
+const bugStatusLabelMap: Record<string, string> = {
+  TODO: '待处理',
+  ASSIGNED: '已指派',
+  IN_PROGRESS: '处理中',
+  PENDING_VERIFY: '待验证',
+  CLOSED: '已关闭',
+  REJECTED: '已拒绝',
+}
+const bugSeverityLabelMap: Record<string, string> = {
+  CRITICAL: '致命',
+  HIGH: '高',
+  MEDIUM: '中',
+  LOW: '低',
+}
 const canSubmitCaseEdit = computed(() => !!caseEditorForm.value.title.trim() && !!caseEditorForm.value.workspaceCode)
 const caseEditorWorkspaceName = computed(() => (
   workspaces.value.find(item => item.code === caseEditorForm.value.workspaceCode)?.name || caseEditorForm.value.workspaceCode
@@ -267,6 +281,14 @@ function normalizeDirectoryLabel(path: string | null | undefined) {
     .map(segment => segment.trim())
     .filter(Boolean)
     .join(' / ')
+}
+
+function bugStatusLabel(status: string) {
+  return bugStatusLabelMap[status] ?? status
+}
+
+function bugSeverityLabel(severity: string) {
+  return bugSeverityLabelMap[severity] ?? severity
 }
 
 function escapeBugDescriptionHtml(value: string) {
@@ -519,16 +541,17 @@ function openEditBugDrawer() {
   bugCreateVisible.value = true
 }
 
-async function associateBug(bugId: number) {
+async function associateBug(bugIds: number[]) {
   if (!currentCaseId.value || !detail.value) {
     return
   }
-  linkingBugId.value = bugId
-  bugLinkLoading.value = true
+  bugLinkAssociating.value = true
   try {
-    const bug = await platformApi.getBugDetail(detail.value.workspaceCode, bugId)
-    await platformApi.updateBug(detail.value.workspaceCode, bugId, buildUpdateBugPayload(bug, currentCaseId.value))
-    ElMessage.success('关联缺陷成功')
+    for (const bugId of bugIds) {
+      const bug = await platformApi.getBugDetail(detail.value.workspaceCode, bugId)
+      await platformApi.updateBug(detail.value.workspaceCode, bugId, buildUpdateBugPayload(bug, currentCaseId.value))
+    }
+    ElMessage.success(`Associated ${bugIds.length} bugs`)
     bugLinkDrawerVisible.value = false
     await loadRelatedBugs(currentCaseId.value, detail.value.workspaceCode)
   }
@@ -536,32 +559,8 @@ async function associateBug(bugId: number) {
     ElMessage.error((error as Error).message)
   }
   finally {
-    linkingBugId.value = null
-    bugLinkLoading.value = false
+    bugLinkAssociating.value = false
   }
-}
-
-async function openBugDetail(bugId: number) {
-  if (!detail.value) {
-    return
-  }
-  bugDetailVisible.value = true
-  try {
-    activeBugDetail.value = await platformApi.getBugDetail(detail.value.workspaceCode, bugId)
-    relatedBugDetails.value = {
-      ...relatedBugDetails.value,
-      [activeBugDetail.value.id]: activeBugDetail.value,
-    }
-  }
-  catch (error) {
-    bugDetailVisible.value = false
-    ElMessage.error((error as Error).message)
-  }
-}
-
-async function openBugDetailForEdit(bugId: number) {
-  await openBugDetail(bugId)
-  openEditBugDrawer()
 }
 
 async function reloadActiveBugDetail() {
@@ -1549,14 +1548,20 @@ onUnmounted(() => {
                 :data="associatedBugs"
                 size="large"
                 class="execution-bug-table"
+                header-cell-class-name="execution-bug-table-header"
+                cell-class-name="execution-bug-table-cell"
               >
                 <el-table-column prop="bugNo" label="缺陷编号" width="170" />
                 <el-table-column prop="title" label="标题" min-width="260" show-overflow-tooltip />
                 <el-table-column prop="priority" label="优先级" width="90" />
-                <el-table-column prop="severity" label="严重程度" width="110" />
+                <el-table-column label="严重程度" width="110">
+                  <template #default="{ row }">
+                    {{ bugSeverityLabel(row.severity) }}
+                  </template>
+                </el-table-column>
                 <el-table-column label="状态" width="110">
                   <template #default="{ row }">
-                    <el-tag size="small" effect="plain">{{ row.status }}</el-tag>
+                    <el-tag size="small" effect="plain">{{ bugStatusLabel(row.status) }}</el-tag>
                   </template>
                 </el-table-column>
                 <el-table-column prop="assigneeName" label="负责人" width="120">
@@ -1564,13 +1569,13 @@ onUnmounted(() => {
                     {{ row.assigneeName || '-' }}
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="220" fixed="right">
-                  <template #default="{ row }">
-                    <el-button text type="primary" @click="openBugDetail(row.id)">查看详情</el-button>
-                    <el-button text type="primary" @click="openBugDetailForEdit(row.id)">编辑</el-button>
-                    <el-button text type="danger" @click="unlinkBug(row)">取消关联</el-button>
-                  </template>
-                </el-table-column>
+                  <el-table-column label="操作" width="120" fixed="right">
+                    <template #default="{ row }">
+                      <div class="execution-bug-action">
+                        <el-button text type="danger" @click="unlinkBug(row)">取消关联</el-button>
+                      </div>
+                    </template>
+                  </el-table-column>
               </el-table>
               <el-empty v-else description="暂无关联缺陷" :image-size="84" class="execution-bug-empty" />
             </section>
@@ -1633,7 +1638,7 @@ onUnmounted(() => {
     v-model:keyword="bugLinkKeyword"
     :bugs="availableLinkBugs"
     :loading="bugLinkLoading"
-    :linking-bug-id="linkingBugId"
+    :associating="bugLinkAssociating"
     @associate="associateBug"
   />
 
@@ -2130,6 +2135,24 @@ onUnmounted(() => {
 
 .execution-bug-table :deep(.el-table__cell) {
   vertical-align: middle;
+}
+
+.execution-bug-table :deep(.execution-bug-table-header .cell),
+.execution-bug-table :deep(.execution-bug-table-cell .cell) {
+  text-align: left;
+}
+
+.execution-bug-action {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+}
+
+.execution-bug-action :deep(.el-button) {
+  margin-left: 0;
+  padding-left: 0;
+  padding-right: 0;
+  min-width: 0;
 }
 
 .execution-bug-empty {

@@ -1,5 +1,7 @@
 package com.company.autoplatform.bug;
 
+import java.time.LocalDateTime;
+
 public record BugSummaryResponse(
         Long id,
         String bugNo,
@@ -9,6 +11,7 @@ public record BugSummaryResponse(
         BugStatus status,
         String assigneeName,
         String reporterName,
+        LocalDateTime createdAt,
         Long relatedCaseId,
         String workspaceCode,
         String workspaceName

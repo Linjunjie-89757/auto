@@ -44,6 +44,7 @@ public class SuperAdminBootstrap implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        String resolvedPassword = resolvePassword();
         UserEntity entity = userMapper.selectOne(new LambdaQueryWrapper<UserEntity>()
                 .eq(UserEntity::getRoleCode, PlatformRole.SUPER_ADMIN)
                 .last("limit 1"));
@@ -57,7 +58,7 @@ public class SuperAdminBootstrap implements ApplicationRunner {
             entity = new UserEntity();
             entity.setUsername(username);
             entity.setCreatedAt(LocalDateTime.now());
-            entity.setPassword(passwordEncoder.encode(resolvePassword()));
+            entity.setPassword(passwordEncoder.encode(resolvedPassword));
             entity.setStatus(1);
             entity.setEmail(email);
             entity.setDisplayName(displayName);
@@ -67,18 +68,35 @@ public class SuperAdminBootstrap implements ApplicationRunner {
             return;
         }
 
-        entity.setUsername(username);
-        entity.setEmail(email);
-        entity.setDisplayName(displayName);
-        entity.setRoleCode(PlatformRole.SUPER_ADMIN);
-        entity.setStatus(1);
-        entity.setUpdatedAt(LocalDateTime.now());
-        if (!alreadySuperAdmin || entity.getPassword() == null || entity.getPassword().isBlank()) {
-            entity.setPassword(passwordEncoder.encode(resolvePassword()));
+        boolean needsPassword = !alreadySuperAdmin || entity.getPassword() == null || entity.getPassword().isBlank();
+        boolean changed = !username.equals(entity.getUsername())
+                || !email.equals(entity.getEmail())
+                || !displayName.equals(entity.getDisplayName())
+                || !PlatformRole.SUPER_ADMIN.equals(entity.getRoleCode())
+                || entity.getStatus() == null || entity.getStatus() != 1
+                || needsPassword;
+
+        if (changed) {
+            entity.setUsername(username);
+            entity.setEmail(email);
+            entity.setDisplayName(displayName);
+            entity.setRoleCode(PlatformRole.SUPER_ADMIN);
+            entity.setStatus(1);
+            entity.setUpdatedAt(LocalDateTime.now());
+            if (needsPassword) {
+                entity.setPassword(passwordEncoder.encode(resolvedPassword));
+            }
+            userMapper.updateById(entity);
         }
-        userMapper.updateById(entity);
-        workspaceMemberMapper.delete(new LambdaQueryWrapper<com.company.autoplatform.workspace.WorkspaceMemberEntity>()
-                .eq(com.company.autoplatform.workspace.WorkspaceMemberEntity::getUserId, entity.getId()));
+
+        Long membershipCount = workspaceMemberMapper.selectCount(
+                new LambdaQueryWrapper<com.company.autoplatform.workspace.WorkspaceMemberEntity>()
+                        .eq(com.company.autoplatform.workspace.WorkspaceMemberEntity::getUserId, entity.getId())
+        );
+        if (membershipCount != null && membershipCount > 0) {
+            workspaceMemberMapper.delete(new LambdaQueryWrapper<com.company.autoplatform.workspace.WorkspaceMemberEntity>()
+                    .eq(com.company.autoplatform.workspace.WorkspaceMemberEntity::getUserId, entity.getId()));
+        }
     }
 
     private String resolvePassword() {

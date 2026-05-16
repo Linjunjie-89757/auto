@@ -341,12 +341,23 @@ function sanitizeStyle(value: string) {
 
       <div class="ms-bug-detail-topbar">
         <div class="ms-bug-detail-title-wrap">
-          <div class="ms-bug-detail-title-line">
-            <span class="ms-bug-detail-bugno">{{ detail?.bugNo || '-' }}</span>
-            <span class="ms-bug-detail-title">{{ detail?.title || '缺陷详情' }}</span>
-            <el-tag v-if="detail" effect="plain" size="small" class="ms-bug-detail-platform-tag">
-              {{ detail.workspaceName }}
-            </el-tag>
+          <div class="ms-bug-detail-object-head">
+            <div class="ms-bug-detail-object-main">
+              <div class="ms-bug-detail-object-line">
+                <span class="ms-bug-detail-object-no">{{ detail?.bugNo || '-' }}</span>
+                <span class="ms-bug-detail-object-name">{{ detail?.title || '未命名缺陷' }}</span>
+                <el-tag v-if="detail" effect="plain" size="small" class="ms-bug-detail-platform-tag">
+                  {{ detail.workspaceName }}
+                </el-tag>
+              </div>
+              <div v-if="detail" class="ms-bug-detail-object-meta">
+                <span>{{ formatBugStatus(detail.status) }}</span>
+                <span class="ms-bug-detail-meta-dot" />
+                <span>{{ formatBugSourceType(detail.sourceType) }}</span>
+                <span class="ms-bug-detail-meta-dot" />
+                <span>{{ detail.assigneeName || '未分配处理人' }}</span>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -669,10 +680,10 @@ function sanitizeStyle(value: string) {
 
 .ms-bug-detail-topbar {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 20px 0;
+  padding: 14px 20px 0;
   flex: 0 0 auto;
 }
 
@@ -681,7 +692,17 @@ function sanitizeStyle(value: string) {
   flex: 1;
 }
 
-.ms-bug-detail-title-line {
+.ms-bug-detail-object-head,
+.ms-bug-detail-object-main {
+  min-width: 0;
+}
+
+.ms-bug-detail-object-main {
+  display: grid;
+  gap: 4px;
+}
+
+.ms-bug-detail-object-line {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -689,20 +710,38 @@ function sanitizeStyle(value: string) {
   flex-wrap: wrap;
 }
 
-.ms-bug-detail-bugno {
+.ms-bug-detail-object-no {
   color: #175cd3;
   font-size: 14px;
   font-weight: 600;
   line-height: 1.5;
 }
 
-.ms-bug-detail-title {
+.ms-bug-detail-object-name {
   min-width: 0;
   color: #101828;
   font-size: 18px;
   font-weight: 600;
   line-height: 1.5;
   word-break: break-word;
+}
+
+.ms-bug-detail-object-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #98a2b3;
+  font-size: 12px;
+  line-height: 1.5;
+  flex-wrap: wrap;
+}
+
+.ms-bug-detail-meta-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: #d0d5dd;
 }
 
 .ms-bug-detail-platform-tag {
@@ -716,6 +755,7 @@ function sanitizeStyle(value: string) {
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
+  padding-top: 1px;
 }
 
 .ms-bug-detail-top-actions :deep(.el-button) {
@@ -750,8 +790,8 @@ function sanitizeStyle(value: string) {
 .ms-bug-detail-tabs {
   display: flex;
   align-items: center;
-  gap: 24px;
-  margin: 10px 20px 0;
+  gap: 28px;
+  margin: 12px 20px 0;
   border-bottom: 1px solid #eaecf0;
   flex: 0 0 auto;
   overflow-x: auto;
@@ -759,11 +799,12 @@ function sanitizeStyle(value: string) {
 
 .ms-bug-detail-tab {
   position: relative;
-  padding: 11px 0 10px;
+  padding: 12px 0 11px;
   border: none;
   background: transparent;
   color: #667085;
   font-size: 13px;
+  font-weight: 500;
   line-height: 1.5;
   cursor: pointer;
   white-space: nowrap;
@@ -795,19 +836,24 @@ function sanitizeStyle(value: string) {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 14px 20px 20px;
+  padding: 18px 20px 22px;
   background: #fff;
 }
 
 .ms-bug-detail-pane {
   display: grid;
-  gap: 18px;
+  gap: 24px;
 }
 
 .ms-bug-detail-section {
   display: grid;
   gap: 14px;
   padding-bottom: 2px;
+}
+
+.ms-bug-detail-pane > .ms-bug-detail-section {
+  padding-left: 4px;
+  padding-right: 4px;
 }
 
 .ms-bug-detail-section-header,
@@ -826,6 +872,11 @@ function sanitizeStyle(value: string) {
   font-size: 14px;
   font-weight: 700;
   line-height: 1.5;
+}
+
+.ms-bug-detail-section-header {
+  padding-bottom: 4px;
+  border-bottom: 1px solid #f2f4f7;
 }
 
 .ms-bug-section-tip,
@@ -850,7 +901,7 @@ function sanitizeStyle(value: string) {
 
 .ms-bug-basic-item {
   display: grid;
-  grid-template-columns: 84px minmax(0, 1fr);
+  grid-template-columns: 96px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
   min-height: 24px;
@@ -864,7 +915,7 @@ function sanitizeStyle(value: string) {
 .ms-bug-attachment-name {
   color: #344054;
   font-size: 13px;
-  line-height: 1.7;
+  line-height: 1.65;
   word-break: break-word;
 }
 
@@ -937,7 +988,7 @@ function sanitizeStyle(value: string) {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 12px;
-  padding-top: 2px;
+  padding-top: 4px;
 }
 
 .ms-bug-attachment-card {
@@ -981,7 +1032,7 @@ function sanitizeStyle(value: string) {
 .ms-bug-comment-item,
 .ms-bug-history-item,
 .ms-bug-source-row {
-  padding: 13px 0;
+  padding: 15px 0;
   border-top: 1px solid #f2f4f7;
 }
 
@@ -1009,16 +1060,42 @@ function sanitizeStyle(value: string) {
 
 .ms-bug-comment-content,
 .ms-bug-history-detail {
-  margin-top: 6px;
+  margin-top: 8px;
   color: #475467;
   font-size: 13px;
-  line-height: 1.7;
+  line-height: 1.8;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
+.ms-bug-comment-top,
+.ms-bug-history-item {
+  align-items: flex-start;
+}
+
+.ms-bug-comment-time,
+.ms-bug-history-time {
+  flex: 0 0 auto;
+  min-width: 124px;
+  text-align: right;
+  color: #b0b7c3;
+  font-size: 11px;
+  line-height: 1.4;
+  letter-spacing: 0;
+  padding-top: 2px;
+}
+
+.ms-bug-history-main {
+  min-width: 0;
+}
+
+.ms-bug-comment-item,
+.ms-bug-history-item {
+  min-height: 56px;
+}
+
 .ms-bug-source-label {
-  flex: 0 0 88px;
+  flex: 0 0 96px;
   color: #98a2b3;
   font-size: 12px;
   line-height: 1.8;
@@ -1026,6 +1103,24 @@ function sanitizeStyle(value: string) {
 
 .ms-bug-source-body {
   flex: 1;
+}
+
+.ms-bug-comment-list,
+.ms-bug-history-list,
+.ms-bug-file-list,
+.ms-bug-source-list {
+  padding-left: 2px;
+  padding-right: 2px;
+}
+
+.ms-bug-rich-content,
+.ms-bug-transition-form,
+.ms-bug-comment-editor,
+.ms-bug-basic-grid,
+.ms-bug-tag-list,
+.ms-bug-attachment-grid {
+  padding-left: 2px;
+  padding-right: 2px;
 }
 
 .ms-bug-source-body :deep(.el-button:hover),
@@ -1042,6 +1137,10 @@ function sanitizeStyle(value: string) {
     flex-direction: column;
   }
 
+  .ms-bug-comment-top {
+    align-items: flex-start;
+  }
+
   .ms-bug-basic-grid {
     grid-template-columns: 1fr;
   }
@@ -1053,6 +1152,12 @@ function sanitizeStyle(value: string) {
 
   .ms-bug-source-label {
     flex: none;
+  }
+
+  .ms-bug-comment-time,
+  .ms-bug-history-time {
+    min-width: 0;
+    text-align: left;
   }
 }
 </style>

@@ -541,6 +541,24 @@ function openEditBugDrawer() {
   bugCreateVisible.value = true
 }
 
+async function openBugDetailDrawer(bugId: number) {
+  if (!detail.value) {
+    return
+  }
+  try {
+    activeBugDetail.value = relatedBugDetails.value[bugId]
+      ?? await platformApi.getBugDetail(detail.value.workspaceCode, bugId)
+    relatedBugDetails.value = {
+      ...relatedBugDetails.value,
+      [bugId]: activeBugDetail.value,
+    }
+    bugDetailVisible.value = true
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+}
+
 async function associateBug(bugIds: number[]) {
   if (!currentCaseId.value || !detail.value) {
     return
@@ -1572,6 +1590,7 @@ onUnmounted(() => {
                   <el-table-column label="操作" width="120" fixed="right">
                     <template #default="{ row }">
                       <div class="execution-bug-action">
+                        <el-button text type="primary" @click="openBugDetailDrawer(row.id)">查看</el-button>
                         <el-button text type="danger" @click="unlinkBug(row)">取消关联</el-button>
                       </div>
                     </template>
@@ -1675,13 +1694,12 @@ onUnmounted(() => {
   <BugDetailDrawer
     v-model="bugDetailVisible"
     :detail="activeBugDetail"
-    :source-context="executionBugSourceContext"
     :transitioning="bugTransitioning"
     :commenting="bugCommenting"
     :attachment-uploading="bugAttachmentUploading"
     :attachment-removing-id="bugAttachmentRemovingId"
+    :can-write="!!detail && canWriteWorkspace(detail.workspaceCode)"
     @edit="openEditBugDrawer"
-    @unlink="activeBugDetail && unlinkBug(activeBugDetail)"
     @upload-attachments="uploadBugAttachments"
     @download-attachment="downloadBugAttachment"
     @remove-attachment="removeBugAttachment"

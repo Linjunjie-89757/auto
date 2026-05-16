@@ -3,6 +3,7 @@ package com.company.autoplatform.bug;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.company.autoplatform.auth.CurrentUserContext;
+import com.company.autoplatform.casecenter.CaseDetailResponse;
 import com.company.autoplatform.casecenter.CaseEntity;
 import com.company.autoplatform.casecenter.CaseService;
 import com.company.autoplatform.common.BadRequestException;
@@ -10,7 +11,9 @@ import com.company.autoplatform.common.JsonUtils;
 import com.company.autoplatform.common.NotFoundException;
 import com.company.autoplatform.common.PageResponse;
 import com.company.autoplatform.execution.ExecutionService;
+import com.company.autoplatform.execution.ReportDetailResponse;
 import com.company.autoplatform.execution.ReportEntity;
+import com.company.autoplatform.execution.TaskDetailResponse;
 import com.company.autoplatform.user.UserEntity;
 import com.company.autoplatform.user.UserService;
 import com.company.autoplatform.workspace.WorkspaceEntity;
@@ -19,8 +22,9 @@ import com.company.autoplatform.workspace.WorkspaceService;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.util.ArrayList;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 @Service
@@ -440,6 +444,10 @@ public class BugService {
         WorkspaceEntity workspace = workspaceService.requireWorkspaceById(entity.getWorkspaceId());
         UserEntity assignee = entity.getAssigneeId() == null ? null : userService.requireUser(entity.getAssigneeId());
         UserEntity reporter = userService.requireUser(entity.getReporterId());
+        String updatedByName = resolveUpdatedByName(entity, reporter);
+        List<BugAttachmentEntity> attachmentEntities = listAttachmentEntities(entity.getId());
+        List<BugCommentEntity> commentEntities = listCommentEntities(entity.getId());
+        List<BugFlowEntity> flowEntities = listFlowEntities(entity.getId());
         return new BugDetailResponse(
                 entity.getId(),
                 entity.getBugNo(),
@@ -459,9 +467,186 @@ public class BugService {
                 JsonUtils.toStringList(entity.getTagsJson()),
                 workspace.getWorkspaceCode(),
                 workspace.getWorkspaceName(),
-                listAttachmentEntities(entity.getId()).stream().map(item -> toAttachmentResponse(entity, item)).toList(),
-                listFlowEntities(entity.getId()).stream().map(this::toFlow).toList(),
-                listCommentEntities(entity.getId()).stream().map(this::toComment).toList()
+                entity.getCreatedAt(),
+                entity.getUpdatedAt(),
+                updatedByName,
+                attachmentEntities.stream().map(item -> toAttachmentResponse(entity, item)).toList(),
+                buildSourceContext(entity, workspace),
+                buildActivities(entity, reporter, flowEntities, commentEntities, attachmentEntities),
+                flowEntities.stream().map(this::toFlow).toList(),
+                commentEntities.stream().map(this::toComment).toList()
+        );
+    }
+
+    private BugSourceContextResponse buildSourceContext(BugEntity entity, WorkspaceEntity workspace) {
+        String workspaceCode = workspace.getWorkspaceCode();
+        BugCaseSummaryResponse caseSummary = entity.getRelatedCaseId() == null
+                ? null
+                : toCaseSummary(caseService.getCase(entity.getRelatedCaseId(), workspaceCode));
+        BugReportSummaryResponse reportSummary = entity.getRelatedReportId() == null
+                ? null
+                : toReportSummary(executionService.getReport(entity.getRelatedReportId(), workspaceCode));
+
+        Long taskId = entity.getRelatedTaskId();
+        if (taskId == null && reportSummary != null) {
+            taskId = reportSummary.taskId();
+        }
+        BugTaskSummaryResponse taskSummary = taskId == null
+                ? null
+                : toTaskSummary(executionService.getTask(taskId, workspaceCode));
+
+        return new BugSourceContextResponse(
+                BugSourceType.valueOf(entity.getSourceType()),
+                caseSummary,
+                reportSummary,
+                taskSummary
+        );
+    }
+
+    private List<BugActivityResponse> buildActivities(
+            BugEntity entity,
+            UserEntity reporter,
+            List<BugFlowEntity> flowEntities,
+            List<BugCommentEntity> commentEntities,
+            List<BugAttachmentEntity> attachmentEntities
+    ) {
+        List<BugActivityResponse> activities = new ArrayList<>();
+        BugStatus initialStatus = resolveInitialStatus(entity, flowEntities);
+        activities.add(new BugActivityResponse(
+                "created-" + entity.getId(),
+                BugActivityType.CREATED,
+                entity.getReporterId(),
+                reporter.getDisplayName(),
+                entity.getCreatedAt(),
+                reporter.getDisplayName() + " 创建了缺陷",
+                entity.getBugNo(),
+                null,
+                initialStatus,
+                null,
+                null,
+                null
+        ));
+
+        for (BugFlowEntity flow : flowEntities) {
+            UserEntity operator = userService.requireUser(flow.getOperatorId());
+            BugStatus fromStatus = BugStatus.valueOf(flow.getFromStatus());
+            BugStatus toStatus = BugStatus.valueOf(flow.getToStatus());
+            BugActivityType type = toStatus == BugStatus.ASSIGNED ? BugActivityType.ASSIGNED : BugActivityType.STATUS_CHANGED;
+            String title = type == BugActivityType.ASSIGNED
+                    ? operator.getDisplayName() + " 更新了负责人"
+                    : operator.getDisplayName() + " 更新了状态";
+            activities.add(new BugActivityResponse(
+                    "flow-" + flow.getId(),
+                    type,
+                    flow.getOperatorId(),
+                    operator.getDisplayName(),
+                    flow.getCreatedAt(),
+                    title,
+                    flow.getActionComment(),
+                    fromStatus,
+                    toStatus,
+                    null,
+                    null,
+                    null
+            ));
+        }
+
+        for (BugCommentEntity comment : commentEntities) {
+            UserEntity commenter = userService.requireUser(comment.getCommenterId());
+            activities.add(new BugActivityResponse(
+                    "comment-" + comment.getId(),
+                    BugActivityType.COMMENT_ADDED,
+                    comment.getCommenterId(),
+                    commenter.getDisplayName(),
+                    comment.getCreatedAt(),
+                    commenter.getDisplayName() + " 添加了评论",
+                    comment.getContent(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    comment.getId()
+            ));
+        }
+
+        for (BugAttachmentEntity attachment : attachmentEntities) {
+            activities.add(new BugActivityResponse(
+                    "attachment-" + attachment.getId(),
+                    BugActivityType.ATTACHMENT_ADDED,
+                    null,
+                    null,
+                    attachment.getCreatedAt(),
+                    "上传了附件",
+                    attachment.getFileName(),
+                    null,
+                    null,
+                    attachment.getId(),
+                    attachment.getFileName(),
+                    null
+            ));
+        }
+
+        return activities.stream()
+                .sorted(Comparator
+                        .comparing(BugActivityResponse::occurredAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                        .reversed()
+                .thenComparing(BugActivityResponse::id, Comparator.nullsLast(String::compareTo)))
+                .toList();
+    }
+
+    private BugStatus resolveInitialStatus(BugEntity entity, List<BugFlowEntity> flowEntities) {
+        if (flowEntities.isEmpty()) {
+            return BugStatus.valueOf(entity.getStatus());
+        }
+        BugFlowEntity firstFlow = flowEntities.getFirst();
+        if (entity.getAssigneeId() != null
+                && BugStatus.TODO.name().equals(firstFlow.getFromStatus())
+                && BugStatus.ASSIGNED.name().equals(firstFlow.getToStatus())) {
+            return BugStatus.ASSIGNED;
+        }
+        return BugStatus.valueOf(firstFlow.getFromStatus());
+    }
+
+    private BugCaseSummaryResponse toCaseSummary(CaseDetailResponse response) {
+        String modulePath = response.directoryName() == null || response.directoryName().isBlank()
+                ? response.workspaceName()
+                : response.workspaceName() + " / " + response.directoryName();
+        return new BugCaseSummaryResponse(
+                response.id(),
+                response.caseNo(),
+                response.title(),
+                response.workspaceCode(),
+                response.workspaceName(),
+                response.directoryId(),
+                response.directoryName(),
+                modulePath,
+                response.executionStatus(),
+                response.executionComment() == null || response.executionComment().isBlank() ? response.executionNote() : response.executionComment(),
+                response.executedAt()
+        );
+    }
+
+    private BugReportSummaryResponse toReportSummary(ReportDetailResponse response) {
+        return new BugReportSummaryResponse(
+                response.id(),
+                response.reportName(),
+                response.result(),
+                response.failureSummary(),
+                response.taskId(),
+                response.taskName(),
+                response.workspaceCode(),
+                response.workspaceName()
+        );
+    }
+
+    private BugTaskSummaryResponse toTaskSummary(TaskDetailResponse response) {
+        return new BugTaskSummaryResponse(
+                response.id(),
+                response.taskName(),
+                response.engineType(),
+                response.status(),
+                response.workspaceCode(),
+                response.workspaceName()
         );
     }
 

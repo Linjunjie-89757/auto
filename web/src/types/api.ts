@@ -551,11 +551,11 @@ export interface BugSummary {
   priority: string
   severity: string
   status: string
-  assigneeName: string
+  assigneeName: string | null
   reporterName: string
-  createdAt: string
-  updatedByName: string
-  updatedAt: string
+  createdAt: string | null
+  updatedByName: string | null
+  updatedAt: string | null
   relatedCaseId: number | null
   relatedCaseCount: number
   workspaceCode: string
@@ -589,6 +589,71 @@ export interface BugFlow {
   createdAt: string
 }
 
+export type BugActivityType =
+  | 'CREATED'
+  | 'ASSIGNED'
+  | 'STATUS_CHANGED'
+  | 'COMMENT_ADDED'
+  | 'ATTACHMENT_ADDED'
+  | 'ATTACHMENT_REMOVED'
+  | 'RELATION_UPDATED'
+
+export interface BugCaseSummary {
+  id: number
+  caseNo: string
+  title: string
+  workspaceCode: string
+  workspaceName: string
+  directoryId: number | null
+  directoryName: string | null
+  modulePath: string
+  executionStatus: string
+  executionComment: string | null
+  executedAt: string | null
+}
+
+export interface BugReportSummary {
+  id: number
+  reportName: string
+  result: string
+  failureSummary: string | null
+  taskId: number | null
+  taskName: string | null
+  workspaceCode: string
+  workspaceName: string
+}
+
+export interface BugTaskSummary {
+  id: number
+  taskName: string
+  engineType: string
+  status: string
+  workspaceCode: string
+  workspaceName: string
+}
+
+export interface BugSourceContext {
+  sourceType: string
+  caseSummary: BugCaseSummary | null
+  reportSummary: BugReportSummary | null
+  taskSummary: BugTaskSummary | null
+}
+
+export interface BugActivity {
+  id: string
+  type: BugActivityType
+  operatorId: number | null
+  operatorName: string | null
+  occurredAt: string | null
+  title: string
+  content: string | null
+  fromStatus: string | null
+  toStatus: string | null
+  attachmentId: number | null
+  attachmentName: string | null
+  commentId: number | null
+}
+
 export interface BugDetail extends BugSummary {
   description: string
   sourceType: string
@@ -599,6 +664,8 @@ export interface BugDetail extends BugSummary {
   relatedTaskId: number | null
   tags: string[]
   attachments: BugAttachment[]
+  sourceContext: BugSourceContext
+  activities: BugActivity[]
   flows: BugFlow[]
   comments: BugComment[]
 }

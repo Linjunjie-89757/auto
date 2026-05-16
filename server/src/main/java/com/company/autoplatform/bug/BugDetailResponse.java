@@ -1,5 +1,6 @@
 package com.company.autoplatform.bug;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 public record BugDetailResponse(
@@ -21,7 +22,12 @@ public record BugDetailResponse(
         List<String> tags,
         String workspaceCode,
         String workspaceName,
+        LocalDateTime createdAt,
+        LocalDateTime updatedAt,
+        String updatedByName,
         List<BugAttachmentResponse> attachments,
+        BugSourceContextResponse sourceContext,
+        List<BugActivityResponse> activities,
         List<BugFlowResponse> flows,
         List<BugCommentResponse> comments
 ) {

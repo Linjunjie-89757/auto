@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, Promotion, RefreshRight, Setting, User } from '@element-plus/icons-vue'
+import { Plus, RefreshRight, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { platformApi } from '../api/platform'
+import BugDetailDrawer from '../components/BugDetailDrawer.vue'
 import ListToolbar from '../components/ListToolbar.vue'
 import TableSettingsDrawer from '../components/TableSettingsDrawer.vue'
 import { useListToolbarState } from '../composables/useListToolbarState'
@@ -55,13 +56,14 @@ const stats = ref<BugStats>({
 })
 const detail = ref<BugDetail | null>(null)
 const drawerVisible = ref(false)
+const detailLoading = ref(false)
 const caseBugVisible = ref(false)
 const reportBugVisible = ref(false)
-const commentText = ref('')
-const transitionStatus = ref('')
-const transitionComment = ref('')
-const assignUserId = ref<number | null>(null)
 const pageNo = ref(1)
+const drawerTransitioning = ref(false)
+const drawerCommenting = ref(false)
+const drawerAttachmentUploading = ref(false)
+const drawerAttachmentRemovingId = ref<number | null>(null)
 
 const bugFilters = reactive({
   keyword: '',
@@ -154,7 +156,6 @@ const bugListToolbar = useListToolbarState({
 })
 
 const pageSize = bugListToolbar.pageSize
-const formattedDetailDescription = computed(() => sanitizeBugDescription(detail.value?.description || '-'))
 
 const emptyPayload = (): CreateBugPayload & { workspaceCode: string } => ({
   workspaceCode: workspaceCode.value === 'ALL' ? '' : workspaceCode.value,
@@ -272,63 +273,6 @@ function formatSeverity(value: string | null | undefined) {
   return severityLabelMap[value] ?? value
 }
 
-function sanitizeBugDescription(content: string) {
-  if (!content.trim()) {
-    return '-'
-  }
-  const parser = new DOMParser()
-  const doc = parser.parseFromString(`<div>${content}</div>`, 'text/html')
-  const allowedTags = new Set(['DIV', 'BR', 'P', 'SPAN', 'STRONG', 'B', 'EM', 'I', 'U', 'S', 'MARK', 'UL', 'OL', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LABEL', 'INPUT', 'IMG'])
-  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_ELEMENT)
-  const toUnwrap: Element[] = []
-  while (walker.nextNode()) {
-    const element = walker.currentNode as HTMLElement
-    if (!allowedTags.has(element.tagName)) {
-      toUnwrap.push(element)
-      continue
-    }
-    Array.from(element.attributes).forEach((attr) => {
-      if (attr.name.startsWith('on')) {
-        element.removeAttribute(attr.name)
-        return
-      }
-      if (attr.name === 'style' && /^font-size:\s*(12|14|16|18)px$/i.test(attr.value)) {
-        return
-      }
-      if (attr.name === 'data-type' && /^(taskList|taskItem)$/i.test(attr.value)) {
-        return
-      }
-      if (attr.name === 'data-checked' && /^(true|false)$/i.test(attr.value)) {
-        return
-      }
-      if (element.tagName === 'INPUT' && (attr.name === 'type' || ['checked', 'disabled'].includes(attr.name))) {
-        return
-      }
-      if (element.tagName === 'IMG' && ['alt', 'title'].includes(attr.name)) {
-        return
-      }
-      if (element.tagName === 'IMG' && attr.name === 'src' && /^(https?:\/\/|\/api\/)/i.test(attr.value)) {
-        return
-      }
-      element.removeAttribute(attr.name)
-    })
-    if (element.tagName === 'INPUT') {
-      element.setAttribute('disabled', 'disabled')
-    }
-  }
-  toUnwrap.forEach((element) => {
-    const parent = element.parentNode
-    if (!parent) {
-      return
-    }
-    while (element.firstChild) {
-      parent.insertBefore(element.firstChild, element)
-    }
-    parent.removeChild(element)
-  })
-  return doc.body.innerHTML || '-'
-}
-
 function formatColumnValue(row: BugSummary, key: BugColumnKey) {
   switch (key) {
     case 'bugNo':
@@ -395,13 +339,17 @@ async function loadBaseData() {
 }
 
 async function openDetail(id: number) {
+  detailLoading.value = true
+  drawerVisible.value = true
   try {
     detail.value = await platformApi.getBugDetail(workspaceCode.value, id)
-    assignUserId.value = detail.value.assigneeId
-    drawerVisible.value = true
   }
   catch (error) {
+    drawerVisible.value = false
     ElMessage.error((error as Error).message)
+  }
+  finally {
+    detailLoading.value = false
   }
 }
 
@@ -413,48 +361,99 @@ function openCreateDialog() {
   router.push({ path: '/bugs/create', query: { workspace: workspaceCode.value } })
 }
 
-async function submitAssign() {
-  if (!detail.value || !assignUserId.value) {
+async function submitDrawerTransition(payload: { status: string, comment: string }) {
+  if (!detail.value) {
     return
   }
+  drawerTransitioning.value = true
   try {
-    detail.value = await platformApi.assignBug(workspaceCode.value, detail.value.id, assignUserId.value)
-    ElMessage.success('处理人已更新')
-    await loadBaseData()
-  }
-  catch (error) {
-    ElMessage.error((error as Error).message)
-  }
-}
-
-async function submitTransition() {
-  if (!detail.value || !transitionStatus.value) {
-    return
-  }
-  try {
-    detail.value = await platformApi.transitionBug(workspaceCode.value, detail.value.id, transitionStatus.value, transitionComment.value)
-    transitionStatus.value = ''
-    transitionComment.value = ''
+    detail.value = await platformApi.transitionBug(workspaceCode.value, detail.value.id, payload.status, payload.comment)
     ElMessage.success('状态已更新')
     await loadBaseData()
   }
   catch (error) {
     ElMessage.error((error as Error).message)
   }
+  finally {
+    drawerTransitioning.value = false
+  }
 }
 
-async function submitComment() {
-  if (!detail.value || !commentText.value.trim()) {
+async function submitDrawerComment(content: string) {
+  if (!detail.value) {
     return
   }
+  drawerCommenting.value = true
   try {
-    await platformApi.addBugComment(workspaceCode.value, detail.value.id, commentText.value)
-    commentText.value = ''
+    await platformApi.addBugComment(workspaceCode.value, detail.value.id, content)
     detail.value = await platformApi.getBugDetail(workspaceCode.value, detail.value.id)
     ElMessage.success('评论已添加')
   }
   catch (error) {
     ElMessage.error((error as Error).message)
+  }
+  finally {
+    drawerCommenting.value = false
+  }
+}
+
+function editBugFromDrawer() {
+  if (!detail.value) {
+    return
+  }
+  drawerVisible.value = false
+  void router.push({ path: `/bugs/${detail.value.id}/edit`, query: { workspace: workspaceCode.value } })
+}
+
+async function uploadDrawerAttachments(files: File[]) {
+  if (!detail.value || !files.length) {
+    return
+  }
+  drawerAttachmentUploading.value = true
+  try {
+    detail.value = await platformApi.uploadBugAttachment(workspaceCode.value, detail.value.id, files)
+      .then(() => platformApi.getBugDetail(workspaceCode.value, detail.value!.id))
+    ElMessage.success('附件已上传')
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    drawerAttachmentUploading.value = false
+  }
+}
+
+async function downloadDrawerAttachment(attachmentId: number) {
+  if (!detail.value) {
+    return
+  }
+  const attachment = detail.value.attachments.find(item => item.id === attachmentId)
+  if (!attachment) {
+    return
+  }
+  try {
+    await platformApi.downloadBugAttachment(workspaceCode.value, detail.value.id, attachmentId, attachment.fileName)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+}
+
+async function removeDrawerAttachment(attachmentId: number) {
+  if (!detail.value) {
+    return
+  }
+  drawerAttachmentRemovingId.value = attachmentId
+  try {
+    await platformApi.deleteBugAttachment(workspaceCode.value, detail.value.id, attachmentId)
+    detail.value = await platformApi.getBugDetail(workspaceCode.value, detail.value.id)
+    ElMessage.success('附件已删除')
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    drawerAttachmentRemovingId.value = null
   }
 }
 
@@ -622,8 +621,17 @@ onMounted(() => {
                 :key="row.id + '-' + column.key"
                 :class="['bug-cell', 'bug-cell-' + column.key]"
               >
+                <el-button
+                  v-if="column.key === 'bugNo'"
+                  text
+                  type="primary"
+                  class="bug-no-trigger"
+                  @click="openDetail(row.id)"
+                >
+                  {{ formatColumnValue(row, column.key) }}
+                </el-button>
                 <el-tooltip
-                  v-if="column.key === 'title' || column.key === 'tags'"
+                  v-else-if="column.key === 'title' || column.key === 'tags'"
                   :content="formatColumnValue(row, column.key)"
                   placement="top"
                 >
@@ -695,74 +703,22 @@ onMounted(() => {
       @reset="bugListToolbar.reset"
     />
 
-    <el-drawer v-model="drawerVisible" title="缺陷详情" size="720px">
-      <template v-if="detail">
-        <div class="detail-grid">
-          <div class="detail-card">
-            <div class="detail-title">{{ detail.title }}</div>
-            <div class="detail-meta">{{ detail.bugNo }} | {{ detail.workspaceName }} | {{ formatStatus(detail.status) }}</div>
-            <div class="detail-body" v-html="formattedDetailDescription"></div>
-          </div>
-
-          <div class="detail-card">
-            <div class="detail-title">调整处理人</div>
-            <div class="inline-form">
-              <el-select v-model="assignUserId" placeholder="请选择处理人">
-                <el-option v-for="user in users" :key="user.id" :label="user.displayName" :value="user.id" />
-              </el-select>
-              <el-button type="primary" @click="submitAssign">
-                <el-icon><User /></el-icon>
-                指派
-              </el-button>
-            </div>
-          </div>
-
-          <div class="detail-card">
-            <div class="detail-title">流转状态</div>
-            <div class="inline-form">
-              <el-select v-model="transitionStatus" placeholder="请选择目标状态">
-                <el-option v-for="statusItem in bugStatusOptions" :key="statusItem.value" :label="statusItem.label" :value="statusItem.value" />
-              </el-select>
-              <el-input v-model="transitionComment" placeholder="请输入流转说明" />
-              <el-button type="primary" @click="submitTransition">
-                <el-icon><Promotion /></el-icon>
-                更新状态
-              </el-button>
-            </div>
-          </div>
-
-          <div class="detail-card">
-            <div class="detail-title">评论记录</div>
-            <div class="inline-form">
-              <el-input v-model="commentText" placeholder="请输入评论内容" />
-              <el-button type="primary" @click="submitComment">添加评论</el-button>
-            </div>
-            <div class="list-stack" style="margin-top: 12px;">
-              <div v-for="comment in detail.comments" :key="comment.id" class="list-row">
-                <div class="list-main">
-                  <div class="list-title">{{ comment.commenterName }}</div>
-                  <div class="list-meta">{{ comment.content }}</div>
-                </div>
-                <span class="status-pill status-neutral">{{ formatDateTime(comment.createdAt) }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="detail-card">
-            <div class="detail-title">处理记录</div>
-            <div class="list-stack">
-              <div v-for="flow in detail.flows" :key="flow.id" class="list-row">
-                <div class="list-main">
-                  <div class="list-title">{{ flow.operatorName }}：{{ formatStatus(flow.fromStatus) }} -> {{ formatStatus(flow.toStatus) }}</div>
-                  <div class="list-meta">{{ flow.actionComment }}</div>
-                </div>
-                <span class="status-pill status-neutral">{{ formatDateTime(flow.createdAt) }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </template>
-    </el-drawer>
+    <BugDetailDrawer
+      v-model="drawerVisible"
+      :detail="detail"
+      :loading="detailLoading"
+      :transitioning="drawerTransitioning"
+      :commenting="drawerCommenting"
+      :attachment-uploading="drawerAttachmentUploading"
+      :attachment-removing-id="drawerAttachmentRemovingId"
+      :can-write="true"
+      @transition="submitDrawerTransition"
+      @comment="submitDrawerComment"
+      @edit="editBugFromDrawer"
+      @upload-attachments="uploadDrawerAttachments"
+      @download-attachment="downloadDrawerAttachment"
+      @remove-attachment="removeDrawerAttachment"
+    />
 
     <el-dialog v-model="caseBugVisible" title="从用例创建缺陷" width="620px">
       <el-form label-width="90px">
@@ -940,6 +896,13 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.bug-no-trigger {
+  padding: 0;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .bug-table-actions {

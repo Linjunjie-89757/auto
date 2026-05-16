@@ -219,17 +219,8 @@ const emit = defineEmits<{
   (event: 'add-inline-image', payload: { file: File; src: string }): void
 }>()
 
-const uploadInput = ref<HTMLInputElement | null>(null)
 const inlineImageInput = ref<HTMLInputElement | null>(null)
-const evidenceDropActive = ref(false)
-const activeEvidencePreviewId = ref<string | null>(null)
-const evidencePreviewVisible = ref(false)
-const evidencePreviewTitle = ref('')
-const evidencePreviewUrl = ref('')
-const evidencePreviewScale = ref(1)
-const evidencePreviewOffset = ref({ x: 0, y: 0 })
-const evidencePreviewDragging = ref(false)
-const evidencePreviewDragOrigin = ref({ x: 0, y: 0, offsetX: 0, offsetY: 0 })
+const uploadInput = ref<HTMLInputElement | null>(null)
 
 const severityOptions = [
   { label: '致命', value: 'CRITICAL' },
@@ -273,6 +264,22 @@ const statusOptions = computed(() => (
     ? [{ label: '已指派', value: 'ASSIGNED' }]
     : [{ label: '待指派', value: 'TODO' }]
 ))
+
+const toolbarTooltipProps = {
+  showAfter: 200,
+  hideAfter: 0,
+  enterable: false,
+}
+
+const evidenceDropActive = ref(false)
+const activeEvidencePreviewId = ref<string | null>(null)
+const evidencePreviewVisible = ref(false)
+const evidencePreviewTitle = ref('')
+const evidencePreviewUrl = ref('')
+const evidencePreviewScale = ref(1)
+const evidencePreviewOffset = ref({ x: 0, y: 0 })
+const evidencePreviewDragging = ref(false)
+const evidencePreviewDragOrigin = ref({ x: 0, y: 0, offsetX: 0, offsetY: 0 })
 const evidenceImageFiles = computed(() => props.pendingFiles.filter(item => !!item.previewUrl))
 const activeEvidencePreviewIndex = computed(() => (
   evidenceImageFiles.value.findIndex(item => item.id === activeEvidencePreviewId.value)
@@ -287,12 +294,6 @@ const evidencePreviewCounter = computed(() => {
   }
   return `${activeEvidencePreviewIndex.value + 1} / ${evidenceImageFiles.value.length}`
 })
-
-const toolbarTooltipProps = {
-  showAfter: 200,
-  hideAfter: 0,
-  enterable: false,
-}
 
 const currentHeadingLabel = computed(() => {
   if (!editor.value) {
@@ -381,13 +382,11 @@ watch(
 )
 
 watch(evidencePreviewVisible, (visible) => {
-  if (!visible) {
-    resetEvidencePreview()
-    activeEvidencePreviewId.value = null
-    window.removeEventListener('keydown', handleEvidencePreviewKeydown)
+  if (visible) {
+    window.addEventListener('keydown', handleEvidencePreviewKeydown)
     return
   }
-  window.addEventListener('keydown', handleEvidencePreviewKeydown)
+  window.removeEventListener('keydown', handleEvidencePreviewKeydown)
 })
 
 onBeforeUnmount(() => {
@@ -470,10 +469,6 @@ function clearContent() {
   props.form.description = ''
 }
 
-function openAttachmentPicker() {
-  uploadInput.value?.click()
-}
-
 function openInlineImagePicker() {
   inlineImageInput.value?.click()
 }
@@ -496,36 +491,33 @@ function handleInlineImageChange(event: Event) {
   }
 }
 
+function openAttachmentPicker() {
+  uploadInput.value?.click()
+}
+
 function handleFileChange(event: Event) {
   const input = event.target as HTMLInputElement | null
   const files = Array.from(input?.files ?? [])
+  if (input) {
+    input.value = ''
+  }
   if (!files.length) {
     return
   }
   emit('add-files', files)
-  if (input) {
-    input.value = ''
-  }
 }
 
 function handleEvidencePaste(event: ClipboardEvent) {
-  if (props.saving) {
-    return
-  }
-  const imageFiles = Array.from(event.clipboardData?.items ?? [])
+  const files = Array.from(event.clipboardData?.items ?? [])
     .filter(item => item.kind === 'file')
     .map(item => item.getAsFile())
-    .filter((file): file is File => !!file && file.type.startsWith('image/'))
-    .map((file, index) => new File(
-      [file],
-      `bug-paste-${Date.now()}-${index + 1}.${file.type.split('/')[1] || 'png'}`,
-      { type: file.type || 'image/png' },
-    ))
-  if (!imageFiles.length) {
+    .filter((item): item is File => !!item && item.type.startsWith('image/'))
+    .map((file, index) => new File([file], `bug-screenshot-${Date.now()}-${index + 1}.png`, { type: file.type || 'image/png' }))
+  if (!files.length || props.saving) {
     return
   }
   event.preventDefault()
-  emit('add-files', imageFiles)
+  emit('add-files', files)
 }
 
 function handleEvidenceDragEnter() {
@@ -537,7 +529,7 @@ function handleEvidenceDragEnter() {
 
 function handleEvidenceDragLeave(event: DragEvent) {
   const currentTarget = event.currentTarget as HTMLElement | null
-  const relatedTarget = event.relatedTarget as Node | null
+  const relatedTarget = event.relatedTarget as globalThis.Node | null
   if (currentTarget && relatedTarget && currentTarget.contains(relatedTarget)) {
     return
   }
@@ -557,13 +549,17 @@ function handleEvidenceDrop(event: DragEvent) {
 }
 
 function previewEvidenceFile(id: string) {
-  const file = props.pendingFiles.find(item => item.id === id)
-  if (!file?.previewUrl) {
+  const target = props.pendingFiles.find(item => item.id === id)
+  if (!target) {
     return
   }
-  activeEvidencePreviewId.value = file.id
-  evidencePreviewTitle.value = file.name
-  evidencePreviewUrl.value = file.previewUrl
+  if (!target.previewUrl) {
+    return
+  }
+  resetEvidencePreview()
+  activeEvidencePreviewId.value = target.id
+  evidencePreviewTitle.value = target.name
+  evidencePreviewUrl.value = target.previewUrl
   evidencePreviewVisible.value = true
 }
 
@@ -626,11 +622,11 @@ function openEvidencePreviewByOffset(offset: -1 | 1) {
   if (currentIndex < 0) {
     return
   }
-  const nextFile = evidenceImageFiles.value[currentIndex + offset]
-  if (!nextFile) {
+  const nextItem = evidenceImageFiles.value[currentIndex + offset]
+  if (!nextItem) {
     return
   }
-  previewEvidenceFile(nextFile.id)
+  previewEvidenceFile(nextItem.id)
 }
 
 function handleEvidencePreviewKeydown(event: KeyboardEvent) {
@@ -647,6 +643,7 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
     openEvidencePreviewByOffset(1)
   }
 }
+
 </script>
 
 <template>

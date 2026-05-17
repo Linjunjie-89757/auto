@@ -217,6 +217,7 @@ public class BugService {
                 StoredBugFile storedFile = storedFiles.get(i);
                 BugAttachmentEntity attachment = new BugAttachmentEntity();
                 attachment.setBugId(bugId);
+                attachment.setCreatedBy(CurrentUserContext.get());
                 attachment.setWorkspaceId(bug.getWorkspaceId());
                 attachment.setFileName(file.getOriginalFilename());
                 attachment.setStoredPath(storedFile.storedPath());
@@ -675,12 +676,14 @@ public class BugService {
     }
 
     private BugAttachmentResponse toAttachmentResponse(BugEntity bug, BugAttachmentEntity attachment) {
+        UserEntity uploader = attachment.getCreatedBy() == null ? null : userService.findActiveUser(attachment.getCreatedBy());
         return new BugAttachmentResponse(
                 attachment.getId(),
                 attachment.getFileName(),
                 attachment.getContentType(),
                 attachment.getFileSize(),
                 "/api/bugs/" + bug.getId() + "/attachments/" + attachment.getId() + "/download",
+                uploader == null ? null : uploader.getDisplayName(),
                 attachment.getCreatedAt()
         );
     }

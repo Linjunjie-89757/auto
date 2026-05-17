@@ -1,21 +1,14 @@
-<script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+﻿<script setup lang="ts">
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import {
-  Close,
-  CopyDocument,
-  Edit,
-  FullScreen,
-  Link,
-  MoreFilled,
-  Paperclip,
-} from '@element-plus/icons-vue'
+import { Close, Edit, EditPen, Link, MoreFilled, Paperclip } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
-import type { BugActivity, BugDetail } from '../types/api'
+import type { BugActivity, BugDetail, BugSummary, UpdateBugPayload, UserItem } from '../types/api'
+import BugCaseAssociateDialog from './BugCaseAssociateDialog.vue'
+import BugRichTextEditor from './BugRichTextEditor.vue'
 import {
   formatBugDateTime,
   formatBugSeverity,
-  formatBugSourceType,
   formatBugStatus,
   isImageFile,
 } from '../utils/bugPresentation'
@@ -24,16 +17,28 @@ import { resolveApiUrl } from '../api/platform'
 const props = withDefaults(defineProps<{
   modelValue: boolean
   detail: BugDetail | null
+  summary?: Pick<BugSummary, 'bugNo' | 'title' | 'workspaceName' | 'status' | 'assigneeName'> | null
+  users?: UserItem[]
   loading?: boolean
   transitioning?: boolean
   commenting?: boolean
+  assigning?: boolean
+  basicSaving?: boolean
+  descriptionSaving?: boolean
+  associatingCase?: boolean
   attachmentUploading?: boolean
   attachmentRemovingId?: number | null
   canWrite?: boolean
 }>(), {
+  summary: null,
+  users: () => [],
   loading: false,
   transitioning: false,
   commenting: false,
+  assigning: false,
+  basicSaving: false,
+  descriptionSaving: false,
+  associatingCase: false,
   attachmentUploading: false,
   attachmentRemovingId: null,
   canWrite: false,
@@ -44,6 +49,11 @@ const emit = defineEmits<{
   (event: 'transition', payload: { status: string, comment: string }): void
   (event: 'comment', content: string): void
   (event: 'edit'): void
+  (event: 'save-description', content: string): void
+  (event: 'add-inline-image', payload: { file: File, src: string }): void
+  (event: 'save-basic', payload: UpdateBugPayload): void
+  (event: 'associate-case', caseId: number): void
+  (event: 'unlink-case'): void
   (event: 'upload-attachments', files: File[]): void
   (event: 'download-attachment', attachmentId: number): void
   (event: 'remove-attachment', attachmentId: number): void
@@ -51,21 +61,48 @@ const emit = defineEmits<{
 
 type DrawerTab = 'basic' | 'detail' | 'case' | 'comment' | 'history'
 
+type BasicFormState = {
+  assigneeId: number | null
+  status: string
+  severity: string
+  tags: string[]
+}
+
 const router = useRouter()
 const uploadInput = ref<HTMLInputElement | null>(null)
-const activeTab = ref<DrawerTab>('detail')
-const transitionStatus = ref('')
-const transitionComment = ref('')
+const activeTab = ref<DrawerTab>('basic')
 const commentText = ref('')
+const descriptionEditing = ref(false)
+const descriptionDraft = ref('')
+const caseKeyword = ref('')
+const associateDialogVisible = ref(false)
+const basicForm = ref<BasicFormState>({
+  assigneeId: null,
+  status: 'TODO',
+  severity: 'HIGH',
+  tags: [],
+})
 
+const severityOptions = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
 const statusOptions = [
-  { label: '待处理', value: 'TODO' },
+  { label: '未指派', value: 'TODO' },
   { label: '已指派', value: 'ASSIGNED' },
   { label: '处理中', value: 'IN_PROGRESS' },
   { label: '待验证', value: 'PENDING_VERIFY' },
   { label: '已关闭', value: 'CLOSED' },
   { label: '已拒绝', value: 'REJECTED' },
 ]
+const basicFieldText = {
+  assignee: '\u5904\u7406\u4eba',
+  status: '\u72b6\u6001',
+  severity: '\u4e25\u91cd\u7a0b\u5ea6',
+  tags: '\u6807\u7b7e',
+  selectPlaceholder: '\u8bf7\u9009\u62e9',
+  tagPlaceholder: '\u8f93\u5165\u5185\u5bb9\u540e\u56de\u8f66\u53ef\u76f4\u63a5\u6dfb\u52a0\u6807\u7b7e',
+}
+const descriptionEditorBaseLineCount = 4
+const descriptionEditorLineHeight = 24
+const descriptionEditorVerticalPadding = 32
 
 const tabItems: Array<{ key: DrawerTab, label: string }> = [
   { key: 'basic', label: '基本信息' },
@@ -75,13 +112,6 @@ const tabItems: Array<{ key: DrawerTab, label: string }> = [
   { key: 'history', label: '变更历史' },
 ]
 
-const selectableStatusOptions = computed(() => {
-  if (!props.detail) {
-    return statusOptions
-  }
-  return statusOptions.filter(item => item.value !== props.detail?.status)
-})
-
 const imageAttachments = computed(() => (
   props.detail?.attachments.filter(item => isImageFile(item.contentType, item.fileName)) ?? []
 ))
@@ -90,21 +120,143 @@ const fileAttachments = computed(() => (
   props.detail?.attachments.filter(item => !isImageFile(item.contentType, item.fileName)) ?? []
 ))
 
-const previewUrls = computed(() => imageAttachments.value.map(item => resolveApiUrl(item.downloadUrl || '')))
+const authorizedImageUrls = ref<Record<string, string>>({})
+const authorizedImageLoadVersion = ref(0)
+const previewUrls = computed(() => imageAttachments.value
+  .map((item) => {
+    const rawUrl = item.downloadUrl || ''
+    return getAuthorizedImageUrl(rawUrl)
+  }))
+const descriptionHtml = computed(() => sanitizeRichHtml(props.detail?.description || '', authorizedImageUrls.value))
 
-const descriptionHtml = computed(() => sanitizeRichHtml(props.detail?.description || ''))
+const syncingBasicForm = ref(false)
+const basicAutoSaveTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+const statusAutoSaveTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+const lastBasicSubmitSignature = ref('')
+const lastStatusSubmitValue = ref('')
+
+const basicFormSignature = computed(() => JSON.stringify({
+  assigneeId: basicForm.value.assigneeId,
+  severity: basicForm.value.severity,
+  tags: [...basicForm.value.tags].sort(),
+}))
+
+const basicDirty = computed(() => {
+  if (!props.detail) {
+    return false
+  }
+  const currentTags = [...(props.detail.tags ?? [])].sort()
+  const draftTags = [...basicForm.value.tags].sort()
+  return basicForm.value.assigneeId !== props.detail.assigneeId
+    || basicForm.value.severity !== props.detail.severity
+    || draftTags.join('|') !== currentTags.join('|')
+})
+
+const statusDirty = computed(() => {
+  if (!props.detail) {
+    return false
+  }
+  return basicForm.value.status !== props.detail.status
+})
+
+const descriptionEditorMinHeight = computed(() => {
+  const visibleLineCount = countVisibleEditorLines(descriptionDraft.value)
+  const displayLineCount = visibleLineCount < descriptionEditorBaseLineCount
+    ? descriptionEditorBaseLineCount
+    : visibleLineCount + 1
+  return displayLineCount * descriptionEditorLineHeight + descriptionEditorVerticalPadding
+})
+
+const caseRows = computed(() => {
+  const summary = props.detail?.sourceContext.caseSummary
+  if (!summary) {
+    return []
+  }
+  const keyword = caseKeyword.value.trim().toLowerCase()
+  const matches = !keyword
+    || summary.caseNo.toLowerCase().includes(keyword)
+    || summary.title.toLowerCase().includes(keyword)
+  if (!matches) {
+    return []
+  }
+  return [{
+    id: summary.id,
+    caseNo: summary.caseNo,
+    title: summary.title,
+    workspaceName: summary.workspaceName,
+    caseType: '??????',
+  }]
+})
 
 watch(() => props.modelValue, (value) => {
   if (value) {
-    activeTab.value = 'detail'
+    activeTab.value = 'basic'
   }
 })
 
-watch(() => props.detail?.id, () => {
-  transitionStatus.value = ''
-  transitionComment.value = ''
-  commentText.value = ''
-  activeTab.value = 'detail'
+watch(
+  [() => basicForm.value.assigneeId, () => basicForm.value.severity, () => basicForm.value.tags.slice().join('|')],
+  () => {
+    scheduleBasicAutoSave()
+  }
+)
+
+watch(
+  () => basicForm.value.status,
+  () => {
+    scheduleStatusAutoSave()
+  }
+)
+
+watch(
+  () => [props.basicSaving, props.assigning, props.transitioning],
+  ([basicSaving, assigning, transitioning]) => {
+    if (!basicSaving && !assigning && basicDirty.value && basicFormSignature.value !== lastBasicSubmitSignature.value) {
+      scheduleBasicAutoSave()
+    }
+    if (!transitioning && statusDirty.value && basicForm.value.status !== lastStatusSubmitValue.value) {
+      scheduleStatusAutoSave()
+    }
+  }
+)
+
+watch(
+  () => props.detail,
+  (detail) => {
+    commentText.value = ''
+    caseKeyword.value = ''
+    descriptionEditing.value = false
+    descriptionDraft.value = detail?.description || ''
+    syncingBasicForm.value = true
+    basicForm.value = {
+      assigneeId: detail?.assigneeId ?? null,
+      status: detail?.status ?? 'TODO',
+      severity: detail?.severity ?? 'HIGH',
+      tags: [...(detail?.tags ?? [])],
+    }
+    lastBasicSubmitSignature.value = basicFormSignature.value
+    lastStatusSubmitValue.value = detail?.status ?? 'TODO'
+    setTimeout(() => {
+      syncingBasicForm.value = false
+    }, 0)
+  },
+  { immediate: true },
+)
+
+watch(
+  () => props.detail,
+  (detail) => {
+    revokeAuthorizedImageUrls()
+    if (!detail) {
+      return
+    }
+    void loadAuthorizedImageUrls(detail)
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(() => {
+  revokeAuthorizedImageUrls()
 })
 
 function closeDrawer() {
@@ -128,17 +280,6 @@ function handleUploadChange(event: Event) {
   emit('upload-attachments', files)
 }
 
-function openDetailPage() {
-  if (!props.detail) {
-    return
-  }
-  emit('update:modelValue', false)
-  router.push({
-    path: `/bugs/${props.detail.id}`,
-    query: { workspace: props.detail.workspaceCode },
-  })
-}
-
 async function copyShareLink() {
   if (!props.detail) {
     return
@@ -158,11 +299,18 @@ async function copyShareLink() {
 }
 
 function copyBugStylePlaceholder() {
-  ElMessage.info('复制功能样式已预留，后续可接真实接口')
+  if (!props.detail) {
+    return
+  }
+  navigator.clipboard.writeText(props.detail.bugNo).then(() => {
+    ElMessage.success('缺陷编号已复制')
+  }).catch(() => {
+    ElMessage.error('缺陷编号复制失败')
+  })
 }
 
 function deleteBugStylePlaceholder() {
-  ElMessage.info('删除功能样式已预留，后续可接真实接口')
+  ElMessage.info('删除能力暂未接入后端，先保留占位入口')
 }
 
 function openCase(id: number) {
@@ -175,38 +323,6 @@ function openCase(id: number) {
   })
 }
 
-function openReport(id: number) {
-  if (!props.detail) {
-    return
-  }
-  router.push({
-    path: '/automation/api',
-    query: { workspace: props.detail.workspaceCode, reportId: String(id) },
-  })
-}
-
-function openTask(id: number) {
-  if (!props.detail) {
-    return
-  }
-  router.push({
-    path: '/automation/api',
-    query: { workspace: props.detail.workspaceCode, taskId: String(id) },
-  })
-}
-
-function submitTransition() {
-  if (!transitionStatus.value) {
-    return
-  }
-  emit('transition', {
-    status: transitionStatus.value,
-    comment: transitionComment.value.trim(),
-  })
-  transitionStatus.value = ''
-  transitionComment.value = ''
-}
-
 function submitComment() {
   const content = commentText.value.trim()
   if (!content) {
@@ -214,6 +330,333 @@ function submitComment() {
   }
   emit('comment', content)
   commentText.value = ''
+}
+
+function startDescriptionEdit() {
+  descriptionDraft.value = props.detail?.description || ''
+  descriptionEditing.value = true
+}
+
+function cancelDescriptionEdit() {
+  descriptionDraft.value = props.detail?.description || ''
+  descriptionEditing.value = false
+}
+
+function submitDescriptionEdit() {
+  emit('save-description', descriptionDraft.value)
+}
+
+async function loadAuthorizedImageUrls(detail: BugDetail) {
+  const loadVersion = ++authorizedImageLoadVersion.value
+  const nextUrls: Record<string, string> = {}
+  for (const attachment of detail.attachments) {
+    if (!isImageFile(attachment.contentType, attachment.fileName) || !attachment.downloadUrl) {
+      continue
+    }
+    const rawUrl = attachment.downloadUrl
+    const resolvedUrl = resolveApiUrl(rawUrl)
+    try {
+      const response = await fetch(resolvedUrl, {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'X-Workspace-Code': detail.workspaceCode,
+        },
+      })
+      if (!response.ok) {
+        continue
+      }
+      const blob = await response.blob()
+      const objectUrl = URL.createObjectURL(blob)
+      nextUrls[rawUrl] = objectUrl
+      nextUrls[resolvedUrl] = objectUrl
+      collectImageUrlKeys(rawUrl, resolvedUrl).forEach((key) => {
+        nextUrls[key] = objectUrl
+      })
+    }
+    catch {
+      // ignore image preview fetch failures and fall back to direct URLs
+    }
+  }
+  if (loadVersion !== authorizedImageLoadVersion.value) {
+    Object.values(nextUrls).forEach((url) => {
+      URL.revokeObjectURL(url)
+    })
+    return
+  }
+  revokeAuthorizedImageUrls()
+  authorizedImageUrls.value = nextUrls
+}
+
+function revokeAuthorizedImageUrls() {
+  authorizedImageLoadVersion.value += 1
+  const uniqueUrls = new Set(Object.values(authorizedImageUrls.value))
+  uniqueUrls.forEach((url) => {
+    URL.revokeObjectURL(url)
+  })
+  authorizedImageUrls.value = {}
+}
+
+function getAuthorizedImageUrl(downloadUrl: string | null) {
+  const rawUrl = downloadUrl || ''
+  const resolvedUrl = resolveApiUrl(rawUrl)
+  const matchedUrl = collectImageUrlKeys(rawUrl, resolvedUrl)
+    .map(key => authorizedImageUrls.value[key])
+    .find(Boolean)
+  return matchedUrl || resolvedUrl
+}
+
+function collectImageUrlKeys(...urls: string[]) {
+  const keys = new Set<string>()
+  urls.filter(Boolean).forEach((value) => {
+    keys.add(value)
+    try {
+      const normalized = new URL(value, window.location.origin)
+      keys.add(normalized.toString())
+      keys.add(normalized.pathname)
+      if (normalized.pathname && normalized.search) {
+        keys.add(`${normalized.pathname}${normalized.search}`)
+      }
+    }
+    catch {
+      // ignore malformed URLs and keep original value as-is
+    }
+  })
+  return Array.from(keys)
+}
+
+function formatAttachmentFileSize(size: number | null) {
+  if (size === null || Number.isNaN(size)) {
+    return 'Unknown size'
+  }
+  if (size < 1024) {
+    return `${size} B`
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(size >= 10 * 1024 ? 0 : 1)} KB`
+  }
+  return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`
+}
+
+function getAttachmentTypeLabel(fileName: string, contentType: string | null) {
+  const extension = fileName.split('.').pop()?.trim().toUpperCase()
+  if (extension && extension.length <= 5) {
+    return extension
+  }
+  if (contentType?.startsWith('text/')) {
+    return 'TXT'
+  }
+  if (contentType?.includes('pdf')) {
+    return 'PDF'
+  }
+  if (contentType?.includes('word')) {
+    return 'DOC'
+  }
+  if (contentType?.includes('sheet') || contentType?.includes('excel')) {
+    return 'XLS'
+  }
+  if (contentType?.includes('presentation') || contentType?.includes('powerpoint')) {
+    return 'PPT'
+  }
+  if (contentType?.includes('zip') || contentType?.includes('rar') || contentType?.includes('7z')) {
+    return 'ZIP'
+  }
+  return 'FILE'
+}
+
+function getAttachmentTypeTone(fileName: string, contentType: string | null) {
+  const label = getAttachmentTypeLabel(fileName, contentType)
+  if (label === 'PDF') {
+    return 'pdf'
+  }
+  if (['DOC', 'DOCX'].includes(label)) {
+    return 'word'
+  }
+  if (['XLS', 'XLSX', 'CSV'].includes(label)) {
+    return 'excel'
+  }
+  if (['PPT', 'PPTX'].includes(label)) {
+    return 'ppt'
+  }
+  if (['TXT', 'LOG', 'MD', 'RTF'].includes(label)) {
+    return 'text'
+  }
+  if (['JSON', 'XML', 'YAML', 'YML'].includes(label)) {
+    return 'code'
+  }
+  if (['ZIP', 'RAR', '7Z', 'TAR', 'GZ'].includes(label)) {
+    return 'archive'
+  }
+  return 'file'
+}
+
+function formatAttachmentMeta(size: number | null, uploadedByName: string | null, createdAt: string | null) {
+  const parts = [formatAttachmentFileSize(size)]
+  if (uploadedByName) {
+    parts.push(`${uploadedByName} 上传于`)
+  }
+  if (createdAt) {
+    parts.push(formatBugDateTime(createdAt))
+  }
+  return parts.join(' · ')
+}
+
+function countVisibleEditorLines(content: string) {
+  const normalized = content.replace(/\r\n/g, '\n').trim()
+  if (!normalized) {
+    return 1
+  }
+  if (!/<[a-z][\s\S]*>/i.test(normalized)) {
+    return normalized.split('\n').length
+  }
+
+  const parser = typeof DOMParser === 'undefined' ? null : new DOMParser()
+  if (!parser) {
+    return normalized.split('\n').length
+  }
+
+  const doc = parser.parseFromString(normalized, 'text/html')
+  const lines: string[] = []
+  let currentLine = ''
+  const lineBreakTags = new Set(['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+
+  function commitLine(force = false) {
+    if (force || currentLine.length > 0) {
+      lines.push(currentLine)
+      currentLine = ''
+    }
+  }
+
+  function appendText(text: string) {
+    if (!text) {
+      return
+    }
+    const normalizedText = text.replace(/\u00a0/g, ' ')
+    const segments = normalizedText.split('\n')
+    segments.forEach((segment, index) => {
+      currentLine += segment
+      if (index < segments.length - 1) {
+        commitLine(true)
+      }
+    })
+  }
+
+  function walk(node: Node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      appendText(node.textContent || '')
+      return
+    }
+    if (!(node instanceof HTMLElement)) {
+      return
+    }
+
+    const tagName = node.tagName.toLowerCase()
+    if (tagName === 'br') {
+      commitLine(true)
+      return
+    }
+
+    const createsOwnLine = lineBreakTags.has(tagName)
+    if (createsOwnLine && currentLine.length > 0) {
+      commitLine(true)
+    }
+
+    if (tagName === 'img') {
+      currentLine += '[image]'
+    }
+    else {
+      Array.from(node.childNodes).forEach(walk)
+    }
+
+    if (createsOwnLine) {
+      commitLine(true)
+    }
+  }
+
+  Array.from(doc.body.childNodes).forEach(walk)
+  commitLine(lines.length === 0)
+
+  return Math.max(lines.length, 1)
+}
+
+function submitBasicSave() {
+  if (!props.detail || !basicDirty.value) {
+    return
+  }
+  lastBasicSubmitSignature.value = basicFormSignature.value
+  emit('save-basic', {
+    workspaceCode: props.detail.workspaceCode,
+    title: props.detail.title,
+    description: props.detail.description,
+    priority: props.detail.priority,
+    severity: basicForm.value.severity,
+    assigneeId: basicForm.value.assigneeId,
+    relatedCaseId: props.detail.relatedCaseId,
+    tags: [...basicForm.value.tags],
+  })
+}
+
+function scheduleBasicAutoSave() {
+  if (!props.canWrite || syncingBasicForm.value || !basicDirty.value) {
+    return
+  }
+  if (basicAutoSaveTimer.value) {
+    clearTimeout(basicAutoSaveTimer.value)
+  }
+  basicAutoSaveTimer.value = setTimeout(() => {
+    basicAutoSaveTimer.value = null
+    if (props.basicSaving || props.assigning) {
+      scheduleBasicAutoSave()
+      return
+    }
+    if (basicFormSignature.value === lastBasicSubmitSignature.value) {
+      return
+    }
+    submitBasicSave()
+  }, 250)
+}
+
+function submitStatusAutoSave() {
+  if (!props.detail || !statusDirty.value) {
+    return
+  }
+  lastStatusSubmitValue.value = basicForm.value.status
+  emit('transition', {
+    status: basicForm.value.status,
+    comment: '',
+  })
+}
+
+function scheduleStatusAutoSave() {
+  if (!props.canWrite || syncingBasicForm.value || !statusDirty.value) {
+    return
+  }
+  if (statusAutoSaveTimer.value) {
+    clearTimeout(statusAutoSaveTimer.value)
+  }
+  statusAutoSaveTimer.value = setTimeout(() => {
+    statusAutoSaveTimer.value = null
+    if (props.transitioning) {
+      scheduleStatusAutoSave()
+      return
+    }
+    if (basicForm.value.status === lastStatusSubmitValue.value) {
+      return
+    }
+    submitStatusAutoSave()
+  }, 250)
+}
+
+function openAssociateCaseDialog() {
+  if (!props.detail || !props.canWrite) {
+    return
+  }
+  associateDialogVisible.value = true
+}
+
+function handleCaseAssociated(caseId: number) {
+  associateDialogVisible.value = false
+  emit('associate-case', caseId)
 }
 
 function formatActivityDetail(item: BugActivity) {
@@ -228,7 +671,7 @@ function formatActivityDetail(item: BugActivity) {
   return item.content || '-'
 }
 
-function sanitizeRichHtml(content: string) {
+function sanitizeRichHtml(content: string, imageUrlMap: Record<string, string>) {
   if (!content.trim()) {
     return '<p class="bug-drawer-empty-text">暂无缺陷内容</p>'
   }
@@ -281,6 +724,16 @@ function sanitizeRichHtml(content: string) {
       }
       element.removeAttribute(attr.name)
     })
+    if (element.tagName === 'IMG') {
+      const source = element.getAttribute('src')
+      const resolvedSource = source ? resolveApiUrl(source) : ''
+      const authorizedSource = collectImageUrlKeys(source || '', resolvedSource)
+        .map(key => imageUrlMap[key])
+        .find(Boolean)
+      if (authorizedSource) {
+        element.setAttribute('src', authorizedSource)
+      }
+    }
     if (element.tagName === 'INPUT') {
       element.setAttribute('disabled', 'disabled')
     }
@@ -341,23 +794,12 @@ function sanitizeStyle(value: string) {
 
       <div class="ms-bug-detail-topbar">
         <div class="ms-bug-detail-title-wrap">
-          <div class="ms-bug-detail-object-head">
-            <div class="ms-bug-detail-object-main">
-              <div class="ms-bug-detail-object-line">
-                <span class="ms-bug-detail-object-no">{{ detail?.bugNo || '-' }}</span>
-                <span class="ms-bug-detail-object-name">{{ detail?.title || '未命名缺陷' }}</span>
-                <el-tag v-if="detail" effect="plain" size="small" class="ms-bug-detail-platform-tag">
-                  {{ detail.workspaceName }}
-                </el-tag>
-              </div>
-              <div v-if="detail" class="ms-bug-detail-object-meta">
-                <span>{{ formatBugStatus(detail.status) }}</span>
-                <span class="ms-bug-detail-meta-dot" />
-                <span>{{ formatBugSourceType(detail.sourceType) }}</span>
-                <span class="ms-bug-detail-meta-dot" />
-                <span>{{ detail.assigneeName || '未分配处理人' }}</span>
-              </div>
-            </div>
+          <div class="ms-bug-detail-object-line">
+            <span class="ms-bug-detail-object-no">{{ detail?.bugNo || summary?.bugNo || '-' }}</span>
+            <span class="ms-bug-detail-object-name">{{ detail?.title || summary?.title || '未命名缺陷' }}</span>
+            <el-tag v-if="detail" effect="plain" size="small" class="ms-bug-detail-status-tag">
+              {{ formatBugStatus(detail.status) }}
+            </el-tag>
           </div>
         </div>
 
@@ -368,12 +810,11 @@ function sanitizeStyle(value: string) {
             <el-button text :icon="MoreFilled">更多</el-button>
             <template #dropdown>
               <el-dropdown-menu class="ms-bug-detail-more-menu">
-                <el-dropdown-item :icon="CopyDocument" @click="copyBugStylePlaceholder">复制</el-dropdown-item>
+                <el-dropdown-item @click="copyBugStylePlaceholder">复制</el-dropdown-item>
                 <el-dropdown-item class="is-danger" @click="deleteBugStylePlaceholder">删除</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <el-button text :icon="FullScreen" @click="openDetailPage">全屏</el-button>
           <el-button text class="ms-bug-detail-close" :icon="Close" @click="closeDrawer" />
         </div>
       </div>
@@ -393,117 +834,178 @@ function sanitizeStyle(value: string) {
       <div v-loading="loading" class="ms-bug-detail-content">
         <template v-if="detail">
           <section v-show="activeTab === 'basic'" class="ms-bug-detail-pane">
-            <div class="ms-bug-detail-section">
-              <div class="ms-bug-detail-section-title">基本信息</div>
-              <div class="ms-bug-basic-grid">
-                <div class="ms-bug-basic-item">
-                  <span class="ms-bug-basic-label">状态</span>
-                  <span class="ms-bug-basic-value">{{ formatBugStatus(detail.status) }}</span>
+            <div class="ms-bug-basic-shell">
+              <div class="ms-bug-basic-panel ms-bug-basic-panel-meter">
+                <div class="ms-bug-basic-row ms-bug-basic-row-meter">
+                  <span class="ms-bug-basic-label">{{ basicFieldText.assignee }}<em>*</em></span>
+                  <div class="ms-bug-basic-control">
+                    <el-select
+                      v-model="basicForm.assigneeId"
+                      clearable
+                      :disabled="!canWrite || !users.length"
+                      class="ms-bug-basic-select"
+                      :placeholder="basicFieldText.selectPlaceholder"
+                    >
+                      <el-option v-for="item in users" :key="item.id" :label="item.displayName" :value="item.id" />
+                    </el-select>
+                  </div>
                 </div>
-                <div class="ms-bug-basic-item">
-                  <span class="ms-bug-basic-label">优先级</span>
-                  <span class="ms-bug-basic-value">{{ detail.priority }}</span>
-                </div>
-                <div class="ms-bug-basic-item">
-                  <span class="ms-bug-basic-label">严重程度</span>
-                  <span class="ms-bug-basic-value">{{ formatBugSeverity(detail.severity) }}</span>
-                </div>
-                <div class="ms-bug-basic-item">
-                  <span class="ms-bug-basic-label">来源</span>
-                  <span class="ms-bug-basic-value">{{ formatBugSourceType(detail.sourceType) }}</span>
-                </div>
-                <div class="ms-bug-basic-item">
-                  <span class="ms-bug-basic-label">处理人</span>
-                  <span class="ms-bug-basic-value">{{ detail.assigneeName || '-' }}</span>
-                </div>
-                <div class="ms-bug-basic-item">
-                  <span class="ms-bug-basic-label">创建人</span>
-                  <span class="ms-bug-basic-value">{{ detail.reporterName || '-' }}</span>
-                </div>
-                <div class="ms-bug-basic-item">
-                  <span class="ms-bug-basic-label">创建时间</span>
-                  <span class="ms-bug-basic-value">{{ formatBugDateTime(detail.createdAt) }}</span>
-                </div>
-                <div class="ms-bug-basic-item">
-                  <span class="ms-bug-basic-label">更新时间</span>
-                  <span class="ms-bug-basic-value">{{ formatBugDateTime(detail.updatedAt) }}</span>
-                </div>
-              </div>
-            </div>
 
-            <div class="ms-bug-detail-section">
-              <div class="ms-bug-detail-section-title">标签</div>
-              <div class="ms-bug-tag-list">
-                <el-tag v-for="tag in detail.tags" :key="tag" effect="plain" size="small">{{ tag }}</el-tag>
-                <span v-if="!detail.tags.length" class="ms-bug-empty-inline">暂无标签</span>
-              </div>
-            </div>
+                <div class="ms-bug-basic-row ms-bug-basic-row-meter">
+                  <span class="ms-bug-basic-label">{{ basicFieldText.status }}<em>*</em></span>
+                  <div class="ms-bug-basic-control">
+                    <el-select
+                      v-model="basicForm.status"
+                      class="ms-bug-basic-select"
+                      :placeholder="basicFieldText.selectPlaceholder"
+                      :disabled="!canWrite"
+                    >
+                      <el-option
+                        v-for="item in statusOptions"
+                        :key="item.value"
+                        :label="item.label"
+                        :value="item.value"
+                      />
+                    </el-select>
+                  </div>
+                </div>
 
-            <div class="ms-bug-detail-section">
-              <div class="ms-bug-detail-section-title">状态流转</div>
-              <div v-if="canWrite" class="ms-bug-transition-form">
-                <el-select v-model="transitionStatus" placeholder="选择目标状态">
-                  <el-option
-                    v-for="item in selectableStatusOptions"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
-                <el-input
-                  v-model="transitionComment"
-                  type="textarea"
-                  :rows="4"
-                  placeholder="填写流转说明"
-                />
-                <div class="ms-bug-section-actions">
-                  <el-button type="primary" :disabled="!transitionStatus" :loading="transitioning" @click="submitTransition">
-                    更新状态
-                  </el-button>
+                <div class="ms-bug-basic-row ms-bug-basic-row-meter">
+                  <span class="ms-bug-basic-label">{{ basicFieldText.severity }} <em>*</em></span>
+                  <div class="ms-bug-basic-control">
+                    <el-select
+                      v-model="basicForm.severity"
+                      :disabled="!canWrite"
+                      class="ms-bug-basic-select"
+                      :placeholder="basicFieldText.selectPlaceholder"
+                    >
+                      <el-option v-for="item in severityOptions" :key="item" :label="formatBugSeverity(item)" :value="item" />
+                    </el-select>
+                  </div>
+                </div>
+
+                <div class="ms-bug-basic-row ms-bug-basic-row-meter ms-bug-basic-row-wide">
+                  <span class="ms-bug-basic-label">{{ basicFieldText.tags }}</span>
+                  <div class="ms-bug-basic-control">
+                    <el-select
+                      v-model="basicForm.tags"
+                      class="ms-bug-basic-select ms-bug-tag-select"
+                      multiple
+                      filterable
+                      allow-create
+                      default-first-option
+                      :reserve-keyword="false"
+                      :teleported="false"
+                      :disabled="!canWrite"
+                      popper-class="bug-editor-tag-popper"
+                      :placeholder="basicFieldText.tagPlaceholder"
+                    />
+                  </div>
                 </div>
               </div>
-              <el-empty v-else description="当前账号仅可查看" :image-size="56" />
             </div>
           </section>
 
           <section v-show="activeTab === 'detail'" class="ms-bug-detail-pane">
             <div class="ms-bug-detail-section">
               <div class="ms-bug-detail-section-header">
-                <div class="ms-bug-detail-section-title">缺陷内容</div>
-                <el-button v-if="canWrite" text :icon="Edit" @click="emit('edit')">内容编辑</el-button>
+                <div>
+                  <div class="ms-bug-detail-section-title">缺陷描述</div>
+                </div>
+                <div class="ms-bug-detail-toolbar-actions">
+                  <el-button
+                    v-if="canWrite && !descriptionEditing"
+                    text
+                    :icon="EditPen"
+                    class="ms-bug-inline-action"
+                    @click="startDescriptionEdit"
+                  >
+                    编辑内容
+                  </el-button>
+                  <template v-else-if="canWrite && descriptionEditing">
+                    <el-button text @click="cancelDescriptionEdit">取消</el-button>
+                    <el-button type="primary" :loading="descriptionSaving" @click="submitDescriptionEdit">保存</el-button>
+                  </template>
+                </div>
               </div>
-              <div class="ms-bug-rich-content" v-html="descriptionHtml" />
+
+              <div v-if="descriptionEditing" class="ms-bug-description-editor ms-bug-description-surface">
+                <BugRichTextEditor
+                  v-model="descriptionDraft"
+                  :min-height="descriptionEditorMinHeight"
+                  allow-inline-image
+                  @add-inline-image="emit('add-inline-image', $event)"
+                />
+              </div>
+              <div v-else class="ms-bug-rich-content ms-bug-description-surface" v-html="descriptionHtml" />
             </div>
 
             <div class="ms-bug-detail-section">
               <div class="ms-bug-detail-section-header">
                 <div>
-                  <div class="ms-bug-detail-section-title">添加附件</div>
-                  <div class="ms-bug-section-tip">支持任意常见类型文件</div>
+                  <div class="ms-bug-detail-section-title">附件</div>
                 </div>
                 <el-button
                   v-if="canWrite"
                   plain
+                  class="ms-bug-inline-outline-action"
                   :icon="Paperclip"
                   :loading="attachmentUploading"
                   @click="requestUpload"
                 >
-                  添加附件
+                  上传附件
                 </el-button>
               </div>
 
-              <div v-if="imageAttachments.length" class="ms-bug-attachment-group">
-                <div class="ms-bug-attachment-grid">
-                  <div v-for="item in imageAttachments" :key="item.id" class="ms-bug-attachment-card">
-                    <el-image
-                      :src="resolveApiUrl(item.downloadUrl || '')"
-                      :preview-src-list="previewUrls"
-                      :initial-index="imageAttachments.findIndex(entry => entry.id === item.id)"
-                      fit="cover"
-                      class="ms-bug-attachment-image"
-                    />
-                    <div class="ms-bug-attachment-name">{{ item.fileName }}</div>
-                    <div class="ms-bug-attachment-meta">{{ formatBugDateTime(item.createdAt) }}</div>
+              <div class="ms-bug-attachment-surface">
+                <div class="ms-bug-attachment-hint">支持所有文件类型，单个文件不超过 10MB</div>
+
+                <div v-if="imageAttachments.length" class="ms-bug-attachment-group">
+                  <div class="ms-bug-attachment-grid">
+                    <div v-for="item in imageAttachments" :key="item.id" class="ms-bug-attachment-card">
+                      <el-image
+                        :src="getAuthorizedImageUrl(item.downloadUrl)"
+                        :preview-src-list="previewUrls"
+                        :initial-index="imageAttachments.findIndex(entry => entry.id === item.id)"
+                        fit="cover"
+                        class="ms-bug-attachment-image"
+                      />
+                      <div class="ms-bug-attachment-name">{{ item.fileName }}</div>
+                      <div class="ms-bug-attachment-meta">{{ formatBugDateTime(item.createdAt) }}</div>
+                      <div class="ms-bug-attachment-actions">
+                        <el-button text type="primary" @click="emit('download-attachment', item.id)">下载</el-button>
+                        <el-button
+                          v-if="canWrite"
+                          text
+                          type="danger"
+                          :loading="attachmentRemovingId === item.id"
+                          @click="emit('remove-attachment', item.id)"
+                        >
+                          删除
+                        </el-button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="fileAttachments.length" class="ms-bug-file-list">
+                  <div v-for="item in fileAttachments" :key="item.id" class="ms-bug-file-row">
+                    <div
+                      class="ms-bug-file-icon"
+                      :data-type="getAttachmentTypeLabel(item.fileName, item.contentType)"
+                      :data-tone="getAttachmentTypeTone(item.fileName, item.contentType)"
+                    >
+                      <span class="ms-bug-file-icon-corner" />
+                      <span class="ms-bug-file-icon-badge">
+                        {{ getAttachmentTypeLabel(item.fileName, item.contentType) }}
+                      </span>
+                    </div>
+                    <div class="ms-bug-file-main">
+                      <div class="ms-bug-file-name">{{ item.fileName }}</div>
+                      <div class="ms-bug-file-meta">
+                        {{ formatAttachmentMeta(item.fileSize, item.uploadedByName, item.createdAt) }}
+                      </div>
+                    </div>
                     <div class="ms-bug-attachment-actions">
                       <el-button text type="primary" @click="emit('download-attachment', item.id)">下载</el-button>
                       <el-button
@@ -518,91 +1020,58 @@ function sanitizeStyle(value: string) {
                     </div>
                   </div>
                 </div>
-              </div>
 
-              <div v-if="fileAttachments.length" class="ms-bug-file-list">
-                <div v-for="item in fileAttachments" :key="item.id" class="ms-bug-file-row">
-                  <div class="ms-bug-file-main">
-                    <div class="ms-bug-file-name">{{ item.fileName }}</div>
-                    <div class="ms-bug-file-meta">
-                      {{ item.contentType || '未知类型' }} · {{ item.fileSize ?? 0 }} bytes · {{ formatBugDateTime(item.createdAt) }}
-                    </div>
-                  </div>
-                  <div class="ms-bug-attachment-actions">
-                    <el-button text type="primary" @click="emit('download-attachment', item.id)">下载</el-button>
-                    <el-button
-                      v-if="canWrite"
-                      text
-                      type="danger"
-                      :loading="attachmentRemovingId === item.id"
-                      @click="emit('remove-attachment', item.id)"
-                    >
-                      删除
-                    </el-button>
-                  </div>
-                </div>
+                <el-empty v-if="!detail.attachments.length" description="暂无附件" :image-size="64" />
               </div>
-
-              <el-empty v-if="!detail.attachments.length" description="暂无数据" :image-size="64" />
             </div>
           </section>
 
           <section v-show="activeTab === 'case'" class="ms-bug-detail-pane">
             <div class="ms-bug-detail-section">
-              <div class="ms-bug-detail-section-title">关联信息</div>
-              <div class="ms-bug-source-list">
-                <div class="ms-bug-source-row">
-                  <div class="ms-bug-source-label">来源类型</div>
-                  <div class="ms-bug-source-body">
-                    <div class="ms-bug-source-title">{{ formatBugSourceType(detail.sourceType) }}</div>
-                    <div class="ms-bug-source-meta">{{ detail.reporterName }} · {{ formatBugDateTime(detail.createdAt) }}</div>
-                  </div>
-                </div>
-
-                <div class="ms-bug-source-row">
-                  <div class="ms-bug-source-label">关联用例</div>
-                  <div class="ms-bug-source-body">
-                    <template v-if="detail.sourceContext.caseSummary">
-                      <div class="ms-bug-source-title">
-                        {{ detail.sourceContext.caseSummary.caseNo }} {{ detail.sourceContext.caseSummary.title }}
-                      </div>
-                      <div class="ms-bug-source-meta">
-                        {{ detail.sourceContext.caseSummary.modulePath || '-' }} · {{ detail.sourceContext.caseSummary.executionStatus }}
-                      </div>
-                      <el-button text type="primary" @click="openCase(detail.sourceContext.caseSummary.id)">打开用例</el-button>
-                    </template>
-                    <span v-else class="ms-bug-empty-inline">暂无关联</span>
-                  </div>
-                </div>
-
-                <div class="ms-bug-source-row">
-                  <div class="ms-bug-source-label">关联报告</div>
-                  <div class="ms-bug-source-body">
-                    <template v-if="detail.sourceContext.reportSummary">
-                      <div class="ms-bug-source-title">{{ detail.sourceContext.reportSummary.reportName }}</div>
-                      <div class="ms-bug-source-meta">
-                        {{ detail.sourceContext.reportSummary.result }} · {{ detail.sourceContext.reportSummary.failureSummary || '-' }}
-                      </div>
-                      <el-button text type="primary" @click="openReport(detail.sourceContext.reportSummary.id)">打开报告</el-button>
-                    </template>
-                    <span v-else class="ms-bug-empty-inline">暂无关联</span>
-                  </div>
-                </div>
-
-                <div class="ms-bug-source-row">
-                  <div class="ms-bug-source-label">关联任务</div>
-                  <div class="ms-bug-source-body">
-                    <template v-if="detail.sourceContext.taskSummary">
-                      <div class="ms-bug-source-title">{{ detail.sourceContext.taskSummary.taskName }}</div>
-                      <div class="ms-bug-source-meta">
-                        {{ detail.sourceContext.taskSummary.engineType }} · {{ detail.sourceContext.taskSummary.status }}
-                      </div>
-                      <el-button text type="primary" @click="openTask(detail.sourceContext.taskSummary.id)">打开任务</el-button>
-                    </template>
-                    <span v-else class="ms-bug-empty-inline">暂无关联</span>
-                  </div>
-                </div>
+              <div class="ms-bug-case-toolbar">
+                <el-button v-if="canWrite" type="primary" plain @click="openAssociateCaseDialog">
+                  关联用例
+                </el-button>
+                <el-input
+                  v-model="caseKeyword"
+                  clearable
+                  placeholder="按用例编号或名称搜索"
+                  class="ms-bug-case-search"
+                />
               </div>
+
+              <el-table
+                v-if="caseRows.length"
+                :data="caseRows"
+                row-key="id"
+                class="ms-bug-case-table"
+              >
+                <el-table-column prop="caseNo" label="用例编号" min-width="150">
+                  <template #default="{ row }">
+                    <el-button text type="primary" class="ms-bug-case-link" @click="openCase(row.id)">
+                      {{ row.caseNo }}
+                    </el-button>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="title" label="用例名称" min-width="260" show-overflow-tooltip />
+                <el-table-column prop="workspaceName" label="所属项目" min-width="160" show-overflow-tooltip />
+                <el-table-column prop="caseType" label="用例类型" width="120" />
+                <el-table-column label="操作" width="120" fixed="right">
+                  <template #default>
+                    <el-button
+                      v-if="canWrite"
+                      text
+                      type="danger"
+                      :loading="associatingCase"
+                      @click="emit('unlink-case')"
+                    >
+                      取消关联
+                    </el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+
+              <el-empty v-else description="暂无关联用例" :image-size="72" />
             </div>
           </section>
 
@@ -618,25 +1087,25 @@ function sanitizeStyle(value: string) {
                   <div class="ms-bug-comment-content">{{ comment.content }}</div>
                 </div>
               </div>
-              <el-empty v-else description="暂无数据" :image-size="64" />
+              <el-empty v-else description="暂无评论" :image-size="64" />
             </div>
 
             <div class="ms-bug-detail-section">
-              <div class="ms-bug-detail-section-title">添加评论</div>
+              <div class="ms-bug-detail-section-title">发表评论</div>
               <div v-if="canWrite" class="ms-bug-comment-editor">
                 <el-input
                   v-model="commentText"
                   type="textarea"
                   :rows="5"
-                  placeholder="请输入评论内容"
+                  placeholder="输入评论内容"
                 />
                 <div class="ms-bug-section-actions">
                   <el-button type="primary" :disabled="!commentText.trim()" :loading="commenting" @click="submitComment">
-                    发表评论
+                    提交评论
                   </el-button>
                 </div>
               </div>
-              <el-empty v-else description="当前账号仅可查看" :image-size="56" />
+              <el-empty v-else description="当前无编辑权限" :image-size="56" />
             </div>
           </section>
 
@@ -652,12 +1121,20 @@ function sanitizeStyle(value: string) {
                   <div class="ms-bug-history-time">{{ formatBugDateTime(item.occurredAt) }}</div>
                 </div>
               </div>
-              <el-empty v-else description="暂无数据" :image-size="64" />
+              <el-empty v-else description="暂无变更历史" :image-size="64" />
             </div>
           </section>
         </template>
       </div>
     </div>
+
+    <BugCaseAssociateDialog
+      v-model="associateDialogVisible"
+      :workspace-code="detail?.workspaceCode || ''"
+      :current-case-id="detail?.relatedCaseId ?? null"
+      :associating="associatingCase"
+      @associate="handleCaseAssociated"
+    />
   </el-drawer>
 </template>
 
@@ -683,23 +1160,13 @@ function sanitizeStyle(value: string) {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px 20px 0;
+  padding: 16px 20px 0;
   flex: 0 0 auto;
 }
 
 .ms-bug-detail-title-wrap {
   min-width: 0;
   flex: 1;
-}
-
-.ms-bug-detail-object-head,
-.ms-bug-detail-object-main {
-  min-width: 0;
-}
-
-.ms-bug-detail-object-main {
-  display: grid;
-  gap: 4px;
 }
 
 .ms-bug-detail-object-line {
@@ -726,25 +1193,8 @@ function sanitizeStyle(value: string) {
   word-break: break-word;
 }
 
-.ms-bug-detail-object-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  color: #98a2b3;
-  font-size: 12px;
-  line-height: 1.5;
-  flex-wrap: wrap;
-}
-
-.ms-bug-detail-meta-dot {
-  width: 4px;
-  height: 4px;
-  border-radius: 999px;
-  background: #d0d5dd;
-}
-
-.ms-bug-detail-platform-tag {
+.ms-bug-detail-status-tag,
+.ms-bug-inline-status-tag {
   --el-tag-border-color: #bfd7ff;
   --el-tag-text-color: #175cd3;
   --el-tag-bg-color: #eff8ff;
@@ -755,7 +1205,6 @@ function sanitizeStyle(value: string) {
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
-  padding-top: 1px;
 }
 
 .ms-bug-detail-top-actions :deep(.el-button) {
@@ -794,7 +1243,6 @@ function sanitizeStyle(value: string) {
   margin: 12px 20px 0;
   border-bottom: 1px solid #eaecf0;
   flex: 0 0 auto;
-  overflow-x: auto;
 }
 
 .ms-bug-detail-tab {
@@ -837,7 +1285,6 @@ function sanitizeStyle(value: string) {
   min-height: 0;
   overflow: auto;
   padding: 18px 20px 22px;
-  background: #fff;
 }
 
 .ms-bug-detail-pane {
@@ -848,23 +1295,6 @@ function sanitizeStyle(value: string) {
 .ms-bug-detail-section {
   display: grid;
   gap: 14px;
-  padding-bottom: 2px;
-}
-
-.ms-bug-detail-pane > .ms-bug-detail-section {
-  padding-left: 4px;
-  padding-right: 4px;
-}
-
-.ms-bug-detail-section-header,
-.ms-bug-comment-top,
-.ms-bug-history-item,
-.ms-bug-source-row,
-.ms-bug-file-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
 }
 
 .ms-bug-detail-section-title {
@@ -874,65 +1304,190 @@ function sanitizeStyle(value: string) {
   line-height: 1.5;
 }
 
+.ms-bug-detail-section-header,
+.ms-bug-comment-top,
+.ms-bug-history-item,
+.ms-bug-file-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .ms-bug-detail-section-header {
   padding-bottom: 4px;
   border-bottom: 1px solid #f2f4f7;
 }
 
 .ms-bug-section-tip,
-.ms-bug-basic-label,
 .ms-bug-comment-time,
 .ms-bug-history-time,
 .ms-bug-file-meta,
-.ms-bug-source-meta,
-.ms-bug-attachment-meta,
-.ms-bug-empty-inline {
+.ms-bug-attachment-meta {
   color: #98a2b3;
   font-size: 12px;
   line-height: 1.6;
 }
 
-.ms-bug-basic-grid {
+.ms-bug-basic-shell {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 24px;
-  padding-bottom: 2px;
+  gap: 16px;
 }
 
-.ms-bug-basic-item {
+.ms-bug-basic-panel {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
+  grid-template-columns: 1fr;
+  gap: 18px;
+  padding-top: 6px;
+}
+
+.ms-bug-basic-panel-meter {
+  max-width: 560px;
+}
+
+.ms-bug-basic-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
   gap: 12px;
-  align-items: start;
-  min-height: 24px;
+  align-items: center;
+  min-height: 34px;
 }
 
-.ms-bug-basic-value,
-.ms-bug-comment-author,
-.ms-bug-history-title,
-.ms-bug-source-title,
-.ms-bug-file-name,
-.ms-bug-attachment-name {
-  color: #344054;
-  font-size: 13px;
-  line-height: 1.65;
-  word-break: break-word;
+.ms-bug-basic-row-meter {
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 12px;
+  min-height: 30px;
 }
 
-.ms-bug-comment-author,
-.ms-bug-history-title,
-.ms-bug-source-title,
-.ms-bug-file-name,
-.ms-bug-attachment-name {
-  font-weight: 600;
+.ms-bug-basic-row-wide {
+  grid-column: 1 / -1;
+  align-items: flex-start;
 }
 
-.ms-bug-tag-list {
+.ms-bug-basic-control,
+.ms-bug-basic-value-wrap {
+  min-width: 0;
+}
+
+.ms-bug-basic-label {
+  color: #1f2329;
+  font-size: 14px;
+  line-height: 30px;
+  font-weight: 400;
+}
+
+.ms-bug-basic-label em {
+  color: #f53f3f;
+  font-style: normal;
+}
+
+.ms-bug-basic-panel-meter :deep(.el-select__wrapper) {
+  min-height: 34px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px #dcdfe6 inset;
+  color: #1f2329;
+  background: #fff;
+  --el-text-color-regular: #1f2329;
+  --el-text-color-placeholder: #a8abb2;
+  --el-disabled-text-color: #1f2329;
+}
+
+.ms-bug-basic-panel-meter :deep(.el-select__selected-item),
+.ms-bug-basic-panel-meter :deep(.el-select-selected__caret),
+.ms-bug-basic-panel-meter :deep(.el-select__selection-text),
+.ms-bug-basic-panel-meter :deep(.el-select__input),
+.ms-bug-basic-panel-meter :deep(.el-select__input-wrapper),
+.ms-bug-basic-panel-meter :deep(.el-select__selection),
+.ms-bug-basic-panel-meter :deep(.el-select__placeholder.is-transparent) {
+  color: #1f2329 !important;
+}
+
+.ms-bug-basic-panel-meter :deep(.el-select__placeholder:not(.is-transparent)),
+.ms-bug-basic-panel-meter :deep(.el-select__placeholder:not(.is-transparent) span),
+.ms-bug-basic-panel-meter :deep(.el-select__selected-item.el-select__placeholder:not(.is-transparent)),
+.ms-bug-basic-panel-meter :deep(.el-select__selected-item.el-select__placeholder:not(.is-transparent) span) {
+  color: #1f2329 !important;
+}
+
+.ms-bug-basic-panel-meter :deep(.el-select__placeholder.is-transparent),
+.ms-bug-basic-panel-meter :deep(.el-select__placeholder.is-transparent) span,
+.ms-bug-basic-panel-meter :deep(.el-select .el-select__selected-item.el-select__placeholder.is-transparent),
+.ms-bug-basic-panel-meter :deep(.el-select .el-select__selected-item.el-select__placeholder.is-transparent) span {
+  color: #a8abb2 !important;
+}
+
+.ms-bug-basic-panel-meter :deep(.is-disabled .el-select__wrapper),
+.ms-bug-basic-panel-meter :deep(.is-disabled .el-select__selected-item),
+.ms-bug-basic-panel-meter :deep(.is-disabled .el-select__placeholder:not(.is-transparent)),
+.ms-bug-basic-panel-meter :deep(.is-disabled .el-select__placeholder:not(.is-transparent) span),
+.ms-bug-basic-panel-meter :deep(.is-disabled .el-select__selection-text),
+.ms-bug-basic-panel-meter :deep(.is-disabled .el-select__input),
+.ms-bug-basic-panel-meter :deep(.is-disabled .el-select__placeholder) {
+  color: #1f2329 !important;
+}
+
+.ms-bug-tag-select :deep(.el-select__wrapper) {
+  align-items: center;
+  padding: 0 10px;
+}
+
+.ms-bug-tag-select :deep(.el-select__selection) {
   display: flex;
   align-items: center;
-  gap: 8px;
   flex-wrap: wrap;
-  padding-top: 2px;
+  gap: 6px;
+  min-height: 32px;
+}
+
+.ms-bug-tag-select :deep(.el-select__selected-item) {
+  margin: 0;
+}
+
+.ms-bug-tag-select :deep(.el-tag) {
+  height: 24px;
+  margin: 0;
+  padding: 0 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: #f5f7fa;
+  color: #1f2329;
+  line-height: 22px;
+  box-shadow: none;
+  --el-tag-text-color: #1f2329;
+}
+
+.ms-bug-tag-select :deep(.el-tag .el-tag__content) {
+  color: #1f2329 !important;
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.ms-bug-tag-select :deep(.el-tag .el-tag__close) {
+  margin-left: 4px;
+  color: #646a73;
+}
+
+.ms-bug-tag-select :deep(.el-select__input-wrapper) {
+  margin: 0;
+}
+
+.ms-bug-tag-select :deep(.el-select__input) {
+  min-width: 96px;
+  margin: 0;
+  color: #1f2329 !important;
+  font-size: 12px;
+  line-height: 24px;
+}
+
+.ms-bug-tag-select :deep(.el-select__placeholder) {
+  color: #a8abb2 !important;
+  font-size: 12px;
+  line-height: 32px;
+}
+
+.ms-bug-tag-select :deep(.el-select__caret),
+.ms-bug-tag-select :deep(.el-select__suffix) {
+  display: none;
 }
 
 .ms-bug-transition-form,
@@ -946,18 +1501,90 @@ function sanitizeStyle(value: string) {
   justify-content: flex-end;
 }
 
+.ms-bug-detail-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ms-bug-detail-toolbar-actions :deep(.el-button) {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.ms-bug-inline-action {
+  color: #175cd3;
+}
+
+.ms-bug-detail-toolbar-actions :deep(.ms-bug-inline-action:hover),
+.ms-bug-detail-toolbar-actions :deep(.ms-bug-inline-action:focus-visible) {
+  color: #175cd3;
+  background: #eff8ff;
+}
+
+.ms-bug-inline-outline-action {
+  border-color: #d0d5dd;
+  color: #344054;
+  background: #fff;
+}
+
+.ms-bug-detail-toolbar-actions :deep(.ms-bug-inline-outline-action:hover),
+.ms-bug-detail-toolbar-actions :deep(.ms-bug-inline-outline-action:focus-visible) {
+  border-color: #bfd7ff;
+  color: #175cd3;
+  background: #eff8ff;
+}
+
+.ms-bug-description-surface {
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #fcfcfd;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.ms-bug-description-editor {
+  overflow: hidden;
+}
+
 .ms-bug-rich-content {
-  color: #475467;
+  padding: 16px 18px;
+  color: #344054;
   font-size: 13px;
   line-height: 1.8;
   word-break: break-word;
-  padding: 0 0 6px;
+}
+
+.ms-bug-rich-content :deep(h1),
+.ms-bug-rich-content :deep(h2),
+.ms-bug-rich-content :deep(h3),
+.ms-bug-rich-content :deep(h4),
+.ms-bug-rich-content :deep(h5),
+.ms-bug-rich-content :deep(h6) {
+  margin: 0 0 14px;
+  color: #101828;
+  line-height: 1.55;
 }
 
 .ms-bug-rich-content :deep(p),
 .ms-bug-rich-content :deep(ul),
 .ms-bug-rich-content :deep(ol) {
   margin: 0 0 14px;
+}
+
+.ms-bug-rich-content :deep(ul),
+.ms-bug-rich-content :deep(ol) {
+  padding-left: 20px;
+}
+
+.ms-bug-rich-content :deep(blockquote) {
+  margin: 0 0 14px;
+  padding: 8px 0 8px 12px;
+  border-left: 3px solid #d0d5dd;
+  color: #475467;
+  background: rgba(248, 250, 252, 0.8);
 }
 
 .ms-bug-rich-content :deep(img) {
@@ -975,11 +1602,30 @@ function sanitizeStyle(value: string) {
   color: #98a2b3;
 }
 
+.ms-bug-rich-content :deep(*:last-child) {
+  margin-bottom: 0;
+}
+
+.ms-bug-attachment-surface {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #fcfcfd;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.ms-bug-attachment-hint {
+  color: #98a2b3;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .ms-bug-attachment-group,
 .ms-bug-file-list,
 .ms-bug-comment-list,
-.ms-bug-history-list,
-.ms-bug-source-list {
+.ms-bug-history-list {
   display: grid;
   gap: 12px;
 }
@@ -988,7 +1634,6 @@ function sanitizeStyle(value: string) {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 12px;
-  padding-top: 4px;
 }
 
 .ms-bug-attachment-card {
@@ -998,13 +1643,6 @@ function sanitizeStyle(value: string) {
   border: 1px solid #eaecf0;
   border-radius: 8px;
   background: #fcfdff;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
-}
-
-.ms-bug-attachment-card:hover {
-  border-color: #bfd7ff;
-  box-shadow: 0 4px 12px rgba(23, 92, 211, 0.06);
-  transform: translateY(-1px);
 }
 
 .ms-bug-attachment-image {
@@ -1022,40 +1660,153 @@ function sanitizeStyle(value: string) {
   flex-wrap: wrap;
 }
 
-.ms-bug-attachment-actions :deep(.el-button),
-.ms-bug-source-body :deep(.el-button) {
-  padding-left: 0;
-  padding-right: 0;
+.ms-bug-file-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #fff;
 }
 
-.ms-bug-file-row,
+.ms-bug-file-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: 38px;
+  height: 46px;
+  padding: 0 0 6px;
+  border: 1px solid var(--file-accent, #bfd7ff);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--file-accent-strong, #175cd3);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  overflow: hidden;
+}
+
+.ms-bug-file-icon::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 7px;
+  height: 12px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--file-accent, #bfd7ff) 12%, white);
+  pointer-events: none;
+}
+
+.ms-bug-file-icon-corner {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 13px;
+  height: 13px;
+  background: color-mix(in srgb, var(--file-accent, #bfd7ff) 20%, white);
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+  border-top-right-radius: 8px;
+  box-shadow: inset -1px 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+.ms-bug-file-icon-badge {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 12px;
+  padding: 0 2px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--file-accent-strong, #175cd3);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.ms-bug-file-icon[data-tone='pdf'] {
+  --file-accent: #fecaca;
+  --file-accent-strong: #dc2626;
+}
+
+.ms-bug-file-icon[data-tone='word'] {
+  --file-accent: #bfdbfe;
+  --file-accent-strong: #2563eb;
+}
+
+.ms-bug-file-icon[data-tone='excel'] {
+  --file-accent: #bbf7d0;
+  --file-accent-strong: #16a34a;
+}
+
+.ms-bug-file-icon[data-tone='ppt'] {
+  --file-accent: #fed7aa;
+  --file-accent-strong: #ea580c;
+}
+
+.ms-bug-file-icon[data-tone='text'] {
+  --file-accent: #c7d7fe;
+  --file-accent-strong: #315cec;
+}
+
+.ms-bug-file-icon[data-tone='code'] {
+  --file-accent: #d9d6fe;
+  --file-accent-strong: #7c3aed;
+}
+
+.ms-bug-file-icon[data-tone='archive'] {
+  --file-accent: #fde68a;
+  --file-accent-strong: #d97706;
+}
+
+.ms-bug-file-icon[data-tone='file'] {
+  --file-accent: #d5d9e2;
+  --file-accent-strong: #667085;
+}
+
+.ms-bug-file-row .ms-bug-attachment-actions {
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .ms-bug-comment-item,
-.ms-bug-history-item,
-.ms-bug-source-row {
+.ms-bug-history-item {
   padding: 15px 0;
   border-top: 1px solid #f2f4f7;
 }
 
-.ms-bug-file-row:first-child,
 .ms-bug-comment-item:first-child,
-.ms-bug-history-item:first-child,
-.ms-bug-source-row:first-child {
+.ms-bug-history-item:first-child {
   border-top: none;
   padding-top: 0;
 }
 
-.ms-bug-file-row:last-child,
-.ms-bug-comment-item:last-child,
-.ms-bug-history-item:last-child,
-.ms-bug-source-row:last-child {
-  padding-bottom: 0;
-}
-
 .ms-bug-file-main,
 .ms-bug-comment-content,
-.ms-bug-history-main,
-.ms-bug-source-body {
+.ms-bug-history-main {
   min-width: 0;
+}
+
+.ms-bug-file-main {
+  display: grid;
+  gap: 6px;
+}
+
+.ms-bug-comment-author,
+.ms-bug-history-title,
+.ms-bug-file-name,
+.ms-bug-attachment-name {
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.65;
+  font-weight: 600;
+  word-break: break-word;
 }
 
 .ms-bug-comment-content,
@@ -1068,11 +1819,6 @@ function sanitizeStyle(value: string) {
   word-break: break-word;
 }
 
-.ms-bug-comment-top,
-.ms-bug-history-item {
-  align-items: flex-start;
-}
-
 .ms-bug-comment-time,
 .ms-bug-history-time {
   flex: 0 0 auto;
@@ -1081,77 +1827,55 @@ function sanitizeStyle(value: string) {
   color: #b0b7c3;
   font-size: 11px;
   line-height: 1.4;
-  letter-spacing: 0;
-  padding-top: 2px;
 }
 
-.ms-bug-history-main {
-  min-width: 0;
-}
-
-.ms-bug-comment-item,
-.ms-bug-history-item {
-  min-height: 56px;
-}
-
-.ms-bug-source-label {
-  flex: 0 0 96px;
+.ms-bug-file-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   color: #98a2b3;
   font-size: 12px;
-  line-height: 1.8;
+  line-height: 1.6;
+  word-break: break-word;
 }
 
-.ms-bug-source-body {
-  flex: 1;
+.ms-bug-case-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.ms-bug-comment-list,
-.ms-bug-history-list,
-.ms-bug-file-list,
-.ms-bug-source-list {
-  padding-left: 2px;
-  padding-right: 2px;
+.ms-bug-case-search {
+  width: min(280px, 100%);
 }
 
-.ms-bug-rich-content,
-.ms-bug-transition-form,
-.ms-bug-comment-editor,
-.ms-bug-basic-grid,
-.ms-bug-tag-list,
-.ms-bug-attachment-grid {
-  padding-left: 2px;
-  padding-right: 2px;
+.ms-bug-case-table :deep(.cell) {
+  font-size: 13px;
 }
 
-.ms-bug-source-body :deep(.el-button:hover),
-.ms-bug-attachment-actions :deep(.el-button:hover) {
-  color: #175cd3;
+.ms-bug-case-link {
+  padding-left: 0;
+  padding-right: 0;
 }
 
 @media (max-width: 900px) {
   .ms-bug-detail-topbar,
   .ms-bug-detail-section-header,
   .ms-bug-history-item,
-  .ms-bug-source-row,
-  .ms-bug-file-row {
+  .ms-bug-case-toolbar {
     flex-direction: column;
   }
 
-  .ms-bug-comment-top {
-    align-items: flex-start;
-  }
-
-  .ms-bug-basic-grid {
+  .ms-bug-basic-row,
+  .ms-bug-basic-row-meter {
     grid-template-columns: 1fr;
+    gap: 6px;
   }
 
-  .ms-bug-basic-item {
-    grid-template-columns: 1fr;
-    gap: 4px;
-  }
-
-  .ms-bug-source-label {
-    flex: none;
+  .ms-bug-basic-actions {
+    padding-left: 0;
   }
 
   .ms-bug-comment-time,
@@ -1159,5 +1883,19 @@ function sanitizeStyle(value: string) {
     min-width: 0;
     text-align: left;
   }
+
+  .ms-bug-file-row {
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .ms-bug-file-row .ms-bug-attachment-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .ms-bug-case-search {
+    width: 100%;
+  }
 }
 </style>
+

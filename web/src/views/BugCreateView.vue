@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { platformApi, resolveApiUrl } from '../api/platform'
+import { platformApi } from '../api/platform'
 import BugEditorForm from '../components/BugEditorForm.vue'
 import { useWorkspace } from '../composables/useWorkspace'
 import type { BugDetail, CreateBugPayload, UpdateBugPayload, UserItem, WorkspaceItem } from '../types/api'
@@ -175,19 +175,41 @@ function clearPendingInlineImages() {
 }
 
 async function uploadPendingInlineImages(bugId: number, targetWorkspaceCode: string, html: string) {
-  let nextHtml = html
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(`<div>${html}</div>`, 'text/html')
+  const container = doc.body.firstElementChild as HTMLElement | null
+  if (!container) {
+    clearPendingInlineImages()
+    return html
+  }
+  const unresolvedImages = Array.from(container.querySelectorAll('img')) as HTMLImageElement[]
+  const consumedImages = new Set<HTMLImageElement>()
   for (const item of pendingInlineImages.value) {
-    if (!nextHtml.includes(item.src)) {
+    const exactMatches = Array.from(
+      container.querySelectorAll(`img[src="${item.src.replaceAll('"', '&quot;')}"]`),
+    ) as HTMLImageElement[]
+    const fallbackMatch = unresolvedImages.find(image => {
+      if (consumedImages.has(image)) {
+        return false
+      }
+      const source = image.getAttribute('src') || ''
+      return /^blob:|^data:/i.test(source)
+    })
+    const targetImages = exactMatches.length ? exactMatches : (fallbackMatch ? [fallbackMatch] : [])
+    if (!targetImages.length) {
       URL.revokeObjectURL(item.src)
       continue
     }
     const [attachment] = await platformApi.uploadBugAttachment(targetWorkspaceCode, bugId, [item.file])
-    const imageUrl = resolveApiUrl(attachment.downloadUrl || `/bugs/${bugId}/attachments/${attachment.id}/download`)
-    nextHtml = nextHtml.split(item.src).join(imageUrl)
+    const imageUrl = attachment.downloadUrl || `/api/bugs/${bugId}/attachments/${attachment.id}/download`
+    targetImages.forEach((image) => {
+      image.setAttribute('src', imageUrl)
+      consumedImages.add(image)
+    })
     URL.revokeObjectURL(item.src)
   }
   pendingInlineImages.value = []
-  return nextHtml
+  return container.innerHTML
 }
 
 function resetFormForNextCreate() {

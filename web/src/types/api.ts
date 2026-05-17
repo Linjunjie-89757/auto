@@ -576,6 +576,7 @@ export interface BugAttachment {
   contentType: string | null
   fileSize: number | null
   downloadUrl: string | null
+  uploadedByName: string | null
   createdAt: string | null
 }
 

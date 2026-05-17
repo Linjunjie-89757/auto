@@ -98,7 +98,7 @@ public class CaseExecutionAttachmentStorageService {
     }
 
     private void validateFile(MultipartFile file) {
-        if (file == null || file.isEmpty()) {
+        if (file == null || !StringUtils.hasText(file.getOriginalFilename())) {
             throw new BadRequestException("请先选择要上传的截图或附件");
         }
         if (file.getSize() > MAX_FILE_SIZE) {

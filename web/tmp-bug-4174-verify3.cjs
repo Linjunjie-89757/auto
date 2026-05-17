@@ -1,0 +1,28 @@
+const { chromium } = require('playwright');
+(async () => {
+  const browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe' });
+  const page = await browser.newPage();
+  const messages = [];
+  page.on('console', msg => messages.push(`${msg.type()}: ${msg.text()}`));
+  page.on('pageerror', err => messages.push(`pageerror: ${err.message}`));
+  await page.goto('http://127.0.0.1:4174/login');
+  const boxes = page.getByRole('textbox');
+  await boxes.nth(0).fill('zhangli');
+  await boxes.nth(1).fill('123456');
+  await page.getByRole('button').last().click();
+  await page.waitForURL(/\/dashboard|\/settings|\/cases|\/bugs|\/automation/, { timeout: 15000 });
+  await page.goto('http://127.0.0.1:4174/bugs?workspace=ALL');
+  await page.waitForSelector('.bug-actions-row .el-button', { timeout: 15000 });
+  await page.locator('.bug-actions-row .el-button').first().click();
+  await page.waitForTimeout(1200);
+  const drawer = page.locator('.el-drawer:visible').last();
+  const tabs = await drawer.locator('.ms-bug-detail-tab').allInnerTexts();
+  await drawer.locator('.ms-bug-detail-tab').nth(1).click();
+  await page.waitForTimeout(300);
+  const active1 = await drawer.locator('.ms-bug-detail-tab.is-active').innerText();
+  await drawer.locator('.ms-bug-detail-tab').nth(2).click();
+  await page.waitForTimeout(300);
+  const active2 = await drawer.locator('.ms-bug-detail-tab.is-active').innerText();
+  console.log(JSON.stringify({ tabs, active1, active2, messages }, null, 2));
+  await browser.close();
+})();

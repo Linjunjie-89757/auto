@@ -62,7 +62,6 @@ import type {
 } from '../types/api'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080/api'
-const API_ORIGIN = new URL(API_BASE).origin
 
 export function resolveApiUrl(path: string) {
   if (!path) {
@@ -72,7 +71,7 @@ export function resolveApiUrl(path: string) {
     return path
   }
   if (path.startsWith('/api/')) {
-    return `${API_ORIGIN}${path}`
+    return path
   }
   return `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`
 }

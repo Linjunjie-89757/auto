@@ -340,11 +340,11 @@ const taskCaseModuleValue = computed({
     taskForm.workspaceCode = parsed.workspaceCode
     taskCaseContext.directoryId = parsed.directoryId
     taskCaseContext.modulePath = formatCaseModulePath(parsed.workspaceCode, parsed.directoryId)
-    if (taskForm.summary.includes('来源模块：')) {
-      taskForm.summary = taskForm.summary.replace(/来源模块：[^\n]*/g, `来源模块：${taskCaseContext.modulePath}`)
+    if (taskForm.summary.includes('\u6765\u6E90\u6A21\u5757\uFF1A')) {
+      taskForm.summary = taskForm.summary.replace(/\u6765\u6E90\u6A21\u5757\uFF1A[^\n]*/g, `\u6765\u6E90\u6A21\u5757\uFF1A${taskCaseContext.modulePath}`)
     }
     else if (taskCaseContext.modulePath) {
-      taskForm.summary = [taskForm.summary.trim(), `来源模块：${taskCaseContext.modulePath}`].filter(Boolean).join('\n')
+      taskForm.summary = [taskForm.summary.trim(), `\u6765\u6E90\u6A21\u5757\uFF1A${taskCaseContext.modulePath}`].filter(Boolean).join('\n')
     }
   },
 })
@@ -363,15 +363,15 @@ function openTaskCreateFromCase(
   targetModulePath?: string,
 ) {
   resetTaskForm()
-  taskForm.taskName = `${caseTitle} ????`
-  taskForm.summary = `?????${caseTitle}`
+  taskForm.taskName = `${caseTitle} \u6267\u884C\u4EFB\u52A1`
+  taskForm.summary = `\u6765\u6E90\u7528\u4F8B\uFF1A${caseTitle}`
   if (targetWorkspaceCode) {
     taskForm.workspaceCode = targetWorkspaceCode
   }
   taskCaseContext.directoryId = targetDirectoryId ?? null
   taskCaseContext.modulePath = targetModulePath ?? ''
   if (taskCaseContext.modulePath) {
-    taskForm.summary = `${taskForm.summary}\n?????${taskCaseContext.modulePath}`
+    taskForm.summary = `${taskForm.summary}\n\u6765\u6E90\u6A21\u5757\uFF1A${taskCaseContext.modulePath}`
   }
   taskDialogMode.value = 'create'
   taskDialogVisible.value = true
@@ -384,7 +384,7 @@ function consumeCaseExecuteIntent() {
   }
   const caseTitle = typeof route.query.caseTitle === 'string' ? route.query.caseTitle : ''
   const targetWorkspaceCode = typeof route.query.workspace === 'string' ? route.query.workspace : ''
-  openTaskCreateFromCase(caseTitle || '未命名用例', targetWorkspaceCode || undefined)
+  openTaskCreateFromCase(caseTitle || '\u672A\u547D\u540D\u7528\u4F8B', targetWorkspaceCode || undefined)
   void router.replace({
     query: {
       ...route.query,
@@ -425,11 +425,11 @@ async function openTaskDetail(id: number) {
 
 async function submitTask() {
   if (isAllScope.value && !taskForm.workspaceCode) {
-    ElMessage.error('???????????????')
+    ElMessage.error('\u5728\u5168\u90E8\u7A7A\u95F4\u4E0B\u8BF7\u9009\u62E9\u76EE\u6807\u7A7A\u95F4')
     return
   }
   if (!taskForm.taskName.trim()) {
-    ElMessage.error('????????')
+    ElMessage.error('\u8BF7\u8F93\u5165\u4EFB\u52A1\u540D\u79F0')
     return
   }
   saving.value = true
@@ -443,11 +443,11 @@ async function submitTask() {
     }
     if (taskDialogMode.value === 'create') {
       await platformApi.createTask(workspaceCode.value, payload)
-      ElMessage.success('??????')
+      ElMessage.success('\u4EFB\u52A1\u521B\u5EFA\u6210\u529F')
     }
     else if (taskForm.id !== null) {
       await platformApi.updateTask(workspaceCode.value, taskForm.id, payload)
-      ElMessage.success('??????')
+      ElMessage.success('\u4EFB\u52A1\u66F4\u65B0\u6210\u529F')
     }
     taskDialogVisible.value = false
     await loadExecution()
@@ -462,9 +462,9 @@ async function submitTask() {
 
 async function confirmDeleteTask(row: TaskItem) {
   try {
-    await ElMessageBox.confirm(`???????${row.taskName}???`, '????', { type: 'warning' })
+    await ElMessageBox.confirm(`\u786E\u8BA4\u5220\u9664\u4EFB\u52A1“${row.taskName}”\u5417\uFF1F`, '\u5220\u9664\u4EFB\u52A1', { type: 'warning' })
     await platformApi.deleteTask(workspaceCode.value, row.id)
-    ElMessage.success('??????')
+    ElMessage.success('\u4EFB\u52A1\u5220\u9664\u6210\u529F')
     await loadExecution()
   }
   catch (error) {
@@ -482,7 +482,7 @@ async function transitionTask(toStatus: string) {
   try {
     taskDetail.value = await platformApi.transitionTask(workspaceCode.value, taskDetail.value.id, { toStatus })
     await loadExecution()
-    ElMessage.success('???????')
+    ElMessage.success('\u4EFB\u52A1\u72B6\u6001\u5DF2\u66F4\u65B0')
   }
   catch (error) {
     ElMessage.error((error as Error).message)
@@ -536,15 +536,15 @@ async function reloadCurrentReportDetail() {
 
 async function submitReport() {
   if (isAllScope.value && !reportForm.workspaceCode) {
-    ElMessage.error('???????????????')
+    ElMessage.error('\u5728\u5168\u90E8\u7A7A\u95F4\u4E0B\u8BF7\u9009\u62E9\u76EE\u6807\u7A7A\u95F4')
     return
   }
   if (!reportForm.taskId) {
-    ElMessage.error('????????')
+    ElMessage.error('\u8BF7\u9009\u62E9\u5173\u8054\u4EFB\u52A1')
     return
   }
   if (!reportForm.reportName.trim()) {
-    ElMessage.error('????????')
+    ElMessage.error('\u8BF7\u8F93\u5165\u62A5\u544A\u540D\u79F0')
     return
   }
   saving.value = true
@@ -559,11 +559,11 @@ async function submitReport() {
     }
     if (reportDialogMode.value === 'create') {
       await platformApi.createReport(workspaceCode.value, payload)
-      ElMessage.success('??????')
+      ElMessage.success('\u62A5\u544A\u521B\u5EFA\u6210\u529F')
     }
     else if (reportForm.id !== null) {
       await platformApi.updateReport(workspaceCode.value, reportForm.id, payload)
-      ElMessage.success('??????')
+      ElMessage.success('\u62A5\u544A\u66F4\u65B0\u6210\u529F')
     }
     reportDialogVisible.value = false
     await loadExecution()
@@ -578,9 +578,9 @@ async function submitReport() {
 
 async function confirmDeleteReport(row: ReportItem) {
   try {
-    await ElMessageBox.confirm(`???????${row.reportName}???`, '????', { type: 'warning' })
+    await ElMessageBox.confirm(`\u786E\u8BA4\u5220\u9664\u62A5\u544A“${row.reportName}”\u5417\uFF1F`, '\u5220\u9664\u62A5\u544A', { type: 'warning' })
     await platformApi.deleteReport(workspaceCode.value, row.id)
-    ElMessage.success('??????')
+    ElMessage.success('\u62A5\u544A\u5220\u9664\u6210\u529F')
     if (reportDetail.value?.id === row.id) {
       reportDrawerVisible.value = false
       reportDetail.value = null
@@ -608,7 +608,7 @@ async function saveReportContent() {
     })
     syncReportContentForm(reportDetail.value)
     await loadExecution()
-    ElMessage.success('???????')
+    ElMessage.success('\u62A5\u544A\u5185\u5BB9\u5DF2\u4FDD\u5B58')
   }
   catch (error) {
     ElMessage.error((error as Error).message)
@@ -634,7 +634,7 @@ async function handleReportAttachmentChange(event: Event) {
     const uploaded = await platformApi.uploadReportAttachment(workspaceCode.value, reportDetail.value.id, files)
     await reloadCurrentReportDetail()
     await loadExecution()
-    ElMessage.success(`??? ${uploaded.length} ???`)
+    ElMessage.success(`\u5DF2\u4E0A\u4F20 ${uploaded.length} \u4E2A\u9644\u4EF6`)
   }
   catch (error) {
     ElMessage.error((error as Error).message)
@@ -653,7 +653,7 @@ async function removeReportAttachment(item: ReportAttachment) {
     await platformApi.deleteReportAttachment(workspaceCode.value, reportDetail.value.id, item.id)
     await reloadCurrentReportDetail()
     await loadExecution()
-    ElMessage.success('??????')
+    ElMessage.success('\u9644\u4EF6\u5220\u9664\u6210\u529F')
   }
   catch (error) {
     ElMessage.error((error as Error).message)
@@ -679,7 +679,7 @@ function openReportBugDialog(row: ReportItem) {
   Object.assign(reportBugState, {
     workspaceCode: isAllScope.value ? row.workspaceCode : workspaceCode.value,
     reportId: row.id,
-    title: `${row.reportName} - ??`,
+    title: `${row.reportName} - \u7F3A\u9677`,
     description: row.failureSummary,
     priority: 'P1',
     severity: 'HIGH',
@@ -703,7 +703,7 @@ async function submitReportBug() {
       tags: reportBugState.tags,
     })
     reportBugVisible.value = false
-    ElMessage.success('????????')
+    ElMessage.success('\u5DF2\u4ECE\u62A5\u544A\u521B\u5EFA\u7F3A\u9677')
   }
   catch (error) {
     ElMessage.error((error as Error).message)
@@ -739,17 +739,17 @@ const reportLogSourceOptions = [
 ]
 
 const taskColumns: TableSettingsColumn[] = [
-  { key: 'taskName', label: '????', required: true, defaultVisible: true },
-  { key: 'status', label: '??', defaultVisible: true },
-  { key: 'summary', label: '??', defaultVisible: true },
-  { key: 'workspaceName', label: '????', defaultVisible: true, allOnly: true },
+  { key: 'taskName', label: '\u4EFB\u52A1\u540D\u79F0', required: true, defaultVisible: true },
+  { key: 'status', label: '\u72B6\u6001', defaultVisible: true },
+  { key: 'summary', label: '\u6458\u8981', defaultVisible: true },
+  { key: 'workspaceName', label: '\u6240\u5C5E\u7A7A\u95F4', defaultVisible: true, allOnly: true },
 ]
 
 const reportColumns: TableSettingsColumn[] = [
-  { key: 'reportName', label: '????', required: true, defaultVisible: true },
-  { key: 'result', label: '??', defaultVisible: true },
-  { key: 'failureSummary', label: '????', defaultVisible: true },
-  { key: 'workspaceName', label: '????', defaultVisible: true, allOnly: true },
+  { key: 'reportName', label: '\u62A5\u544A\u540D\u79F0', required: true, defaultVisible: true },
+  { key: 'result', label: '\u7ED3\u679C', defaultVisible: true },
+  { key: 'failureSummary', label: '\u5931\u8D25\u6458\u8981', defaultVisible: true },
+  { key: 'workspaceName', label: '\u6240\u5C5E\u7A7A\u95F4', defaultVisible: true, allOnly: true },
 ]
 
 const taskListToolbar = useListToolbarState({
@@ -798,11 +798,11 @@ onMounted(() => {
       <div class="page-actions">
         <el-button v-if="canCreateData" type="primary" @click="openTaskCreate">
           <el-icon><VideoPlay /></el-icon>
-          新建任务
+          &#x65B0;&#x5EFA;&#x4EFB;&#x52A1;
         </el-button>
         <el-button v-if="canCreateData" @click="openReportCreate">
           <el-icon><Calendar /></el-icon>
-          新建报告
+          &#x65B0;&#x5EFA;&#x62A5;&#x544A;
         </el-button>
       </div>
     </div>
@@ -823,8 +823,8 @@ onMounted(() => {
       <article class="panel-card">
         <div class="panel-header">
           <div>
-            <div class="panel-title">V1 能力拆解</div>
-            <div class="panel-subtitle">先把任务与报告中心做成真实可维护的数据层能力。</div>
+            <div class="panel-title">V1 &#x80FD;&#x529B;&#x62C6;&#x89E3;</div>
+            <div class="panel-subtitle">&#x5148;&#x628A;&#x4EFB;&#x52A1;&#x4E0E;&#x62A5;&#x544A;&#x4E2D;&#x5FC3;&#x505A;&#x6210;&#x771F;&#x5B9E;&#x53EF;&#x7EF4;&#x62A4;&#x7684;&#x6570;&#x636E;&#x5C42;&#x80FD;&#x529B;&#x3002;</div>
           </div>
           <el-icon><Operation /></el-icon>
         </div>
@@ -839,7 +839,7 @@ onMounted(() => {
             <span
               :class="[
                 'status-pill',
-                row[2] === '优先' ? 'status-warning' : 'status-neutral',
+                row[2] === '\u4F18\u5148' ? 'status-warning' : 'status-neutral',
               ]"
             >
               {{ row[2] }}
@@ -851,55 +851,55 @@ onMounted(() => {
       <article class="panel-card">
         <div class="panel-header">
           <ListToolbar
-            title="执行任务"
+            title="&#x6267;&#x884C;&#x4EFB;&#x52A1;"
             show-settings
             @settings="taskListToolbar.settingsVisible.value = true"
           >
             <template #filters>
               <el-input
                 v-model="taskFilters.keyword"
-                placeholder="搜索任务名称或摘要"
+                placeholder="&#x641C;&#x7D22;&#x4EFB;&#x52A1;&#x540D;&#x79F0;&#x6216;&#x6458;&#x8981;"
                 clearable
                 class="toolbar-filter-input"
               />
-              <el-select v-model="taskFilters.status" clearable placeholder="状态" class="toolbar-filter-select">
+              <el-select v-model="taskFilters.status" clearable placeholder="&#x72B6;&#x6001;" class="toolbar-filter-select">
                 <el-option v-for="item in taskStatusOptions" :key="item" :label="item" :value="item" />
               </el-select>
               <el-select
                 v-if="isAllScope"
                 v-model="taskFilters.workspaceCode"
                 clearable
-                placeholder="所属空间"
+                placeholder="&#x6240;&#x5C5E;&#x7A7A;&#x95F4;"
                 class="toolbar-filter-select"
               >
                 <el-option v-for="item in workspaces" :key="item.code" :label="item.name" :value="item.code" />
               </el-select>
               <el-button text @click="resetTaskFilters">
                 <el-icon><RefreshRight /></el-icon>
-                重置
+                &#x91CD;&#x7F6E;
               </el-button>
             </template>
             <template #actions>
               <el-button v-if="canCreateData" type="primary" plain @click="openTaskCreate">
                 <el-icon><Plus /></el-icon>
-                新建任务
+                &#x65B0;&#x5EFA;&#x4EFB;&#x52A1;
               </el-button>
             </template>
           </ListToolbar>
         </div>
         <el-table v-loading="loading" :data="filteredTasks" size="large">
           <template v-for="column in taskListToolbar.visibleColumns.value" :key="column.key">
-            <el-table-column v-if="column.key === 'taskName'" prop="taskName" label="任务名称" min-width="220" />
-            <el-table-column v-else-if="column.key === 'status'" prop="status" label="状态" width="110" />
-            <el-table-column v-else-if="column.key === 'summary'" prop="summary" label="摘要" min-width="220" />
-            <el-table-column v-else-if="column.key === 'workspaceName'" prop="workspaceName" label="所属空间" width="130" />
+            <el-table-column v-if="column.key === 'taskName'" prop="taskName" label="&#x4EFB;&#x52A1;&#x540D;&#x79F0;" min-width="220" />
+            <el-table-column v-else-if="column.key === 'status'" prop="status" label="&#x72B6;&#x6001;" width="110" />
+            <el-table-column v-else-if="column.key === 'summary'" prop="summary" label="&#x6458;&#x8981;" min-width="220" />
+            <el-table-column v-else-if="column.key === 'workspaceName'" prop="workspaceName" label="&#x6240;&#x5C5E;&#x7A7A;&#x95F4;" width="130" />
           </template>
-          <el-table-column label="操作" width="250">
+          <el-table-column label="&#x64CD;&#x4F5C;" width="250">
             <template #default="{ row }">
-              <el-button text type="primary" @click="openTaskDetail(row.id)">查看</el-button>
+              <el-button text type="primary" @click="openTaskDetail(row.id)">&#x67E5;&#x770B;</el-button>
               <template v-if="canWriteRow(row.workspaceCode)">
-                <el-button text type="primary" @click="openTaskEdit(row)">编辑</el-button>
-                <el-button text type="danger" @click="confirmDeleteTask(row)">删除</el-button>
+                <el-button text type="primary" @click="openTaskEdit(row)">&#x7F16;&#x8F91;</el-button>
+                <el-button text type="danger" @click="confirmDeleteTask(row)">&#x5220;&#x9664;</el-button>
               </template>
             </template>
           </el-table-column>
@@ -910,59 +910,59 @@ onMounted(() => {
     <article class="panel-card">
       <div class="panel-header">
         <ListToolbar
-          title="执行报告"
+          title="&#x6267;&#x884C;&#x62A5;&#x544A;"
           show-settings
           @settings="reportListToolbar.settingsVisible.value = true"
         >
           <template #filters>
             <el-input
               v-model="reportFilters.keyword"
-              placeholder="搜索报告名称或失败摘要"
+              placeholder="&#x641C;&#x7D22;&#x62A5;&#x544A;&#x540D;&#x79F0;&#x6216;&#x5931;&#x8D25;&#x6458;&#x8981;"
               clearable
               class="toolbar-filter-input"
             />
-            <el-select v-model="reportFilters.result" clearable placeholder="结果" class="toolbar-filter-select">
+            <el-select v-model="reportFilters.result" clearable placeholder="&#x7ED3;&#x679C;" class="toolbar-filter-select">
               <el-option v-for="item in reportResultOptions" :key="item" :label="item" :value="item" />
             </el-select>
-            <el-select v-model="reportFilters.logSource" clearable placeholder="日志来源" class="toolbar-filter-select">
+            <el-select v-model="reportFilters.logSource" clearable placeholder="&#x65E5;&#x5FD7;&#x6765;&#x6E90;" class="toolbar-filter-select">
               <el-option v-for="item in reportLogSourceOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
             <el-select
               v-if="isAllScope"
               v-model="reportFilters.workspaceCode"
               clearable
-              placeholder="所属空间"
+              placeholder="&#x6240;&#x5C5E;&#x7A7A;&#x95F4;"
               class="toolbar-filter-select"
             >
               <el-option v-for="item in workspaces" :key="item.code" :label="item.name" :value="item.code" />
             </el-select>
             <el-button text @click="resetReportFilters">
               <el-icon><RefreshRight /></el-icon>
-              重置
+              &#x91CD;&#x7F6E;
             </el-button>
           </template>
           <template #actions>
             <el-button v-if="canCreateData" type="primary" plain @click="openReportCreate">
               <el-icon><Files /></el-icon>
-              新建报告
+              &#x65B0;&#x5EFA;&#x62A5;&#x544A;
             </el-button>
           </template>
         </ListToolbar>
       </div>
       <el-table v-loading="loading" :data="filteredReports" size="large">
         <template v-for="column in reportListToolbar.visibleColumns.value" :key="column.key">
-          <el-table-column v-if="column.key === 'reportName'" prop="reportName" label="报告名称" min-width="220" />
-          <el-table-column v-else-if="column.key === 'result'" prop="result" label="结果" width="100" />
-          <el-table-column v-else-if="column.key === 'failureSummary'" prop="failureSummary" label="失败摘要" min-width="260" />
-          <el-table-column v-else-if="column.key === 'workspaceName'" prop="workspaceName" label="所属空间" width="130" />
+          <el-table-column v-if="column.key === 'reportName'" prop="reportName" label="&#x62A5;&#x544A;&#x540D;&#x79F0;" min-width="220" />
+          <el-table-column v-else-if="column.key === 'result'" prop="result" label="&#x7ED3;&#x679C;" width="100" />
+          <el-table-column v-else-if="column.key === 'failureSummary'" prop="failureSummary" label="&#x5931;&#x8D25;&#x6458;&#x8981;" min-width="260" />
+          <el-table-column v-else-if="column.key === 'workspaceName'" prop="workspaceName" label="&#x6240;&#x5C5E;&#x7A7A;&#x95F4;" width="130" />
         </template>
-        <el-table-column label="操作" width="320">
+        <el-table-column label="&#x64CD;&#x4F5C;" width="320">
           <template #default="{ row }">
-            <el-button text type="primary" @click="openReportDetail(row.id)">查看</el-button>
+            <el-button text type="primary" @click="openReportDetail(row.id)">&#x67E5;&#x770B;</el-button>
             <template v-if="canWriteRow(row.workspaceCode)">
-              <el-button text type="primary" @click="openReportEdit(row)">编辑</el-button>
-              <el-button text type="danger" @click="confirmDeleteReport(row)">删除</el-button>
-              <el-button text type="warning" @click="openReportBugDialog(row)">提缺陷</el-button>
+              <el-button text type="primary" @click="openReportEdit(row)">&#x7F16;&#x8F91;</el-button>
+              <el-button text type="danger" @click="confirmDeleteReport(row)">&#x5220;&#x9664;</el-button>
+              <el-button text type="warning" @click="openReportBugDialog(row)">&#x63D0;&#x7F3A;&#x9677;</el-button>
             </template>
           </template>
         </el-table-column>
@@ -993,20 +993,20 @@ onMounted(() => {
 
     <el-dialog
       v-model="taskDialogVisible"
-      :title="taskDialogMode === 'create' ? '新建任务' : '编辑任务'"
+      :title="taskDialogMode === 'create' ? '&#x65B0;&#x5EFA;&#x4EFB;&#x52A1;' : '&#x7F16;&#x8F91;&#x4EFB;&#x52A1;'"
       width="620px"
     >
       <el-form label-width="100px">
-        <el-form-item v-if="isAllScope" label="目标空间" required>
-          <el-select v-model="taskForm.workspaceCode" placeholder="请选择目标空间">
+        <el-form-item v-if="isAllScope" label="&#x76EE;&#x6807;&#x7A7A;&#x95F4;" required>
+          <el-select v-model="taskForm.workspaceCode" placeholder="&#x8BF7;&#x9009;&#x62E9;&#x76EE;&#x6807;&#x7A7A;&#x95F4;">
             <el-option v-for="item in writableWorkspaces" :key="item.code" :label="item.name" :value="item.code" />
           </el-select>
         </el-form-item>
-        <el-form-item label="任务名称" required>
+        <el-form-item label="&#x4EFB;&#x52A1;&#x540D;&#x79F0;" required>
           <el-input v-model="taskForm.taskName" />
         </el-form-item>
-        <el-form-item label="用例模块">
-          <el-select v-model="taskCaseModuleValue" clearable placeholder="请选择来源用例模块">
+        <el-form-item label="&#x7528;&#x4F8B;&#x6A21;&#x5757;">
+          <el-select v-model="taskCaseModuleValue" clearable placeholder="&#x8BF7;&#x9009;&#x62E9;&#x6765;&#x6E90;&#x7528;&#x4F8B;&#x6A21;&#x5757;">
             <el-option
               v-for="item in taskCaseModuleOptions"
               :key="item.value"
@@ -1015,37 +1015,37 @@ onMounted(() => {
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="执行引擎">
+        <el-form-item label="&#x6267;&#x884C;&#x5F15;&#x64CE;">
           <el-input :model-value="engineCode" disabled />
         </el-form-item>
-        <el-form-item label="任务状态" required>
+        <el-form-item label="&#x4EFB;&#x52A1;&#x72B6;&#x6001;" required>
           <el-select v-model="taskForm.status">
             <el-option v-for="item in taskStatusOptions" :key="item" :label="item" :value="item" />
           </el-select>
         </el-form-item>
-        <el-form-item label="摘要">
+        <el-form-item label="&#x6458;&#x8981;">
           <el-input v-model="taskForm.summary" type="textarea" :rows="4" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="taskDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitTask">保存</el-button>
+        <el-button @click="taskDialogVisible = false">&#x53D6;&#x6D88;</el-button>
+        <el-button type="primary" :loading="saving" @click="submitTask">&#x4FDD;&#x5B58;</el-button>
       </template>
     </el-dialog>
 
     <el-dialog
       v-model="reportDialogVisible"
-      :title="reportDialogMode === 'create' ? '新建报告' : '编辑报告'"
+      :title="reportDialogMode === 'create' ? '&#x65B0;&#x5EFA;&#x62A5;&#x544A;' : '&#x7F16;&#x8F91;&#x62A5;&#x544A;'"
       width="680px"
     >
       <el-form label-width="100px">
-        <el-form-item v-if="isAllScope" label="目标空间" required>
-          <el-select v-model="reportForm.workspaceCode" placeholder="请选择目标空间">
+        <el-form-item v-if="isAllScope" label="&#x76EE;&#x6807;&#x7A7A;&#x95F4;" required>
+          <el-select v-model="reportForm.workspaceCode" placeholder="&#x8BF7;&#x9009;&#x62E9;&#x76EE;&#x6807;&#x7A7A;&#x95F4;">
             <el-option v-for="item in writableWorkspaces" :key="item.code" :label="item.name" :value="item.code" />
           </el-select>
         </el-form-item>
-        <el-form-item label="关联任务" required>
-          <el-select v-model="reportForm.taskId" placeholder="请选择任务">
+        <el-form-item label="&#x5173;&#x8054;&#x4EFB;&#x52A1;" required>
+          <el-select v-model="reportForm.taskId" placeholder="&#x8BF7;&#x9009;&#x62E9;&#x4EFB;&#x52A1;">
             <el-option
               v-for="item in reportTaskOptions"
               :key="item.id"
@@ -1054,15 +1054,15 @@ onMounted(() => {
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="报告名称" required>
+        <el-form-item label="&#x62A5;&#x544A;&#x540D;&#x79F0;" required>
           <el-input v-model="reportForm.reportName" />
         </el-form-item>
-        <el-form-item label="执行结果" required>
+        <el-form-item label="&#x6267;&#x884C;&#x7ED3;&#x679C;" required>
           <el-select v-model="reportForm.result">
             <el-option v-for="item in reportResultOptions" :key="item" :label="item" :value="item" />
           </el-select>
         </el-form-item>
-        <el-form-item label="日志来源">
+        <el-form-item label="&#x65E5;&#x5FD7;&#x6765;&#x6E90;">
           <el-select v-model="reportForm.logSource">
             <el-option
               v-for="item in reportLogSourceOptions"
@@ -1072,42 +1072,42 @@ onMounted(() => {
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="失败摘要">
+        <el-form-item label="&#x5931;&#x8D25;&#x6458;&#x8981;">
           <el-input v-model="reportForm.failureSummary" type="textarea" :rows="4" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="reportDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitReport">保存</el-button>
+        <el-button @click="reportDialogVisible = false">&#x53D6;&#x6D88;</el-button>
+        <el-button type="primary" :loading="saving" @click="submitReport">&#x4FDD;&#x5B58;</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="reportBugVisible" title="从报告创建缺陷" width="640px">
+    <el-dialog v-model="reportBugVisible" title="&#x4ECE;&#x62A5;&#x544A;&#x521B;&#x5EFA;&#x7F3A;&#x9677;" width="640px">
       <el-form label-width="90px">
-        <el-form-item v-if="isAllScope" label="目标空间" required>
+        <el-form-item v-if="isAllScope" label="&#x76EE;&#x6807;&#x7A7A;&#x95F4;" required>
           <el-select v-model="reportBugState.workspaceCode">
             <el-option v-for="item in writableWorkspaces" :key="item.code" :label="item.name" :value="item.code" />
           </el-select>
         </el-form-item>
-        <el-form-item label="标题" required>
+        <el-form-item label="&#x6807;&#x9898;" required>
           <el-input v-model="reportBugState.title" />
         </el-form-item>
-        <el-form-item label="描述" required>
+        <el-form-item label="&#x63CF;&#x8FF0;" required>
           <el-input v-model="reportBugState.description" type="textarea" :rows="4" />
         </el-form-item>
-        <el-form-item label="负责人">
+        <el-form-item label="&#x8D1F;&#x8D23;&#x4EBA;">
           <el-select v-model="reportBugState.assigneeId" clearable>
             <el-option v-for="item in users" :key="item.id" :label="item.displayName" :value="item.id" />
           </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="reportBugVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitReportBug">提交</el-button>
+        <el-button @click="reportBugVisible = false">&#x53D6;&#x6D88;</el-button>
+        <el-button type="primary" :loading="saving" @click="submitReportBug">&#x63D0;&#x4EA4;</el-button>
       </template>
     </el-dialog>
 
-    <el-drawer v-model="taskDrawerVisible" title="任务详情" size="720px">
+    <el-drawer v-model="taskDrawerVisible" title="&#x4EFB;&#x52A1;&#x8BE6;&#x60C5;" size="720px">
       <div v-loading="taskDetailLoading">
         <template v-if="taskDetail">
           <div class="detail-grid">
@@ -1119,9 +1119,9 @@ onMounted(() => {
               <p class="detail-body">{{ taskDetail.summary || '-' }}</p>
             </div>
             <div class="detail-card">
-              <div class="detail-title">状态流转</div>
-              <p class="detail-body">创建时间：{{ taskDetail.createdAt }}</p>
-              <p class="detail-body">更新时间：{{ taskDetail.updatedAt }}</p>
+              <div class="detail-title">&#x72B6;&#x6001;&#x6D41;&#x8F6C;</div>
+              <p class="detail-body">&#x521B;&#x5EFA;&#x65F6;&#x95F4;&#xFF1A;{{ taskDetail.createdAt }}</p>
+              <p class="detail-body">&#x66F4;&#x65B0;&#x65F6;&#x95F4;&#xFF1A;{{ taskDetail.updatedAt }}</p>
               <div class="toolbar-group">
                 <el-button
                   v-for="status in taskTransitionOptions"
@@ -1133,13 +1133,13 @@ onMounted(() => {
                   :loading="saving"
                   @click="transitionTask(status)"
                 >
-                  转为 {{ status }}
+                  &#x8F6C;&#x4E3A; {{ status }}
                 </el-button>
-                <span v-if="!taskTransitionOptions.length" class="status-pill status-neutral">终态</span>
+                <span v-if="!taskTransitionOptions.length" class="status-pill status-neutral">&#x7EC8;&#x6001;</span>
               </div>
             </div>
             <div class="detail-card">
-              <div class="detail-title">关联报告</div>
+              <div class="detail-title">&#x5173;&#x8054;&#x62A5;&#x544A;</div>
               <div v-if="taskDetail.reports.length" class="list-stack">
                 <div
                   v-for="report in taskDetail.reports"
@@ -1150,17 +1150,17 @@ onMounted(() => {
                     <div class="list-title">{{ report.reportName }}</div>
                     <div class="detail-meta">{{ report.result }} | {{ report.failureSummary || '-' }}</div>
                   </div>
-                  <el-button text type="primary" @click="openReportDetail(report.id)">查看</el-button>
+                  <el-button text type="primary" @click="openReportDetail(report.id)">&#x67E5;&#x770B;</el-button>
                 </div>
               </div>
-              <p v-else class="detail-body">暂无关联报告</p>
+              <p v-else class="detail-body">&#x6682;&#x65E0;&#x5173;&#x8054;&#x62A5;&#x544A;</p>
             </div>
           </div>
         </template>
       </div>
     </el-drawer>
 
-    <el-drawer v-model="reportDrawerVisible" title="报告详情" size="720px">
+    <el-drawer v-model="reportDrawerVisible" title="&#x62A5;&#x544A;&#x8BE6;&#x60C5;" size="720px">
       <div v-loading="reportDetailLoading">
         <template v-if="reportDetail">
           <div class="detail-grid">
@@ -1169,15 +1169,15 @@ onMounted(() => {
               <div class="detail-meta">
                 {{ reportDetail.workspaceName }} | {{ reportDetail.taskName }} | {{ reportDetail.result }} | {{ reportDetail.logSource }}
               </div>
-              <p class="detail-body">创建时间：{{ reportDetail.createdAt }}</p>
-              <p class="detail-body">更新时间：{{ reportDetail.updatedAt }}</p>
+              <p class="detail-body">&#x521B;&#x5EFA;&#x65F6;&#x95F4;&#xFF1A;{{ reportDetail.createdAt }}</p>
+              <p class="detail-body">&#x66F4;&#x65B0;&#x65F6;&#x95F4;&#xFF1A;{{ reportDetail.updatedAt }}</p>
             </div>
 
             <div class="detail-card">
               <div class="panel-header">
                 <div>
-                  <div class="detail-title">报告内容</div>
-                  <div class="detail-meta">支持维护失败摘要与执行日志。</div>
+                  <div class="detail-title">&#x62A5;&#x544A;&#x5185;&#x5BB9;</div>
+                  <div class="detail-meta">&#x652F;&#x6301;&#x7EF4;&#x62A4;&#x5931;&#x8D25;&#x6458;&#x8981;&#x4E0E;&#x6267;&#x884C;&#x65E5;&#x5FD7;&#x3002;</div>
                 </div>
                 <el-button
                   v-if="canEditCurrentReport"
@@ -1186,11 +1186,11 @@ onMounted(() => {
                   :loading="reportContentSaving"
                   @click="saveReportContent"
                 >
-                  保存内容
+                  &#x4FDD;&#x5B58;&#x5185;&#x5BB9;
                 </el-button>
               </div>
               <el-form label-width="88px">
-                <el-form-item label="日志来源">
+                <el-form-item label="&#x65E5;&#x5FD7;&#x6765;&#x6E90;">
                   <el-select
                     v-model="reportContentForm.logSource"
                     :disabled="!canEditCurrentReport"
@@ -1203,7 +1203,7 @@ onMounted(() => {
                     />
                   </el-select>
                 </el-form-item>
-                <el-form-item label="失败摘要">
+                <el-form-item label="&#x5931;&#x8D25;&#x6458;&#x8981;">
                   <el-input
                     v-model="reportContentForm.failureSummary"
                     type="textarea"
@@ -1211,7 +1211,7 @@ onMounted(() => {
                     :disabled="!canEditCurrentReport"
                   />
                 </el-form-item>
-                <el-form-item label="执行日志">
+                <el-form-item label="&#x6267;&#x884C;&#x65E5;&#x5FD7;">
                   <el-input
                     v-model="reportContentForm.logText"
                     type="textarea"
@@ -1225,8 +1225,8 @@ onMounted(() => {
             <div class="detail-card">
               <div class="panel-header">
                 <div>
-                  <div class="detail-title">附件</div>
-                  <div class="detail-meta">支持上传、下载和删除单个附件。</div>
+                  <div class="detail-title">&#x9644;&#x4EF6;</div>
+                  <div class="detail-meta">&#x652F;&#x6301;&#x4E0A;&#x4F20;&#x3001;&#x4E0B;&#x8F7D;&#x548C;&#x5220;&#x9664;&#x5355;&#x4E2A;&#x9644;&#x4EF6;&#x3002;</div>
                 </div>
                 <el-button
                   v-if="canEditCurrentReport"
@@ -1237,7 +1237,7 @@ onMounted(() => {
                   @click="triggerReportAttachmentUpload"
                 >
                   <el-icon><Upload /></el-icon>
-                  上传附件
+                  &#x4E0A;&#x4F20;&#x9644;&#x4EF6;
                 </el-button>
               </div>
               <input
@@ -1256,7 +1256,7 @@ onMounted(() => {
                   <div>
                     <div class="list-title">{{ attachment.fileName }}</div>
                     <div class="detail-meta">
-                      {{ attachment.contentType || '未知类型' }} | {{ formatFileSize(attachment.fileSize) }}
+                      {{ attachment.contentType || '\u672A\u77E5\u7C7B\u578B' }} | {{ formatFileSize(attachment.fileSize) }}
                     </div>
                   </div>
                   <div class="toolbar-group">
@@ -1266,7 +1266,7 @@ onMounted(() => {
                       type="primary"
                       @click="downloadReportAttachment(attachment)"
                     >
-                      下载
+                      &#x4E0B;&#x8F7D;
                     </el-button>
                     <el-button
                       v-if="canEditCurrentReport && attachment.id > 0"
@@ -1275,12 +1275,12 @@ onMounted(() => {
                       :loading="reportAttachmentRemovingId === attachment.id"
                       @click="removeReportAttachment(attachment)"
                     >
-                      删除
+                      &#x5220;&#x9664;
                     </el-button>
                   </div>
                 </div>
               </div>
-              <p v-else class="detail-body">暂无附件</p>
+              <p v-else class="detail-body">&#x6682;&#x65E0;&#x9644;&#x4EF6;</p>
             </div>
           </div>
         </template>

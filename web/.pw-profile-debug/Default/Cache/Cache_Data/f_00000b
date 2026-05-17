@@ -1,0 +1,313 @@
+export const navigationItems = [
+	{
+		label: "工作台",
+		path: "/dashboard",
+		icon: "dashboard"
+	},
+	{
+		label: "用例中心",
+		path: "/cases",
+		icon: "cases"
+	},
+	{
+		label: "缺陷管理",
+		path: "/bugs",
+		icon: "bugs"
+	},
+	{
+		label: "接口自动化",
+		path: "/automation/api",
+		icon: "api"
+	},
+	{
+		label: "Web UI 自动化",
+		path: "/automation/web",
+		icon: "web"
+	},
+	{
+		label: "APP 自动化",
+		path: "/automation/app",
+		icon: "app"
+	},
+	{
+		label: "系统设置",
+		path: "/settings",
+		icon: "settings"
+	}
+];
+export const workspaceOptions = [
+	{
+		label: "全部空间",
+		value: "ALL"
+	},
+	{
+		label: "开户工作空间",
+		value: "account-open"
+	},
+	{
+		label: "交易工作空间",
+		value: "trade-core"
+	},
+	{
+		label: "风控工作空间",
+		value: "risk-control"
+	}
+];
+export const quickActions = [
+	{
+		title: "新建用例",
+		desc: "手工录入功能、边界和异常用例"
+	},
+	{
+		title: "AI 生成用例",
+		desc: "从需求文档快速生成结构化用例"
+	},
+	{
+		title: "发起接口任务",
+		desc: "针对接口脚本或场景立刻执行"
+	},
+	{
+		title: "发起 Web 任务",
+		desc: "携带浏览器参数运行 Playwright"
+	},
+	{
+		title: "发起 APP 任务",
+		desc: "选择设备与安装包执行 Appium"
+	},
+	{
+		title: "查看失败报告",
+		desc: "集中定位近期失败和慢任务"
+	}
+];
+export const recentActivities = [
+	{
+		title: "AI 补充开户流程边界用例",
+		meta: "开户工作空间 · 18 分钟前",
+		status: "待评审",
+		tone: "warning"
+	},
+	{
+		title: "回归场景 smoke-web-042 执行完成",
+		meta: "交易工作空间 · 26 分钟前",
+		status: "成功",
+		tone: "success"
+	},
+	{
+		title: "APP 登录场景在 iPhone 14 失败",
+		meta: "风控工作空间 · 42 分钟前",
+		status: "失败",
+		tone: "danger"
+	},
+	{
+		title: "新增 UAT 环境 Token 参数集",
+		meta: "开户工作空间 · 1 小时前",
+		status: "已更新",
+		tone: "neutral"
+	}
+];
+export const caseFolders = [
+	"全部用例",
+	"账户体系",
+	"交易链路",
+	"风控校验",
+	"兼容性与回归"
+];
+export const aiStrategy = [
+	{
+		label: "功能用例",
+		ratio: "40%"
+	},
+	{
+		label: "边界用例",
+		ratio: "20%"
+	},
+	{
+		label: "异常用例",
+		ratio: "20%"
+	},
+	{
+		label: "性能/兼容性",
+		ratio: "10%"
+	},
+	{
+		label: "回归用例",
+		ratio: "10%"
+	}
+];
+export const automationModules = {
+	api: {
+		title: "接口自动化",
+		description: "面向 Karate 资产、场景编排、执行任务与请求级报告。",
+		stats: [
+			{
+				label: "接口脚本",
+				value: "312",
+				trend: "登录、下单、查询覆盖完整"
+			},
+			{
+				label: "接口场景",
+				value: "38",
+				trend: "14 个串行业务场景"
+			},
+			{
+				label: "今日执行",
+				value: "96",
+				trend: "平均耗时 3m 12s"
+			},
+			{
+				label: "通过率",
+				value: "97.1%",
+				trend: "失败多集中在鉴权波动"
+			}
+		],
+		tasks: [
+			[
+				"单接口脚本管理",
+				"按目录维护请求、断言、公共变量与标签",
+				"已规划"
+			],
+			[
+				"业务场景编排",
+				"支持串行步骤、参数传递和前后置处理",
+				"已规划"
+			],
+			[
+				"统一执行任务",
+				"环境、并发、重试、节点与调度配置统一入口",
+				"优先"
+			],
+			[
+				"请求级报告",
+				"展示请求响应、断言结果、错误摘要和耗时",
+				"优先"
+			]
+		]
+	},
+	web: {
+		title: "Web UI 自动化",
+		description: "面向 Playwright 的脚本治理、浏览器执行参数与失败定位。",
+		stats: [
+			{
+				label: "Web 脚本",
+				value: "184",
+				trend: "录制脚本占比 28%"
+			},
+			{
+				label: "回归场景",
+				value: "22",
+				trend: "含 6 个跨浏览器套件"
+			},
+			{
+				label: "今日执行",
+				value: "53",
+				trend: "Trace 产物齐全"
+			},
+			{
+				label: "通过率",
+				value: "92.8%",
+				trend: "近期失败集中在元素等待"
+			}
+		],
+		tasks: [
+			[
+				"脚本目录治理",
+				"按系统和业务线组织脚本，查看最近结果",
+				"已规划"
+			],
+			[
+				"场景组合执行",
+				"支持回归集、冒烟集和浏览器参数继承",
+				"优先"
+			],
+			[
+				"调试产物管理",
+				"截图、视频、Trace、控制台日志统一归档",
+				"优先"
+			],
+			[
+				"失败定位抽屉",
+				"从任务页右侧直接下钻失败详情",
+				"已规划"
+			]
+		]
+	},
+	app: {
+		title: "APP 自动化",
+		description: "面向 Appium 的设备、安装包、脚本执行和基础报告。",
+		stats: [
+			{
+				label: "APP 脚本",
+				value: "86",
+				trend: "Android / iOS 双平台"
+			},
+			{
+				label: "在线设备",
+				value: "12",
+				trend: "当前 3 台占用中"
+			},
+			{
+				label: "今日执行",
+				value: "27",
+				trend: "多来自登录与支付回归"
+			},
+			{
+				label: "通过率",
+				value: "89.3%",
+				trend: "真机稳定性仍需优化"
+			}
+		],
+		tasks: [
+			[
+				"脚本资产管理",
+				"按平台区分脚本、标签和目录结构",
+				"已规划"
+			],
+			[
+				"设备注册与心跳",
+				"展示在线状态、占用状态和最近心跳",
+				"优先"
+			],
+			[
+				"执行任务配置",
+				"选择设备、App 包、参数集和环境",
+				"优先"
+			],
+			[
+				"基础执行报告",
+				"步骤日志、截图、设备信息和错误摘要",
+				"已规划"
+			]
+		]
+	}
+};
+export const settingsSections = [
+	{
+		title: "工作空间与权限",
+		desc: "维护空间、成员角色和默认 AI 配置。",
+		items: [
+			"工作空间编码与状态",
+			"成员分配与轻量 RBAC",
+			"默认用例生成/评审模型"
+		]
+	},
+	{
+		title: "环境与参数",
+		desc: "统一管理 API / Web / App 执行依赖。",
+		items: [
+			"Base URL / Host",
+			"鉴权信息与变量",
+			"账号、Header、Token、测试数据"
+		]
+	},
+	{
+		title: "平台级系统配置",
+		desc: "控制存储、执行和日志策略。",
+		items: [
+			"默认超时与并发数",
+			"报告/附件保留时长",
+			"文件上传与对象存储策略"
+		]
+	}
+];
+
+//# sourceMappingURL=data:application/json;base64,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cUI7SUFBSztHQUNyQztJQUFDO0lBQVU7SUFBeUI7SUFBSztHQUN6QztJQUFDO0lBQVU7SUFBa0I7SUFBTTtHQUNwQztFQUNGO0NBQ0QsS0FBSztFQUNILE9BQU87RUFDUCxhQUFhO0VBQ2IsT0FBTztHQUNMO0lBQUUsT0FBTztJQUFVLE9BQU87SUFBTSxPQUFPO0lBQXFCO0dBQzVEO0lBQUUsT0FBTztJQUFRLE9BQU87SUFBTSxPQUFPO0lBQWE7R0FDbEQ7SUFBRSxPQUFPO0lBQVEsT0FBTztJQUFNLE9BQU87SUFBYztHQUNuRDtJQUFFLE9BQU87SUFBTyxPQUFPO0lBQVMsT0FBTztJQUFhO0dBQ3JEO0VBQ0QsT0FBTztHQUNMO0lBQUM7SUFBVTtJQUFtQjtJQUFNO0dBQ3BDO0lBQUM7SUFBVztJQUFvQjtJQUFLO0dBQ3JDO0lBQUM7SUFBVTtJQUFxQjtJQUFLO0dBQ3JDO0lBQUM7SUFBVTtJQUFxQjtJQUFNO0dBQ3ZDO0VBQ0Y7Q0FDRjtBQUVELE9BQU8sTUFBTSxtQkFBbUI7Q0FDOUI7RUFDRSxPQUFPO0VBQ1AsTUFBTTtFQUNOLE9BQU87R0FBQztHQUFhO0dBQWdCO0dBQWM7RUFDcEQ7Q0FDRDtFQUNFLE9BQU87RUFDUCxNQUFNO0VBQ04sT0FBTztHQUFDO0dBQW1CO0dBQVc7R0FBdUI7RUFDOUQ7Q0FDRDtFQUNFLE9BQU87RUFDUCxNQUFNO0VBQ04sT0FBTztHQUFDO0dBQVk7R0FBYTtHQUFjO0VBQ2hEO0NBQ0YiLCJuYW1lcyI6W10sInNvdXJjZXMiOlsicGxhdGZvcm0udHMiXSwidmVyc2lvbiI6Mywic291cmNlc0NvbnRlbnQiOlsiZXhwb3J0IGNvbnN0IG5hdmlnYXRpb25JdGVtcyA9IFtcclxuICB7IGxhYmVsOiAn5bel5L2c5Y+wJywgcGF0aDogJy9kYXNoYm9hcmQnLCBpY29uOiAnZGFzaGJvYXJkJyB9LFxyXG4gIHsgbGFiZWw6ICfnlKjkvovkuK3lv4MnLCBwYXRoOiAnL2Nhc2VzJywgaWNvbjogJ2Nhc2VzJyB9LFxyXG4gIHsgbGFiZWw6ICfnvLrpmbfnrqHnkIYnLCBwYXRoOiAnL2J1Z3MnLCBpY29uOiAnYnVncycgfSxcclxuICB7IGxhYmVsOiAn5o6l5Y+j6Ieq5Yqo5YyWJywgcGF0aDogJy9hdXRvbWF0aW9uL2FwaScsIGljb246ICdhcGknIH0sXHJcbiAgeyBsYWJlbDogJ1dlYiBVSSDoh6rliqjljJYnLCBwYXRoOiAnL2F1dG9tYXRpb24vd2ViJywgaWNvbjogJ3dlYicgfSxcclxuICB7IGxhYmVsOiAnQVBQIOiHquWKqOWMlicsIHBhdGg6ICcvYXV0b21hdGlvbi9hcHAnLCBpY29uOiAnYXBwJyB9LFxyXG4gIHsgbGFiZWw6ICfns7vnu5/orr7nva4nLCBwYXRoOiAnL3NldHRpbmdzJywgaWNvbjogJ3NldHRpbmdzJyB9LFxyXG5dIGFzIGNvbnN0XHJcblxyXG5leHBvcnQgY29uc3Qgd29ya3NwYWNlT3B0aW9ucyA9IFtcclxuICB7IGxhYmVsOiAn5YWo6YOo56m66Ze0JywgdmFsdWU6ICdBTEwnIH0sXHJcbiAgeyBsYWJlbDogJ+W8gOaIt+W3peS9nOepuumXtCcsIHZhbHVlOiAnYWNjb3VudC1vcGVuJyB9LFxyXG4gIHsgbGFiZWw6ICfkuqTmmJPlt6XkvZznqbrpl7QnLCB2YWx1ZTogJ3RyYWRlLWNvcmUnIH0sXHJcbiAgeyBsYWJlbDogJ+mjjuaOp+W3peS9nOepuumXtCcsIHZhbHVlOiAncmlzay1jb250cm9sJyB9LFxyXG5dXHJcblxyXG5leHBvcnQgY29uc3QgcXVpY2tBY3Rpb25zID0gW1xyXG4gIHsgdGl0bGU6ICfmlrDlu7rnlKjkvosnLCBkZXNjOiAn5omL5bel5b2V5YWl5Yqf6IO944CB6L6555WM5ZKM5byC5bi455So5L6LJyB9LFxyXG4gIHsgdGl0bGU6ICdBSSDnlJ/miJDnlKjkvosnLCBkZXNjOiAn5LuO6ZyA5rGC5paH5qGj5b+r6YCf55Sf5oiQ57uT5p6E5YyW55So5L6LJyB9LFxyXG4gIHsgdGl0bGU6ICflj5HotbfmjqXlj6Pku7vliqEnLCBkZXNjOiAn6ZKI5a+55o6l5Y+j6ISa5pys5oiW5Zy65pmv56uL5Yi75omn6KGMJyB9LFxyXG4gIHsgdGl0bGU6ICflj5HotbcgV2ViIOS7u+WKoScsIGRlc2M6ICfmkLrluKbmtY/op4jlmajlj4LmlbDov5DooYwgUGxheXdyaWdodCcgfSxcclxuICB7IHRpdGxlOiAn5Y+R6LW3IEFQUCDku7vliqEnLCBkZXNjOiAn6YCJ5oup6K6+5aSH5LiO5a6J6KOF5YyF5omn6KGMIEFwcGl1bScgfSxcclxuICB7IHRpdGxlOiAn5p+l55yL5aSx6LSl5oql5ZGKJywgZGVzYzogJ+mbhuS4reWumuS9jei/keacn+Wksei0peWSjOaFouS7u+WKoScgfSxcclxuXVxyXG5cclxuZXhwb3J0IGNvbnN0IHJlY2VudEFjdGl2aXRpZXMgPSBbXHJcbiAgeyB0aXRsZTogJ0FJIOihpeWFheW8gOaIt+a1geeoi+i+ueeVjOeUqOS+iycsIG1ldGE6ICflvIDmiLflt6XkvZznqbrpl7QgwrcgMTgg5YiG6ZKf5YmNJywgc3RhdHVzOiAn5b6F6K+E5a6hJywgdG9uZTogJ3dhcm5pbmcnIH0sXHJcbiAgeyB0aXRsZTogJ+WbnuW9kuWcuuaZryBzbW9rZS13ZWItMDQyIOaJp+ihjOWujOaIkCcsIG1ldGE6ICfkuqTmmJPlt6XkvZznqbrpl7QgwrcgMjYg5YiG6ZKf5YmNJywgc3RhdHVzOiAn5oiQ5YqfJywgdG9uZTogJ3N1Y2Nlc3MnIH0sXHJcbiAgeyB0aXRsZTogJ0FQUCDnmbvlvZXlnLrmma/lnKggaVBob25lIDE0IOWksei0pScsIG1ldGE6ICfpo47mjqflt6XkvZznqbrpl7QgwrcgNDIg5YiG6ZKf5YmNJywgc3RhdHVzOiAn5aSx6LSlJywgdG9uZTogJ2RhbmdlcicgfSxcclxuICB7IHRpdGxlOiAn5paw5aKeIFVBVCDnjq/looMgVG9rZW4g5Y+C5pWw6ZuGJywgbWV0YTogJ+W8gOaIt+W3peS9nOepuumXtCDCtyAxIOWwj+aXtuWJjScsIHN0YXR1czogJ+W3suabtOaWsCcsIHRvbmU6ICduZXV0cmFsJyB9LFxyXG5dXHJcblxyXG5leHBvcnQgY29uc3QgY2FzZUZvbGRlcnMgPSBbXHJcbiAgJ+WFqOmDqOeUqOS+iycsXHJcbiAgJ+i0puaIt+S9k+ezuycsXHJcbiAgJ+S6pOaYk+mTvui3rycsXHJcbiAgJ+mjjuaOp+agoemqjCcsXHJcbiAgJ+WFvOWuueaAp+S4juWbnuW9kicsXHJcbl1cclxuXHJcbmV4cG9ydCBjb25zdCBhaVN0cmF0ZWd5ID0gW1xyXG4gIHsgbGFiZWw6ICflip/og73nlKjkvosnLCByYXRpbzogJzQwJScgfSxcclxuICB7IGxhYmVsOiAn6L6555WM55So5L6LJywgcmF0aW86ICcyMCUnIH0sXHJcbiAgeyBsYWJlbDogJ+W8guW4uOeUqOS+iycsIHJhdGlvOiAnMjAlJyB9LFxyXG4gIHsgbGFiZWw6ICfmgKfog70v5YW85a655oCnJywgcmF0aW86ICcxMCUnIH0sXHJcbiAgeyBsYWJlbDogJ+WbnuW9kueUqOS+iycsIHJhdGlvOiAnMTAlJyB9LFxyXG5dXHJcblxyXG5leHBvcnQgY29uc3QgYXV0b21hdGlvbk1vZHVsZXMgPSB7XHJcbiAgYXBpOiB7XHJcbiAgICB0aXRsZTogJ+aOpeWPo+iHquWKqOWMlicsXHJcbiAgICBkZXNjcmlwdGlvbjogJ+mdouWQkSBLYXJhdGUg6LWE5Lqn44CB5Zy65pmv57yW5o6S44CB5omn6KGM5Lu75Yqh5LiO6K+35rGC57qn5oql5ZGK44CCJyxcclxuICAgIHN0YXRzOiBbXHJcbiAgICAgIHsgbGFiZWw6ICfmjqXlj6PohJrmnKwnLCB2YWx1ZTogJzMxMicsIHRyZW5kOiAn55m75b2V44CB5LiL5Y2V44CB5p+l6K+i6KaG55uW5a6M5pW0JyB9LFxyXG4gICAgICB7IGxhYmVsOiAn5o6l5Y+j5Zy65pmvJywgdmFsdWU6ICczOCcsIHRyZW5kOiAnMTQg5Liq5Liy6KGM5Lia5Yqh5Zy65pmvJyB9LFxyXG4gICAgICB7IGxhYmVsOiAn5LuK5pel5omn6KGMJywgdmFsdWU6ICc5NicsIHRyZW5kOiAn5bmz5Z2H6ICX5pe2IDNtIDEycycgfSxcclxuICAgICAgeyBsYWJlbDogJ+mAmui/h+eOhycsIHZhbHVlOiAnOTcuMSUnLCB0cmVuZDogJ+Wksei0peWkmumbhuS4reWcqOmJtOadg+azouWKqCcgfSxcclxuICAgIF0sXHJcbiAgICB0YXNrczogW1xyXG4gICAgICBbJ+WNleaOpeWPo+iEmuacrOeuoeeQhicsICfmjInnm67lvZXnu7TmiqTor7fmsYLjgIHmlq3oqIDjgIHlhazlhbHlj5jph4/kuI7moIfnrb4nLCAn5bey6KeE5YiSJ10sXHJcbiAgICAgIFsn5Lia5Yqh5Zy65pmv57yW5o6SJywgJ+aUr+aMgeS4suihjOatpemqpOOAgeWPguaVsOS8oOmAkuWSjOWJjeWQjue9ruWkhOeQhicsICflt7Lop4TliJInXSxcclxuICAgICAgWyfnu5/kuIDmiafooYzku7vliqEnLCAn546v5aKD44CB5bm25Y+R44CB6YeN6K+V44CB6IqC54K55LiO6LCD5bqm6YWN572u57uf5LiA5YWl5Y+jJywgJ+S8mOWFiCddLFxyXG4gICAgICBbJ+ivt+axgue6p+aKpeWRiicsICflsZXnpLror7fmsYLlk43lupTjgIHmlq3oqIDnu5PmnpzjgIHplJnor6/mkZjopoHlkozogJfml7YnLCAn5LyY5YWIJ10sXHJcbiAgICBdLFxyXG4gIH0sXHJcbiAgd2ViOiB7XHJcbiAgICB0aXRsZTogJ1dlYiBVSSDoh6rliqjljJYnLFxyXG4gICAgZGVzY3JpcHRpb246ICfpnaLlkJEgUGxheXdyaWdodCDnmoTohJrmnKzmsrvnkIbjgIHmtY/op4jlmajmiafooYzlj4LmlbDkuI7lpLHotKXlrprkvY3jgIInLFxyXG4gICAgc3RhdHM6IFtcclxuICAgICAgeyBsYWJlbDogJ1dlYiDohJrmnKwnLCB2YWx1ZTogJzE4NCcsIHRyZW5kOiAn5b2V5Yi26ISa5pys5Y2g5q+UIDI4JScgfSxcclxuICAgICAgeyBsYWJlbDogJ+WbnuW9kuWcuuaZrycsIHZhbHVlOiAnMjInLCB0cmVuZDogJ+WQqyA2IOS4qui3qOa1j+iniOWZqOWll+S7ticgfSxcclxuICAgICAgeyBsYWJlbDogJ+S7iuaXpeaJp+ihjCcsIHZhbHVlOiAnNTMnLCB0cmVuZDogJ1RyYWNlIOS6p+eJqem9kOWFqCcgfSxcclxuICAgICAgeyBsYWJlbDogJ+mAmui/h+eOhycsIHZhbHVlOiAnOTIuOCUnLCB0cmVuZDogJ+i/keacn+Wksei0pembhuS4reWcqOWFg+e0oOetieW+hScgfSxcclxuICAgIF0sXHJcbiAgICB0YXNrczogW1xyXG4gICAgICBbJ+iEmuacrOebruW9leayu+eQhicsICfmjInns7vnu5/lkozkuJrliqHnur/nu4Tnu4fohJrmnKzvvIzmn6XnnIvmnIDov5Hnu5PmnpwnLCAn5bey6KeE5YiSJ10sXHJcbiAgICAgIFsn5Zy65pmv57uE5ZCI5omn6KGMJywgJ+aUr+aMgeWbnuW9kumbhuOAgeWGkueDn+mbhuWSjOa1j+iniOWZqOWPguaVsOe7p+aJvycsICfkvJjlhYgnXSxcclxuICAgICAgWyfosIPor5XkuqfniannrqHnkIYnLCAn5oiq5Zu+44CB6KeG6aKR44CBVHJhY2XjgIHmjqfliLblj7Dml6Xlv5fnu5/kuIDlvZLmoaMnLCAn5LyY5YWIJ10sXHJcbiAgICAgIFsn5aSx6LSl5a6a5L2N5oq95bGJJywgJ+S7juS7u+WKoemhteWPs+S+p+ebtOaOpeS4i+mSu+Wksei0peivpuaDhScsICflt7Lop4TliJInXSxcclxuICAgIF0sXHJcbiAgfSxcclxuICBhcHA6IHtcclxuICAgIHRpdGxlOiAnQVBQIOiHquWKqOWMlicsXHJcbiAgICBkZXNjcmlwdGlvbjogJ+mdouWQkSBBcHBpdW0g55qE6K6+5aSH44CB5a6J6KOF5YyF44CB6ISa5pys5omn6KGM5ZKM5Z+656GA5oql5ZGK44CCJyxcclxuICAgIHN0YXRzOiBbXHJcbiAgICAgIHsgbGFiZWw6ICdBUFAg6ISa5pysJywgdmFsdWU6ICc4NicsIHRyZW5kOiAnQW5kcm9pZCAvIGlPUyDlj4zlubPlj7AnIH0sXHJcbiAgICAgIHsgbGFiZWw6ICflnKjnur/orr7lpIcnLCB2YWx1ZTogJzEyJywgdHJlbmQ6ICflvZPliY0gMyDlj7DljaDnlKjkuK0nIH0sXHJcbiAgICAgIHsgbGFiZWw6ICfku4rml6XmiafooYwnLCB2YWx1ZTogJzI3JywgdHJlbmQ6ICflpJrmnaXoh6rnmbvlvZXkuI7mlK/ku5jlm57lvZInIH0sXHJcbiAgICAgIHsgbGFiZWw6ICfpgJrov4fnjocnLCB2YWx1ZTogJzg5LjMlJywgdHJlbmQ6ICfnnJ/mnLrnqLPlrprmgKfku43pnIDkvJjljJYnIH0sXHJcbiAgICBdLFxyXG4gICAgdGFza3M6IFtcclxuICAgICAgWyfohJrmnKzotYTkuqfnrqHnkIYnLCAn5oyJ5bmz5Y+w5Yy65YiG6ISa5pys44CB5qCH562+5ZKM55uu5b2V57uT5p6EJywgJ+W3suinhOWIkiddLFxyXG4gICAgICBbJ+iuvuWkh+azqOWGjOS4juW/g+i3sycsICflsZXnpLrlnKjnur/nirbmgIHjgIHljaDnlKjnirbmgIHlkozmnIDov5Hlv4Pot7MnLCAn5LyY5YWIJ10sXHJcbiAgICAgIFsn5omn6KGM5Lu75Yqh6YWN572uJywgJ+mAieaLqeiuvuWkh+OAgUFwcCDljIXjgIHlj4LmlbDpm4blkoznjq/looMnLCAn5LyY5YWIJ10sXHJcbiAgICAgIFsn5Z+656GA5omn6KGM5oql5ZGKJywgJ+atpemqpOaXpeW/l+OAgeaIquWbvuOAgeiuvuWkh+S/oeaBr+WSjOmUmeivr+aRmOimgScsICflt7Lop4TliJInXSxcclxuICAgIF0sXHJcbiAgfSxcclxufSBhcyBjb25zdFxyXG5cclxuZXhwb3J0IGNvbnN0IHNldHRpbmdzU2VjdGlvbnMgPSBbXHJcbiAge1xyXG4gICAgdGl0bGU6ICflt6XkvZznqbrpl7TkuI7mnYPpmZAnLFxyXG4gICAgZGVzYzogJ+e7tOaKpOepuumXtOOAgeaIkOWRmOinkuiJsuWSjOm7mOiupCBBSSDphY3nva7jgIInLFxyXG4gICAgaXRlbXM6IFsn5bel5L2c56m66Ze057yW56CB5LiO54q25oCBJywgJ+aIkOWRmOWIhumFjeS4jui9u+mHjyBSQkFDJywgJ+m7mOiupOeUqOS+i+eUn+aIkC/or4TlrqHmqKHlnosnXSxcclxuICB9LFxyXG4gIHtcclxuICAgIHRpdGxlOiAn546v5aKD5LiO5Y+C5pWwJyxcclxuICAgIGRlc2M6ICfnu5/kuIDnrqHnkIYgQVBJIC8gV2ViIC8gQXBwIOaJp+ihjOS+nei1luOAgicsXHJcbiAgICBpdGVtczogWydCYXNlIFVSTCAvIEhvc3QnLCAn6Ym05p2D5L+h5oGv5LiO5Y+Y6YePJywgJ+i0puWPt+OAgUhlYWRlcuOAgVRva2Vu44CB5rWL6K+V5pWw5o2uJ10sXHJcbiAgfSxcclxuICB7XHJcbiAgICB0aXRsZTogJ+W5s+WPsOe6p+ezu+e7n+mFjee9ricsXHJcbiAgICBkZXNjOiAn5o6n5Yi25a2Y5YKo44CB5omn6KGM5ZKM5pel5b+X562W55Wl44CCJyxcclxuICAgIGl0ZW1zOiBbJ+m7mOiupOi2heaXtuS4juW5tuWPkeaVsCcsICfmiqXlkYov6ZmE5Lu25L+d55WZ5pe26ZW/JywgJ+aWh+S7tuS4iuS8oOS4juWvueixoeWtmOWCqOetlueVpSddLFxyXG4gIH0sXHJcbl0gYXMgY29uc3RcclxuIl19

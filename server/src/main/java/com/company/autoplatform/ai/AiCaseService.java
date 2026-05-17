@@ -6,10 +6,17 @@ import com.company.autoplatform.casecenter.CaseDetailResponse;
 import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.workspace.WorkspaceEntity;
 import com.company.autoplatform.workspace.WorkspaceService;
+import org.apache.poi.xwpf.usermodel.BodyElementType;
+import org.apache.poi.xwpf.usermodel.IBodyElement;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFPictureData;
+import org.apache.poi.xwpf.usermodel.XWPFTable;
+import org.apache.poi.xwpf.usermodel.XWPFTableCell;
+import org.apache.poi.xwpf.usermodel.XWPFTableRow;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
@@ -165,10 +172,17 @@ public class AiCaseService {
 
     public ImportRequirementDocumentResponse importRequirementDocument(String headerWorkspaceCode, MultipartFile file) {
         CurrentUserContext.require();
-        if (file == null || file.isEmpty()) {
-            throw new BadRequestException("Requirement document is required");
-        }
+        validateSelectedFile(file, "请先选择需求文档");
         String fileName = file.getOriginalFilename() == null ? "requirement" : file.getOriginalFilename().trim();
+        if (file.getSize() <= 0) {
+            return new ImportRequirementDocumentResponse(
+                    fileName,
+                    resolveImportedTitle(fileName, ""),
+                    "",
+                    0,
+                    List.of()
+            );
+        }
         String extension = resolveExtension(fileName);
         DocumentImportContent imported = switch (extension) {
             case "txt", "md" -> new DocumentImportContent(readPlainText(file), List.of());
@@ -176,9 +190,6 @@ public class AiCaseService {
             default -> throw new BadRequestException("Only txt, md, and docx requirement documents are supported");
         };
         String normalizedContent = normalizeImportedContent(imported.content());
-        if (normalizedContent.isBlank()) {
-            throw new BadRequestException("Requirement document content is empty");
-        }
         List<AiRequirementAssetResponse> assets = imported.images().stream()
                 .map(image -> createExtractedAsset(CurrentUserContext.get(), image))
                 .toList();
@@ -528,10 +539,14 @@ public class AiCaseService {
     }
 
     private DocumentImportContent readDocxContent(MultipartFile file) {
+        if (file.getSize() <= 0) {
+            return new DocumentImportContent("", List.of());
+        }
         try (InputStream inputStream = file.getInputStream(); XWPFDocument document = new XWPFDocument(inputStream)) {
-            String content = document.getParagraphs().stream()
-                    .map(paragraph -> paragraph.getText() == null ? "" : paragraph.getText())
-                    .collect(Collectors.joining("\n"));
+            String content = document.getBodyElements().stream()
+                    .map(this::extractBodyElementText)
+                    .filter(text -> text != null && !text.isBlank())
+                    .collect(Collectors.joining("\n\n"));
             List<ExtractedRequirementImage> images = document.getAllPictures().stream()
                     .map(this::toExtractedImage)
                     .toList();
@@ -539,6 +554,74 @@ public class AiCaseService {
         } catch (IOException exception) {
             throw new BadRequestException("Failed to parse docx requirement document");
         }
+    }
+
+    private String extractBodyElementText(IBodyElement element) {
+        if (element == null) {
+            return "";
+        }
+        if (element.getElementType() == BodyElementType.PARAGRAPH) {
+            return extractParagraphText((XWPFParagraph) element);
+        }
+        if (element.getElementType() == BodyElementType.TABLE) {
+            return extractTableText((XWPFTable) element);
+        }
+        return "";
+    }
+
+    private String extractParagraphText(XWPFParagraph paragraph) {
+        String text = normalizeImportedLine(paragraph == null ? "" : paragraph.getText());
+        if (text.isBlank()) {
+            return "";
+        }
+        String styleId = paragraph.getStyle();
+        if (styleId != null) {
+            String normalizedStyle = styleId.trim().toLowerCase(Locale.ROOT);
+            if (normalizedStyle.startsWith("heading")) {
+                String level = normalizedStyle.replaceAll("[^0-9]", "");
+                int headingLevel = level.isBlank() ? 1 : Math.max(1, Math.min(6, Integer.parseInt(level)));
+                return "#".repeat(headingLevel) + " " + text;
+            }
+        }
+        if (paragraph.getNumID() != null) {
+            return "- " + text;
+        }
+        return text;
+    }
+
+    private String extractTableText(XWPFTable table) {
+        if (table == null || table.getRows() == null || table.getRows().isEmpty()) {
+            return "";
+        }
+        List<String> lines = new ArrayList<>();
+        List<XWPFTableRow> rows = table.getRows();
+        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+            XWPFTableRow row = rows.get(rowIndex);
+            List<XWPFTableCell> cells = row.getTableCells();
+            if (cells == null || cells.isEmpty()) {
+                continue;
+            }
+            List<String> values = cells.stream()
+                    .map(XWPFTableCell::getText)
+                    .map(this::normalizeImportedLine)
+                    .toList();
+            lines.add("| " + String.join(" | ", values) + " |");
+            if (rowIndex == 0) {
+                lines.add("| " + values.stream().map(value -> "---").collect(Collectors.joining(" | ")) + " |");
+            }
+        }
+        return String.join("\n", lines);
+    }
+
+    private String normalizeImportedLine(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value
+                .replace('\u00A0', ' ')
+                .replace('\t', ' ')
+                .replaceAll("\\s+", " ")
+                .trim();
     }
 
     private String normalizeImportedContent(String content) {
@@ -600,6 +683,12 @@ public class AiCaseService {
 
     private String trimTitleLength(String title) {
         return title.length() > 80 ? title.substring(0, 80) : title;
+    }
+
+    private void validateSelectedFile(MultipartFile file, String missingMessage) {
+        if (file == null || !StringUtils.hasText(file.getOriginalFilename())) {
+            throw new BadRequestException(missingMessage);
+        }
     }
 
     private ExtractedRequirementImage toExtractedImage(XWPFPictureData pictureData) {

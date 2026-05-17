@@ -14,6 +14,9 @@ public class BugAttachmentEntity extends BaseEntity {
     @TableField("bug_id")
     private Long bugId;
 
+    @TableField("created_by")
+    private Long createdBy;
+
     @TableField("workspace_id")
     private Long workspaceId;
 

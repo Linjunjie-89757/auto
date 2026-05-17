@@ -22,6 +22,11 @@ import {
 } from '../utils/casePresentation'
 import type { BugAttachment, BugDetail, BugSummary, CaseDetail, CaseDirectoryNode, CaseItem, CreateBugPayload, CreateCasePayload, UpdateBugPayload } from '../types/api'
 
+type PendingInlineImage = {
+  src: string
+  file: File
+}
+
 const route = useRoute()
 const router = useRouter()
 const { workspaceCode, canWriteWorkspace, loadSharedBase, workspaces, users } = useCaseCenterShared()
@@ -47,11 +52,17 @@ const bugLinkKeyword = ref('')
 const bugLinkAssociating = ref(false)
 const bugCreateVisible = ref(false)
 const bugDetailVisible = ref(false)
+const bugDetailLoading = ref(false)
+const bugDetailSummary = ref<Pick<BugSummary, 'bugNo' | 'title' | 'workspaceName' | 'status' | 'assigneeName'> | null>(null)
 const bugSaving = ref(false)
 const bugTransitioning = ref(false)
 const bugCommenting = ref(false)
+const bugBasicSaving = ref(false)
+const bugDescriptionSaving = ref(false)
+const bugCaseAssociating = ref(false)
 const bugAttachmentUploading = ref(false)
 const bugAttachmentRemovingId = ref<number | null>(null)
+const pendingBugInlineImages = ref<PendingInlineImage[]>([])
 const pendingBugFiles = ref<Array<{
   id: string
   file: File
@@ -545,17 +556,32 @@ async function openBugDetailDrawer(bugId: number) {
   if (!detail.value) {
     return
   }
+  const summary = relatedBugs.value.find(item => item.id === bugId) ?? null
+  bugDetailSummary.value = summary
+    ? {
+        bugNo: summary.bugNo,
+        title: summary.title,
+        workspaceName: summary.workspaceName,
+        status: summary.status,
+        assigneeName: summary.assigneeName,
+      }
+    : null
+  bugDetailVisible.value = true
+  bugDetailLoading.value = true
+  activeBugDetail.value = relatedBugDetails.value[bugId] ?? null
   try {
-    activeBugDetail.value = relatedBugDetails.value[bugId]
-      ?? await platformApi.getBugDetail(detail.value.workspaceCode, bugId)
+    activeBugDetail.value = await platformApi.getBugDetail(detail.value.workspaceCode, bugId)
     relatedBugDetails.value = {
       ...relatedBugDetails.value,
       [bugId]: activeBugDetail.value,
     }
-    bugDetailVisible.value = true
   }
   catch (error) {
+    bugDetailVisible.value = false
     ElMessage.error((error as Error).message)
+  }
+  finally {
+    bugDetailLoading.value = false
   }
 }
 
@@ -589,6 +615,19 @@ async function reloadActiveBugDetail() {
   relatedBugDetails.value = {
     ...relatedBugDetails.value,
     [activeBugDetail.value.id]: activeBugDetail.value,
+  }
+}
+
+function buildDescriptionUpdatePayload(bug: BugDetail): UpdateBugPayload {
+  return {
+    workspaceCode: bug.workspaceCode,
+    title: bug.title,
+    description: bug.description,
+    priority: bug.priority,
+    severity: bug.severity,
+    assigneeId: bug.assigneeId,
+    relatedCaseId: bug.relatedCaseId,
+    tags: bug.tags,
   }
 }
 
@@ -630,6 +669,55 @@ async function uploadPendingBugFiles(workspaceCode: string, bugId: number) {
   const uploaded = await platformApi.uploadBugAttachment(workspaceCode, bugId, files)
   clearPendingBugFiles()
   return uploaded
+}
+
+function addPendingBugInlineImage(payload: PendingInlineImage) {
+  pendingBugInlineImages.value = [...pendingBugInlineImages.value, payload]
+}
+
+function clearPendingBugInlineImages() {
+  pendingBugInlineImages.value.forEach((item) => {
+    URL.revokeObjectURL(item.src)
+  })
+  pendingBugInlineImages.value = []
+}
+
+async function uploadPendingBugInlineImages(workspaceCode: string, bugId: number, html: string) {
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(`<div>${html}</div>`, 'text/html')
+  const container = doc.body.firstElementChild as HTMLElement | null
+  if (!container) {
+    clearPendingBugInlineImages()
+    return html
+  }
+  const unresolvedImages = Array.from(container.querySelectorAll('img')) as HTMLImageElement[]
+  const consumedImages = new Set<HTMLImageElement>()
+  for (const item of pendingBugInlineImages.value) {
+    const exactMatches = Array.from(
+      container.querySelectorAll(`img[src="${item.src.replaceAll('"', '&quot;')}"]`),
+    ) as HTMLImageElement[]
+    const fallbackMatch = unresolvedImages.find(image => {
+      if (consumedImages.has(image)) {
+        return false
+      }
+      const source = image.getAttribute('src') || ''
+      return /^blob:|^data:/i.test(source)
+    })
+    const targetImages = exactMatches.length ? exactMatches : (fallbackMatch ? [fallbackMatch] : [])
+    if (!targetImages.length) {
+      URL.revokeObjectURL(item.src)
+      continue
+    }
+    const [attachment] = await platformApi.uploadBugAttachment(workspaceCode, bugId, [item.file])
+    const imageUrl = attachment.downloadUrl || `/api/bugs/${bugId}/attachments/${attachment.id}/download`
+    targetImages.forEach((image) => {
+      image.setAttribute('src', imageUrl)
+      consumedImages.add(image)
+    })
+    URL.revokeObjectURL(item.src)
+  }
+  pendingBugInlineImages.value = []
+  return container.innerHTML
 }
 
 async function submitCreateBug(keepOpen = false) {
@@ -743,6 +831,75 @@ async function submitBugTransition(payload: { status: string, comment: string })
   }
 }
 
+async function saveBugBasic(payload: UpdateBugPayload) {
+  if (!detail.value || !activeBugDetail.value) {
+    return
+  }
+  bugBasicSaving.value = true
+  try {
+    activeBugDetail.value = await platformApi.updateBug(
+      detail.value.workspaceCode,
+      activeBugDetail.value.id,
+      {
+        ...payload,
+        relatedCaseId: activeBugDetail.value.relatedCaseId,
+      },
+    )
+    relatedBugDetails.value = {
+      ...relatedBugDetails.value,
+      [activeBugDetail.value.id]: activeBugDetail.value,
+    }
+    await loadRelatedBugs(currentCaseId.value ?? detail.value.id, detail.value.workspaceCode)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    bugBasicSaving.value = false
+  }
+}
+
+async function associateBugCase(caseId: number) {
+  if (!detail.value || !activeBugDetail.value) {
+    return
+  }
+  bugCaseAssociating.value = true
+  try {
+    activeBugDetail.value = await platformApi.updateBug(
+      detail.value.workspaceCode,
+      activeBugDetail.value.id,
+      {
+        ...buildDescriptionUpdatePayload(activeBugDetail.value),
+        relatedCaseId: caseId,
+      },
+    )
+    relatedBugDetails.value = {
+      ...relatedBugDetails.value,
+      [activeBugDetail.value.id]: activeBugDetail.value,
+    }
+    await loadRelatedBugs(currentCaseId.value ?? detail.value.id, detail.value.workspaceCode)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    bugCaseAssociating.value = false
+  }
+}
+
+async function unlinkActiveBugCase() {
+  if (!activeBugDetail.value) {
+    return
+  }
+  bugCaseAssociating.value = true
+  try {
+    await unlinkBug(activeBugDetail.value)
+  }
+  finally {
+    bugCaseAssociating.value = false
+  }
+}
+
 async function submitBugComment(content: string) {
   if (!detail.value || !activeBugDetail.value) {
     return
@@ -759,6 +916,39 @@ async function submitBugComment(content: string) {
   }
   finally {
     bugCommenting.value = false
+  }
+}
+
+async function saveBugDescription(content: string) {
+  if (!detail.value || !activeBugDetail.value) {
+    return
+  }
+  bugDescriptionSaving.value = true
+  try {
+    const description = await uploadPendingBugInlineImages(
+      detail.value.workspaceCode,
+      activeBugDetail.value.id,
+      content,
+    )
+    activeBugDetail.value = await platformApi.updateBug(
+      detail.value.workspaceCode,
+      activeBugDetail.value.id,
+      {
+        ...buildDescriptionUpdatePayload(activeBugDetail.value),
+        description,
+      },
+    )
+    relatedBugDetails.value = {
+      ...relatedBugDetails.value,
+      [activeBugDetail.value.id]: activeBugDetail.value,
+    }
+    await loadRelatedBugs(currentCaseId.value ?? detail.value.id, detail.value.workspaceCode)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    bugDescriptionSaving.value = false
   }
 }
 
@@ -1288,6 +1478,12 @@ watch(executionImagePreviewVisible, (visible) => {
   }
 })
 
+watch(bugDetailVisible, (visible) => {
+  if (!visible) {
+    clearPendingBugInlineImages()
+  }
+})
+
 onMounted(() => {
   window.addEventListener('keydown', handleExecutionImagePreviewKeydown)
   void bootstrap()
@@ -1295,6 +1491,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   revokeExecutionAttachmentImageUrls()
+  clearPendingBugInlineImages()
 })
 
 onUnmounted(() => {
@@ -1694,12 +1891,23 @@ onUnmounted(() => {
   <BugDetailDrawer
     v-model="bugDetailVisible"
     :detail="activeBugDetail"
+    :summary="bugDetailSummary"
+    :loading="bugDetailLoading"
+    :users="bugAssigneeOptions"
+    :basic-saving="bugBasicSaving"
+    :description-saving="bugDescriptionSaving"
+    :associating-case="bugCaseAssociating"
     :transitioning="bugTransitioning"
     :commenting="bugCommenting"
     :attachment-uploading="bugAttachmentUploading"
     :attachment-removing-id="bugAttachmentRemovingId"
     :can-write="!!detail && canWriteWorkspace(detail.workspaceCode)"
+    @add-inline-image="addPendingBugInlineImage"
     @edit="openEditBugDrawer"
+    @save-basic="saveBugBasic"
+    @save-description="saveBugDescription"
+    @associate-case="associateBugCase"
+    @unlink-case="unlinkActiveBugCase"
     @upload-attachments="uploadBugAttachments"
     @download-attachment="downloadBugAttachment"
     @remove-attachment="removeBugAttachment"

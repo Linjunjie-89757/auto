@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import BugDetailContent from '../components/BugDetailContent.vue'
@@ -32,6 +32,14 @@ watch([bugId, workspaceCode], () => {
   void loadDetail()
 }, { immediate: true })
 
+watch(() => route.query.tab?.toString(), async () => {
+  if (!detail.value) {
+    return
+  }
+  await nextTick()
+  scrollToTabSection()
+})
+
 async function loadDetail() {
   if (!bugId.value) {
     detail.value = null
@@ -40,6 +48,8 @@ async function loadDetail() {
   loading.value = true
   try {
     detail.value = await platformApi.getBugDetail(workspaceCode.value, bugId.value)
+    await nextTick()
+    scrollToTabSection()
   }
   catch (error) {
     ElMessage.error((error as Error).message)
@@ -47,6 +57,15 @@ async function loadDetail() {
   finally {
     loading.value = false
   }
+}
+
+function scrollToTabSection() {
+  const tab = route.query.tab?.toString()
+  if (!tab) {
+    return
+  }
+  const target = document.querySelector<HTMLElement>(`[data-bug-section="${tab}"]`)
+  target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 function goBack() {

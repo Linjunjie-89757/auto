@@ -8,6 +8,7 @@ public record BugAttachmentResponse(
         String contentType,
         Long fileSize,
         String downloadUrl,
+        String uploadedByName,
         LocalDateTime createdAt
 ) {
 }

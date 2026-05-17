@@ -125,7 +125,7 @@ public class AiRequirementAssetStorageService {
     }
 
     private void validateFile(MultipartFile file) {
-        if (file == null || file.isEmpty()) {
+        if (file == null || !StringUtils.hasText(file.getOriginalFilename())) {
             throw new BadRequestException("请先选择要上传的需求图片");
         }
         if (file.getSize() > MAX_FILE_SIZE) {

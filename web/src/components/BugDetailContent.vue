@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, CopyDocument, Edit, Link, Paperclip, Promotion } from '@element-plus/icons-vue'
@@ -49,6 +49,14 @@ const emit = defineEmits<{
 const uploadInput = ref<HTMLInputElement | null>(null)
 const quickActionsRef = ref<HTMLElement | null>(null)
 const descriptionHtml = computed(() => sanitizeRichHtml(props.detail.description || ''))
+const basicInfoText = {
+  workspace: '\u6240\u5c5e\u7a7a\u95f4',
+  assignee: '\u5904\u7406\u4eba',
+  reporter: '\u521b\u5efa\u4eba',
+  createdAt: '\u521b\u5efa\u65f6\u95f4',
+  updatedAt: '\u66f4\u65b0\u65f6\u95f4',
+  tags: '\u6807\u7b7e',
+}
 
 function requestUpload() {
   if (!props.canWrite) {
@@ -184,7 +192,7 @@ function sanitizeStyle(value: string) {
     <input ref="uploadInput" type="file" multiple style="display: none" @change="handleUploadChange">
 
     <div class="bug-detail-main">
-      <section class="bug-detail-section bug-detail-hero">
+      <section class="bug-detail-section bug-detail-hero" data-bug-section="basic">
         <div class="bug-detail-hero-top">
           <div class="bug-detail-hero-main">
             <div class="bug-detail-hero-headline">
@@ -197,7 +205,6 @@ function sanitizeStyle(value: string) {
               <el-tag effect="plain">{{ formatBugStatus(detail.status) }}</el-tag>
               <el-tag effect="plain">{{ detail.priority }}</el-tag>
               <el-tag effect="plain">{{ formatBugSeverity(detail.severity) }}</el-tag>
-              <el-tag v-for="tag in detail.tags" :key="tag" effect="plain">{{ tag }}</el-tag>
             </div>
           </div>
 
@@ -210,65 +217,74 @@ function sanitizeStyle(value: string) {
           </div>
         </div>
 
-        <div class="bug-detail-summary-grid">
-          <div class="bug-detail-summary-item">
-            <div class="bug-detail-label">所属工作空间</div>
-            <div class="bug-detail-value">{{ detail.workspaceName }}</div>
+        <div class="bug-detail-basic-list">
+          <div class="bug-detail-basic-row">
+            <div class="bug-detail-label">{{ basicInfoText.workspace }}</div>
+            <div class="bug-detail-value">{{ detail.workspaceName || '-' }}</div>
           </div>
-          <div class="bug-detail-summary-item">
-            <div class="bug-detail-label">当前负责人</div>
+          <div class="bug-detail-basic-row">
+            <div class="bug-detail-label">{{ basicInfoText.assignee }}</div>
             <div class="bug-detail-value">{{ detail.assigneeName || '-' }}</div>
           </div>
-          <div class="bug-detail-summary-item">
-            <div class="bug-detail-label">提交人</div>
-            <div class="bug-detail-value">{{ detail.reporterName }}</div>
+          <div class="bug-detail-basic-row">
+            <div class="bug-detail-label">{{ basicInfoText.reporter }}</div>
+            <div class="bug-detail-value">{{ detail.reporterName || '-' }}</div>
           </div>
-          <div class="bug-detail-summary-item">
-            <div class="bug-detail-label">最近更新人</div>
-            <div class="bug-detail-value">{{ detail.updatedByName || '-' }}</div>
-          </div>
-          <div class="bug-detail-summary-item">
-            <div class="bug-detail-label">创建时间</div>
+          <div class="bug-detail-basic-row">
+            <div class="bug-detail-label">{{ basicInfoText.createdAt }}</div>
             <div class="bug-detail-value">{{ formatBugDateTime(detail.createdAt) }}</div>
           </div>
-          <div class="bug-detail-summary-item">
-            <div class="bug-detail-label">最近更新时间</div>
+          <div class="bug-detail-basic-row">
+            <div class="bug-detail-label">{{ basicInfoText.updatedAt }}</div>
             <div class="bug-detail-value">{{ formatBugDateTime(detail.updatedAt) }}</div>
+          </div>
+          <div class="bug-detail-basic-row bug-detail-basic-row-tags">
+            <div class="bug-detail-label">{{ basicInfoText.tags }}</div>
+            <div class="bug-detail-tag-list">
+              <el-tag v-for="tag in detail.tags" :key="tag" effect="plain">{{ tag }}</el-tag>
+              <span v-if="!detail.tags.length" class="bug-detail-empty-value">-</span>
+            </div>
           </div>
         </div>
       </section>
 
-      <section class="bug-detail-section">
+      <section class="bug-detail-section" data-bug-section="detail">
         <div class="bug-detail-section-header">
           <div>
             <div class="bug-detail-section-title">缺陷描述</div>
-            <div class="bug-detail-section-meta">富文本描述和关键标签</div>
+            <div class="bug-detail-section-meta">富文本描述和关键信息</div>
           </div>
         </div>
         <div class="bug-detail-description" v-html="descriptionHtml" />
       </section>
 
-      <BugSourceContextCard
-        :detail="detail"
-        @open-case="emit('open-case', $event)"
-        @open-report="emit('open-report', $event)"
-        @open-task="emit('open-task', $event)"
-      />
+      <div data-bug-section="case">
+        <BugSourceContextCard
+          :detail="detail"
+          @open-case="emit('open-case', $event)"
+          @open-report="emit('open-report', $event)"
+          @open-task="emit('open-task', $event)"
+        />
+      </div>
 
-      <BugAttachmentPanel
-        :attachments="detail.attachments"
-        :can-write="canWrite"
-        :attachment-uploading="attachmentUploading"
-        :attachment-removing-id="attachmentRemovingId"
-        @request-upload="requestUpload"
-        @download="emit('download-attachment', $event)"
-        @remove="emit('remove-attachment', $event)"
-      />
+      <div data-bug-section="attachment">
+        <BugAttachmentPanel
+          :attachments="detail.attachments"
+          :can-write="canWrite"
+          :attachment-uploading="attachmentUploading"
+          :attachment-removing-id="attachmentRemovingId"
+          @request-upload="requestUpload"
+          @download="emit('download-attachment', $event)"
+          @remove="emit('remove-attachment', $event)"
+        />
+      </div>
 
-      <BugActivityTimeline :activities="detail.activities" />
+      <div data-bug-section="history">
+        <BugActivityTimeline :activities="detail.activities" />
+      </div>
     </div>
 
-    <div ref="quickActionsRef">
+    <div ref="quickActionsRef" data-bug-section="comment">
       <BugQuickActionsPanel
         :detail="detail"
         :can-write="canWrite"
@@ -362,26 +378,36 @@ function sanitizeStyle(value: string) {
   color: #101828;
 }
 
-.bug-detail-summary-grid {
+.bug-detail-basic-list {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  row-gap: 10px;
+  column-gap: 24px;
 }
 
-.bug-detail-summary-item {
+.bug-detail-basic-row {
   display: grid;
-  gap: 6px;
+  grid-template-columns: 88px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
   min-width: 0;
-  padding: 12px 14px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: #fcfcfd;
 }
 
 .bug-detail-label {
   font-size: 12px;
   line-height: 1.5;
   color: #667085;
+}
+
+.bug-detail-tag-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bug-detail-empty-value {
+  color: #98a2b3;
 }
 
 .bug-detail-value,
@@ -420,8 +446,12 @@ function sanitizeStyle(value: string) {
 }
 
 @media (max-width: 900px) {
-  .bug-detail-summary-grid {
+  .bug-detail-basic-list {
     grid-template-columns: 1fr;
+  }
+
+  .bug-detail-basic-row {
+    grid-template-columns: 72px minmax(0, 1fr);
   }
 
   .bug-detail-section-header,
@@ -430,3 +460,5 @@ function sanitizeStyle(value: string) {
   }
 }
 </style>
+
+

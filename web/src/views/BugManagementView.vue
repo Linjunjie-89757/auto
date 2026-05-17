@@ -10,7 +10,7 @@ import TableSettingsDrawer from '../components/TableSettingsDrawer.vue'
 import { useListToolbarState } from '../composables/useListToolbarState'
 import type { TableSettingsColumn } from '../composables/useTableSettings'
 import { useWorkspace } from '../composables/useWorkspace'
-import type { BugDetail, BugStats, BugSummary, CreateBugPayload, UserItem, WorkspaceItem } from '../types/api'
+import type { BugDetail, BugStats, BugSummary, CreateBugPayload, UpdateBugPayload, UserItem, WorkspaceItem } from '../types/api'
 
 type BugColumnKey =
   | 'bugNo'
@@ -64,6 +64,9 @@ const drawerTransitioning = ref(false)
 const drawerCommenting = ref(false)
 const drawerAttachmentUploading = ref(false)
 const drawerAttachmentRemovingId = ref<number | null>(null)
+const drawerBasicSaving = ref(false)
+const drawerCaseAssociating = ref(false)
+const drawerDescriptionSaving = ref(false)
 
 const bugFilters = reactive({
   keyword: '',
@@ -397,6 +400,114 @@ async function submitDrawerComment(content: string) {
   }
 }
 
+async function saveDrawerDescription(content: string) {
+  if (!detail.value) {
+    return
+  }
+  drawerDescriptionSaving.value = true
+  try {
+    detail.value = await platformApi.updateBug(detail.value.workspaceCode, detail.value.id, {
+      workspaceCode: detail.value.workspaceCode,
+      title: detail.value.title,
+      description: content,
+      priority: detail.value.priority,
+      severity: detail.value.severity,
+      assigneeId: detail.value.assigneeId,
+      relatedCaseId: detail.value.relatedCaseId,
+      tags: detail.value.tags,
+    })
+    ElMessage.success('缺陷描述已更新')
+    await loadBaseData()
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    drawerDescriptionSaving.value = false
+  }
+}
+
+async function saveDrawerBasic(payload: UpdateBugPayload) {
+  if (!detail.value) {
+    return
+  }
+  drawerBasicSaving.value = true
+  try {
+    detail.value = await platformApi.updateBug(detail.value.workspaceCode, detail.value.id, {
+      workspaceCode: detail.value.workspaceCode,
+      title: detail.value.title,
+      description: detail.value.description,
+      priority: payload.priority,
+      severity: payload.severity,
+      assigneeId: payload.assigneeId,
+      relatedCaseId: detail.value.relatedCaseId,
+      tags: payload.tags,
+    })
+    ElMessage.success('基本信息已更新')
+    await loadBaseData()
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    drawerBasicSaving.value = false
+  }
+}
+
+async function associateDrawerCase(caseId: number) {
+  if (!detail.value) {
+    return
+  }
+  drawerCaseAssociating.value = true
+  try {
+    detail.value = await platformApi.updateBug(detail.value.workspaceCode, detail.value.id, {
+      workspaceCode: detail.value.workspaceCode,
+      title: detail.value.title,
+      description: detail.value.description,
+      priority: detail.value.priority,
+      severity: detail.value.severity,
+      assigneeId: detail.value.assigneeId,
+      relatedCaseId: caseId,
+      tags: detail.value.tags,
+    })
+    ElMessage.success('关联用例已更新')
+    await loadBaseData()
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    drawerCaseAssociating.value = false
+  }
+}
+
+async function unlinkDrawerCase() {
+  if (!detail.value) {
+    return
+  }
+  drawerCaseAssociating.value = true
+  try {
+    detail.value = await platformApi.updateBug(detail.value.workspaceCode, detail.value.id, {
+      workspaceCode: detail.value.workspaceCode,
+      title: detail.value.title,
+      description: detail.value.description,
+      priority: detail.value.priority,
+      severity: detail.value.severity,
+      assigneeId: detail.value.assigneeId,
+      relatedCaseId: null,
+      tags: detail.value.tags,
+    })
+    ElMessage.success('已取消关联用例')
+    await loadBaseData()
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    drawerCaseAssociating.value = false
+  }
+}
+
 function editBugFromDrawer() {
   if (!detail.value) {
     return
@@ -706,12 +817,20 @@ onMounted(() => {
     <BugDetailDrawer
       v-model="drawerVisible"
       :detail="detail"
+      :users="users"
       :loading="detailLoading"
+      :basic-saving="drawerBasicSaving"
+      :description-saving="drawerDescriptionSaving"
+      :associating-case="drawerCaseAssociating"
       :transitioning="drawerTransitioning"
       :commenting="drawerCommenting"
       :attachment-uploading="drawerAttachmentUploading"
       :attachment-removing-id="drawerAttachmentRemovingId"
       :can-write="true"
+      @save-basic="saveDrawerBasic"
+      @save-description="saveDrawerDescription"
+      @associate-case="associateDrawerCase"
+      @unlink-case="unlinkDrawerCase"
       @transition="submitDrawerTransition"
       @comment="submitDrawerComment"
       @edit="editBugFromDrawer"

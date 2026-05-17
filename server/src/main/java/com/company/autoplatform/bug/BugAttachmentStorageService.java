@@ -15,17 +15,12 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
-import java.util.Set;
 import java.util.UUID;
 
 @Service
 public class BugAttachmentStorageService {
 
-    private static final long MAX_FILE_SIZE = 5 * 1024 * 1024L;
-    private static final Set<String> ALLOWED_EXTENSIONS = Set.of(
-            "txt", "log", "json", "csv", "xml", "yaml", "yml", "png", "jpg", "jpeg", "webp", "pdf", "zip"
-    );
+    private static final long MAX_FILE_SIZE = 10 * 1024 * 1024L;
 
     private final Path storageRoot;
 
@@ -45,7 +40,8 @@ public class BugAttachmentStorageService {
                 storedFiles.add(storeSingle(workspaceId, bugId, file));
             }
             return storedFiles;
-        } catch (RuntimeException exception) {
+        }
+        catch (RuntimeException exception) {
             for (StoredBugFile storedFile : storedFiles) {
                 delete(storedFile.storedPath());
             }
@@ -61,7 +57,8 @@ public class BugAttachmentStorageService {
         try {
             Files.deleteIfExists(target);
             deleteEmptyParents(target.getParent());
-        } catch (IOException ignored) {
+        }
+        catch (IOException ignored) {
         }
     }
 
@@ -78,36 +75,33 @@ public class BugAttachmentStorageService {
                     normalizeContentType(attachment.getContentType()),
                     attachment.getFileSize() == null ? 0L : attachment.getFileSize()
             );
-        } catch (MalformedURLException exception) {
+        }
+        catch (MalformedURLException exception) {
             throw new BadRequestException("附件下载路径无效");
         }
     }
 
     private StoredBugFile storeSingle(Long workspaceId, Long bugId, MultipartFile file) {
         String originalName = cleanFileName(file);
-        String extension = resolveExtension(originalName);
-        String storedName = UUID.randomUUID() + "." + extension;
+        String storedName = buildStoredName(originalName);
         Path relativePath = Paths.get("workspace-" + workspaceId, "bug-" + bugId, storedName);
         Path target = storageRoot.resolve(relativePath).normalize();
         try {
             Files.createDirectories(target.getParent());
             file.transferTo(target);
-        } catch (IOException exception) {
+        }
+        catch (IOException exception) {
             throw new BadRequestException("附件保存失败");
         }
         return new StoredBugFile(relativePath.toString().replace('\\', '/'), normalizeContentType(file.getContentType()), file.getSize());
     }
 
     private void validateFile(MultipartFile file) {
-        if (file == null || file.isEmpty()) {
+        if (file == null || !StringUtils.hasText(file.getOriginalFilename())) {
             throw new BadRequestException("请先选择要上传的附件");
         }
         if (file.getSize() > MAX_FILE_SIZE) {
-            throw new BadRequestException("附件大小不能超过 5MB");
-        }
-        String extension = resolveExtension(cleanFileName(file));
-        if (!ALLOWED_EXTENSIONS.contains(extension)) {
-            throw new BadRequestException("当前附件类型暂不支持上传");
+            throw new BadRequestException("附件大小不能超过 10MB");
         }
     }
 
@@ -132,12 +126,12 @@ public class BugAttachmentStorageService {
         }
     }
 
-    private String resolveExtension(String fileName) {
+    private String buildStoredName(String fileName) {
         int dotIndex = fileName.lastIndexOf('.');
         if (dotIndex < 0 || dotIndex == fileName.length() - 1) {
-            throw new BadRequestException("附件文件名缺少扩展名");
+            return UUID.randomUUID().toString();
         }
-        return fileName.substring(dotIndex + 1).toLowerCase(Locale.ROOT);
+        return UUID.randomUUID() + fileName.substring(dotIndex);
     }
 
     private String normalizeContentType(String contentType) {

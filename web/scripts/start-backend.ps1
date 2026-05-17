@@ -2,9 +2,16 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 $serverDir = Join-Path $repoRoot 'server'
 
 if (-not $env:JAVA_HOME) {
-  $defaultJavaHome = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot'
-  if (Test-Path $defaultJavaHome) {
-    $env:JAVA_HOME = $defaultJavaHome
+  $machineJavaHome = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine')
+  $userJavaHome = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'User')
+  $candidateJavaHomes = @(
+    $machineJavaHome
+    $userJavaHome
+    'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot'
+  ) | Where-Object { $_ -and (Test-Path $_) }
+
+  if ($candidateJavaHomes.Count -gt 0) {
+    $env:JAVA_HOME = $candidateJavaHomes[0]
   }
 }
 
@@ -23,15 +30,26 @@ if ($env:MAVEN_HOME) {
   $env:Path = "$env:MAVEN_HOME\bin;$env:Path"
 }
 
-if (-not (Get-Command mvn -ErrorAction SilentlyContinue)) {
-  throw 'mvn is not available. Please install Maven or set MAVEN_HOME before running Playwright smoke tests.'
-}
-
 Set-Location $serverDir
+$mavenCommand = $null
 $mavenArgs = @('spring-boot:run')
+
+if (Test-Path (Join-Path $serverDir 'mvnw.cmd')) {
+  $mavenCommand = '.\mvnw.cmd'
+}
+elseif (Get-Command mvn -ErrorAction SilentlyContinue) {
+  $mavenCommand = 'mvn'
+}
+else {
+  throw 'Neither mvnw.cmd nor mvn is available. Please restore the Maven wrapper or install Maven before running Playwright smoke tests.'
+}
 
 if ($env:BACKEND_PROFILE) {
   $mavenArgs += "-Dspring-boot.run.profiles=$env:BACKEND_PROFILE"
 }
 
-& mvn @mavenArgs
+if ($env:BACKEND_PORT) {
+  $mavenArgs += "-Dspring-boot.run.arguments=--server.port=$env:BACKEND_PORT"
+}
+
+& $mavenCommand @mavenArgs

@@ -1,0 +1,21 @@
+const { chromium } = require('playwright');
+(async () => {
+  const browser = await chromium.launch({ headless: true, executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe' });
+  const page = await browser.newPage();
+  await page.goto('http://127.0.0.1:4174/login');
+  await page.locator('input:not([readonly])').nth(0).fill('zhangli');
+  await page.locator('input:not([readonly])').nth(1).fill('123456');
+  await page.locator('.login-submit').click();
+  await page.waitForURL(/\/dashboard|\/settings|\/cases|\/bugs|\/automation/);
+  await page.goto('http://127.0.0.1:4174/bugs?workspace=ALL');
+  await page.locator('.bug-actions-row .el-button', { hasText: '²é¿´' }).first().click();
+  await page.waitForTimeout(1000);
+  const drawer = page.locator('.el-drawer:visible').last();
+  console.log('drawer count', await page.locator('.el-drawer:visible').count());
+  console.log('dialog count', await page.locator('[role="dialog"]').count());
+  console.log('drawer text', await drawer.innerText().catch(() => 'no drawer text'));
+  console.log('has tabs', await drawer.locator('.ms-bug-detail-tab').count());
+  console.log('body html snippet', (await page.locator('body').innerHTML()).slice(0, 4000));
+  await page.screenshot({ path: 'bug-drawer-current-4174.png', fullPage: true });
+  await browser.close();
+})();

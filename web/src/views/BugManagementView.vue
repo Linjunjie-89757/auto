@@ -35,6 +35,11 @@ type BugColumnSetting = {
   allOnly?: boolean
 }
 
+type PendingInlineImage = {
+  file: File
+  src: string
+}
+
 const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50]
 
 const { workspaceCode, isAllScope } = useWorkspace()
@@ -67,6 +72,7 @@ const drawerAttachmentRemovingId = ref<number | null>(null)
 const drawerBasicSaving = ref(false)
 const drawerCaseAssociating = ref(false)
 const drawerDescriptionSaving = ref(false)
+const pendingDrawerInlineImages = ref<PendingInlineImage[]>([])
 
 const bugFilters = reactive({
   keyword: '',
@@ -400,16 +406,70 @@ async function submitDrawerComment(content: string) {
   }
 }
 
+function addPendingDrawerInlineImage(payload: PendingInlineImage) {
+  pendingDrawerInlineImages.value = [...pendingDrawerInlineImages.value, payload]
+}
+
+function clearPendingDrawerInlineImages() {
+  pendingDrawerInlineImages.value.forEach((item) => {
+    URL.revokeObjectURL(item.src)
+  })
+  pendingDrawerInlineImages.value = []
+}
+
+async function uploadPendingDrawerInlineImages(workspaceCode: string, bugId: number, html: string) {
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(`<div>${html}</div>`, 'text/html')
+  const container = doc.body.firstElementChild as HTMLElement | null
+  if (!container) {
+    clearPendingDrawerInlineImages()
+    return html
+  }
+  const unresolvedImages = Array.from(container.querySelectorAll('img')) as HTMLImageElement[]
+  const consumedImages = new Set<HTMLImageElement>()
+  for (const item of pendingDrawerInlineImages.value) {
+    const exactMatches = Array.from(
+      container.querySelectorAll(`img[src="${item.src.replaceAll('"', '&quot;')}"]`),
+    ) as HTMLImageElement[]
+    const fallbackMatch = unresolvedImages.find((image) => {
+      if (consumedImages.has(image)) {
+        return false
+      }
+      const source = image.getAttribute('src') || ''
+      return /^blob:|^data:/i.test(source)
+    })
+    const targetImages = exactMatches.length ? exactMatches : (fallbackMatch ? [fallbackMatch] : [])
+    if (!targetImages.length) {
+      URL.revokeObjectURL(item.src)
+      continue
+    }
+    const [attachment] = await platformApi.uploadBugAttachment(workspaceCode, bugId, [item.file])
+    const imageUrl = attachment.downloadUrl || `/api/bugs/${bugId}/attachments/${attachment.id}/download`
+    targetImages.forEach((image) => {
+      image.setAttribute('src', imageUrl)
+      consumedImages.add(image)
+    })
+    URL.revokeObjectURL(item.src)
+  }
+  pendingDrawerInlineImages.value = []
+  return container.innerHTML
+}
+
 async function saveDrawerDescription(content: string) {
   if (!detail.value) {
     return
   }
   drawerDescriptionSaving.value = true
   try {
+    const description = await uploadPendingDrawerInlineImages(
+      detail.value.workspaceCode,
+      detail.value.id,
+      content,
+    )
     detail.value = await platformApi.updateBug(detail.value.workspaceCode, detail.value.id, {
       workspaceCode: detail.value.workspaceCode,
       title: detail.value.title,
-      description: content,
+      description,
       priority: detail.value.priority,
       severity: detail.value.severity,
       assigneeId: detail.value.assigneeId,
@@ -627,6 +687,12 @@ watch(workspaceCode, () => {
   loadBaseData()
 })
 
+watch(drawerVisible, (visible) => {
+  if (!visible) {
+    clearPendingDrawerInlineImages()
+  }
+})
+
 watch(filteredBugs, () => {
   if (pageNo.value > totalPages.value) {
     pageNo.value = totalPages.value
@@ -828,6 +894,7 @@ onMounted(() => {
       :attachment-removing-id="drawerAttachmentRemovingId"
       :can-write="true"
       @save-basic="saveDrawerBasic"
+      @add-inline-image="addPendingDrawerInlineImage"
       @save-description="saveDrawerDescription"
       @associate-case="associateDrawerCase"
       @unlink-case="unlinkDrawerCase"

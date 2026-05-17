@@ -6,7 +6,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
 import BugEditorForm from '../components/BugEditorForm.vue'
 import { useWorkspace } from '../composables/useWorkspace'
-import type { BugDetail, CreateBugPayload, UpdateBugPayload, UserItem, WorkspaceItem } from '../types/api'
+import type { BugAttachment, BugDetail, CreateBugPayload, UpdateBugPayload, UserItem, WorkspaceItem } from '../types/api'
 
 type PendingBugFile = {
   id: string
@@ -104,7 +104,7 @@ async function loadBugDetail() {
   editingBug.value = detail
   form.workspaceCode = detail.workspaceCode
   form.title = detail.title
-  form.description = detail.description
+  form.description = normalizeInlineImageSources(detail.description, detail.attachments)
   form.priority = detail.priority
   form.severity = detail.severity
   form.assigneeId = detail.assigneeId
@@ -210,6 +210,34 @@ async function uploadPendingInlineImages(bugId: number, targetWorkspaceCode: str
   }
   pendingInlineImages.value = []
   return container.innerHTML
+}
+
+function normalizeInlineImageSources(content: string, attachments: BugAttachment[]) {
+  if (!content.trim()) {
+    return ''
+  }
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(`<div>${content}</div>`, 'text/html')
+  const images = Array.from(doc.body.querySelectorAll('img')) as HTMLImageElement[]
+  const attachmentUrls = attachments
+    .filter(item => item.contentType?.startsWith('image/') && !!item.downloadUrl)
+    .map(item => item.downloadUrl || '')
+  let attachmentIndex = 0
+  images.forEach((image) => {
+    const source = image.getAttribute('src') || ''
+    if (/^blob:|^data:/i.test(source)) {
+      const replacement = attachmentUrls[attachmentIndex]
+      attachmentIndex += 1
+      if (replacement) {
+        image.setAttribute('src', replacement)
+      }
+      return
+    }
+    if (/^\/bugs\/\d+\/attachments\/\d+\/download/i.test(source)) {
+      image.setAttribute('src', `/api${source}`)
+    }
+  })
+  return doc.body.innerHTML
 }
 
 function resetFormForNextCreate() {

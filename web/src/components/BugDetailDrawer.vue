@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Close, Edit, EditPen, Link, MoreFilled, Paperclip } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
-import type { BugActivity, BugDetail, BugSummary, UpdateBugPayload, UserItem } from '../types/api'
+import type { BugActivity, BugAttachment, BugDetail, BugSummary, UpdateBugPayload, UserItem } from '../types/api'
 import BugCaseAssociateDialog from './BugCaseAssociateDialog.vue'
 import BugRichTextEditor from './BugRichTextEditor.vue'
 import {
@@ -74,6 +74,9 @@ const activeTab = ref<DrawerTab>('basic')
 const commentText = ref('')
 const descriptionEditing = ref(false)
 const descriptionDraft = ref('')
+const richImagePreviewVisible = ref(false)
+const richImagePreviewUrls = ref<string[]>([])
+const activeRichImagePreviewIndex = ref(0)
 const caseKeyword = ref('')
 const associateDialogVisible = ref(false)
 const basicForm = ref<BasicFormState>({
@@ -127,7 +130,11 @@ const previewUrls = computed(() => imageAttachments.value
     const rawUrl = item.downloadUrl || ''
     return getAuthorizedImageUrl(rawUrl)
   }))
-const descriptionHtml = computed(() => sanitizeRichHtml(props.detail?.description || '', authorizedImageUrls.value))
+const descriptionHtml = computed(() => sanitizeRichHtml(
+  props.detail?.description || '',
+  imageAttachments.value,
+  authorizedImageUrls.value,
+))
 
 const syncingBasicForm = ref(false)
 const basicAutoSaveTimer = ref<ReturnType<typeof setTimeout> | null>(null)
@@ -192,6 +199,9 @@ watch(() => props.modelValue, (value) => {
   if (value) {
     activeTab.value = 'basic'
   }
+  else {
+    closeRichImagePreview()
+  }
 })
 
 watch(
@@ -226,7 +236,10 @@ watch(
     commentText.value = ''
     caseKeyword.value = ''
     descriptionEditing.value = false
-    descriptionDraft.value = detail?.description || ''
+    descriptionDraft.value = normalizeInlineImageSources(
+      detail?.description || '',
+      detail?.attachments ?? [],
+    )
     syncingBasicForm.value = true
     basicForm.value = {
       assigneeId: detail?.assigneeId ?? null,
@@ -257,6 +270,7 @@ watch(
 
 onBeforeUnmount(() => {
   revokeAuthorizedImageUrls()
+  closeRichImagePreview()
 })
 
 function closeDrawer() {
@@ -333,17 +347,59 @@ function submitComment() {
 }
 
 function startDescriptionEdit() {
-  descriptionDraft.value = props.detail?.description || ''
+  descriptionDraft.value = normalizeInlineImageSources(
+    props.detail?.description || '',
+    imageAttachments.value,
+  )
   descriptionEditing.value = true
 }
 
 function cancelDescriptionEdit() {
-  descriptionDraft.value = props.detail?.description || ''
+  descriptionDraft.value = normalizeInlineImageSources(
+    props.detail?.description || '',
+    imageAttachments.value,
+  )
   descriptionEditing.value = false
 }
 
 function submitDescriptionEdit() {
   emit('save-description', descriptionDraft.value)
+}
+
+function handleRichContentClick(event: MouseEvent) {
+  const target = event.target
+  if (!(target instanceof HTMLImageElement)) {
+    return
+  }
+  const container = event.currentTarget
+  if (!(container instanceof HTMLElement)) {
+    return
+  }
+  const images = Array.from(container.querySelectorAll('img'))
+    .map(image => image.getAttribute('data-preview-src') || image.getAttribute('src') || image.currentSrc || '')
+    .filter(Boolean)
+  if (!images.length) {
+    return
+  }
+  const clickedSource = target.getAttribute('data-preview-src') || target.getAttribute('src') || target.currentSrc || ''
+  const clickedIndex = Math.max(0, images.findIndex(source => source === clickedSource))
+  openRichImagePreview(images, clickedIndex)
+}
+
+function openRichImagePreview(urls: string[], initialIndex = 0) {
+  richImagePreviewUrls.value = urls
+  activeRichImagePreviewIndex.value = Math.min(Math.max(initialIndex, 0), Math.max(urls.length - 1, 0))
+  richImagePreviewVisible.value = true
+}
+
+function closeRichImagePreview() {
+  richImagePreviewVisible.value = false
+  richImagePreviewUrls.value = []
+  activeRichImagePreviewIndex.value = 0
+}
+
+function handleRichImagePreviewSwitch(index: number) {
+  activeRichImagePreviewIndex.value = index
 }
 
 async function loadAuthorizedImageUrls(detail: BugDetail) {
@@ -399,11 +455,37 @@ function revokeAuthorizedImageUrls() {
 
 function getAuthorizedImageUrl(downloadUrl: string | null) {
   const rawUrl = downloadUrl || ''
+  if (/^blob:|^data:/i.test(rawUrl)) {
+    return rawUrl
+  }
   const resolvedUrl = resolveApiUrl(rawUrl)
   const matchedUrl = collectImageUrlKeys(rawUrl, resolvedUrl)
     .map(key => authorizedImageUrls.value[key])
     .find(Boolean)
   return matchedUrl || resolvedUrl
+}
+
+function getMatchedAttachmentImageUrl(source: string, attachments: BugAttachment[]) {
+  if (!source) {
+    return ''
+  }
+  return attachments
+    .filter(item => isImageFile(item.contentType, item.fileName) && !!item.downloadUrl)
+    .map((item) => {
+      const downloadUrl = item.downloadUrl || ''
+      const authorizedUrl = getAuthorizedImageUrl(downloadUrl)
+      const resolvedUrl = resolveApiUrl(downloadUrl)
+      return {
+        authorizedUrl,
+        keys: collectImageUrlKeys(
+          downloadUrl,
+          resolvedUrl,
+          authorizedUrl,
+          item.fileName,
+        ),
+      }
+    })
+    .find(item => item.keys.includes(source))?.authorizedUrl || ''
 }
 
 function collectImageUrlKeys(...urls: string[]) {
@@ -423,6 +505,64 @@ function collectImageUrlKeys(...urls: string[]) {
     }
   })
   return Array.from(keys)
+}
+
+function normalizeInlineImageSources(
+  content: string,
+  attachments: BugAttachment[],
+  imageUrlMap?: Record<string, string>,
+) {
+  if (!content.trim()) {
+    return ''
+  }
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(`<div>${content}</div>`, 'text/html')
+  const images = Array.from(doc.body.querySelectorAll('img')) as HTMLImageElement[]
+  const attachmentUrls = attachments
+    .filter(item => isImageFile(item.contentType, item.fileName) && !!item.downloadUrl)
+    .map((item) => {
+      const downloadUrl = item.downloadUrl || ''
+      const resolved = imageUrlMap ? getAuthorizedImageUrl(downloadUrl) : resolveApiUrl(downloadUrl)
+      return resolved || downloadUrl
+    })
+  let attachmentIndex = 0
+  images.forEach((image) => {
+    const source = image.getAttribute('src') || ''
+    const matchedAttachmentSource = getMatchedAttachmentImageUrl(source, attachments)
+    if (matchedAttachmentSource) {
+      image.setAttribute('src', matchedAttachmentSource)
+      image.setAttribute('data-preview-src', matchedAttachmentSource)
+      return
+    }
+
+    const fallbackAttachmentSource = attachmentUrls[attachmentIndex] || ''
+    const looksInlineTemporary = /^blob:|^data:/i.test(source)
+    const looksExternal = /^(https?:\/\/|\/api\/)/i.test(source)
+    if (looksInlineTemporary) {
+      attachmentIndex += 1
+      if (fallbackAttachmentSource) {
+        image.setAttribute('src', fallbackAttachmentSource)
+        image.setAttribute('data-preview-src', fallbackAttachmentSource)
+      }
+      return
+    }
+
+    if (!source || !looksExternal) {
+      if (fallbackAttachmentSource) {
+        attachmentIndex += 1
+        image.setAttribute('src', fallbackAttachmentSource)
+        image.setAttribute('data-preview-src', fallbackAttachmentSource)
+        return
+      }
+    }
+
+    const normalizedSource = source ? getAuthorizedImageUrl(source) : ''
+    if (normalizedSource) {
+      image.setAttribute('src', normalizedSource)
+      image.setAttribute('data-preview-src', normalizedSource)
+    }
+  })
+  return doc.body.innerHTML
 }
 
 function formatAttachmentFileSize(size: number | null) {
@@ -671,12 +811,17 @@ function formatActivityDetail(item: BugActivity) {
   return item.content || '-'
 }
 
-function sanitizeRichHtml(content: string, imageUrlMap: Record<string, string>) {
+function sanitizeRichHtml(
+  content: string,
+  attachments: BugAttachment[],
+  imageUrlMap: Record<string, string>,
+) {
   if (!content.trim()) {
     return '<p class="bug-drawer-empty-text">暂无缺陷内容</p>'
   }
   const parser = new DOMParser()
-  const doc = parser.parseFromString(`<div>${content}</div>`, 'text/html')
+  const normalizedContent = normalizeInlineImageSources(content, attachments, imageUrlMap)
+  const doc = parser.parseFromString(`<div>${normalizedContent}</div>`, 'text/html')
   const allowedTags = new Set([
     'DIV', 'BR', 'P', 'SPAN', 'STRONG', 'B', 'EM', 'I', 'U', 'S', 'MARK',
     'UL', 'OL', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LABEL', 'INPUT', 'IMG',
@@ -717,8 +862,11 @@ function sanitizeRichHtml(content: string, imageUrlMap: Record<string, string>) 
       if (element.tagName === 'INPUT' && ['checked', 'disabled'].includes(attr.name)) {
         return
       }
-      if (element.tagName === 'IMG' && ['src', 'alt', 'title'].includes(attr.name)) {
-        if (attr.name !== 'src' || /^(https?:\/\/|\/api\/)/i.test(attr.value)) {
+      if (element.tagName === 'IMG' && ['src', 'alt', 'title', 'data-preview-src'].includes(attr.name)) {
+        if (
+          !['src', 'data-preview-src'].includes(attr.name)
+          || /^(https?:\/\/|\/api\/|blob:|data:image\/)/i.test(attr.value)
+        ) {
           return
         }
       }
@@ -726,12 +874,19 @@ function sanitizeRichHtml(content: string, imageUrlMap: Record<string, string>) 
     })
     if (element.tagName === 'IMG') {
       const source = element.getAttribute('src')
-      const resolvedSource = source ? resolveApiUrl(source) : ''
-      const authorizedSource = collectImageUrlKeys(source || '', resolvedSource)
-        .map(key => imageUrlMap[key])
-        .find(Boolean)
-      if (authorizedSource) {
-        element.setAttribute('src', authorizedSource)
+      const previewSource = element.getAttribute('data-preview-src')
+      if (source && !/^blob:|^data:/i.test(source)) {
+        const resolvedSource = resolveApiUrl(source)
+        const authorizedSource = collectImageUrlKeys(source, resolvedSource)
+          .map(key => imageUrlMap[key])
+          .find(Boolean)
+        if (authorizedSource) {
+          element.setAttribute('src', authorizedSource)
+          element.setAttribute('data-preview-src', authorizedSource)
+        }
+      }
+      else if (previewSource) {
+        element.setAttribute('data-preview-src', previewSource)
       }
     }
     if (element.tagName === 'INPUT') {
@@ -781,13 +936,14 @@ function sanitizeStyle(value: string) {
 
 <template>
   <el-drawer
-    :model-value="modelValue"
-    :with-header="false"
-    :modal="false"
-    :show-close="false"
-    size="850px"
-    class="ms-bug-detail-drawer"
-    @update:model-value="emit('update:modelValue', $event)"
+      :model-value="modelValue"
+      :with-header="false"
+      append-to-body
+      close-on-click-modal
+      :show-close="false"
+      size="850px"
+      class="ms-bug-detail-drawer"
+      @update:model-value="emit('update:modelValue', $event)"
   >
     <div class="ms-bug-detail-shell">
       <input ref="uploadInput" type="file" multiple class="bug-hidden-input" @change="handleUploadChange">
@@ -937,7 +1093,12 @@ function sanitizeStyle(value: string) {
                   @add-inline-image="emit('add-inline-image', $event)"
                 />
               </div>
-              <div v-else class="ms-bug-rich-content ms-bug-description-surface" v-html="descriptionHtml" />
+              <div
+                v-else
+                class="ms-bug-rich-content ms-bug-description-surface"
+                v-html="descriptionHtml"
+                @click="handleRichContentClick"
+              />
             </div>
 
             <div class="ms-bug-detail-section">
@@ -1134,6 +1295,17 @@ function sanitizeStyle(value: string) {
       :current-case-id="detail?.relatedCaseId ?? null"
       :associating="associatingCase"
       @associate="handleCaseAssociated"
+    />
+
+    <el-image-viewer
+      v-if="richImagePreviewVisible"
+      :url-list="richImagePreviewUrls"
+      :initial-index="activeRichImagePreviewIndex"
+      infinite
+      hide-on-click-modal
+      teleported
+      @close="closeRichImagePreview"
+      @switch="handleRichImagePreviewSwitch"
     />
   </el-drawer>
 </template>
@@ -1595,6 +1767,7 @@ function sanitizeStyle(value: string) {
   border: 1px solid #e4e7ec;
   border-radius: 6px;
   object-fit: contain;
+  cursor: zoom-in;
 }
 
 .ms-bug-rich-content :deep(.bug-drawer-empty-text) {

@@ -2,12 +2,13 @@
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, CopyDocument, Edit, Link, Paperclip, Promotion } from '@element-plus/icons-vue'
-import type { BugDetail } from '../types/api'
+import type { BugAttachment, BugDetail } from '../types/api'
 import BugActivityTimeline from './BugActivityTimeline.vue'
 import BugAttachmentPanel from './BugAttachmentPanel.vue'
 import BugQuickActionsPanel from './BugQuickActionsPanel.vue'
 import BugSourceContextCard from './BugSourceContextCard.vue'
-import { formatBugDateTime, formatBugSeverity, formatBugSourceType, formatBugStatus } from '../utils/bugPresentation'
+import { formatBugDateTime, formatBugSeverity, formatBugSourceType, formatBugStatus, isImageFile } from '../utils/bugPresentation'
+import { resolveApiUrl } from '../api/platform'
 
 const props = withDefaults(defineProps<{
   detail: BugDetail
@@ -48,7 +49,7 @@ const emit = defineEmits<{
 
 const uploadInput = ref<HTMLInputElement | null>(null)
 const quickActionsRef = ref<HTMLElement | null>(null)
-const descriptionHtml = computed(() => sanitizeRichHtml(props.detail.description || ''))
+const descriptionHtml = computed(() => sanitizeRichHtml(props.detail.description || '', props.detail.attachments))
 const basicInfoText = {
   workspace: '\u6240\u5c5e\u7a7a\u95f4',
   assignee: '\u5904\u7406\u4eba',
@@ -89,12 +90,42 @@ function scrollToQuickActions() {
   quickActionsRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
-function sanitizeRichHtml(content: string) {
+function normalizeInlineImageSources(content: string, attachments: BugAttachment[]) {
+  if (!content.trim()) {
+    return ''
+  }
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(`<div>${content}</div>`, 'text/html')
+  const images = Array.from(doc.body.querySelectorAll('img')) as HTMLImageElement[]
+  const attachmentUrls = attachments
+    .filter(item => isImageFile(item.contentType, item.fileName) && !!item.downloadUrl)
+    .map(item => resolveApiUrl(item.downloadUrl || ''))
+  let attachmentIndex = 0
+  images.forEach((image) => {
+    const source = image.getAttribute('src') || ''
+    if (/^blob:|^data:/i.test(source)) {
+      const replacement = attachmentUrls[attachmentIndex]
+      attachmentIndex += 1
+      if (replacement) {
+        image.setAttribute('src', replacement)
+      }
+      return
+    }
+    const resolved = resolveApiUrl(source)
+    if (resolved && resolved !== source) {
+      image.setAttribute('src', resolved)
+    }
+  })
+  return doc.body.innerHTML
+}
+
+function sanitizeRichHtml(content: string, attachments: BugAttachment[]) {
   if (!content.trim()) {
     return '<p class="bug-detail-description-empty">暂无缺陷描述</p>'
   }
   const parser = new DOMParser()
-  const doc = parser.parseFromString(`<div>${content}</div>`, 'text/html')
+  const normalizedContent = normalizeInlineImageSources(content, attachments)
+  const doc = parser.parseFromString(`<div>${normalizedContent}</div>`, 'text/html')
   const allowedTags = new Set([
     'DIV', 'BR', 'P', 'SPAN', 'STRONG', 'B', 'EM', 'I', 'U', 'S', 'MARK',
     'UL', 'OL', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LABEL', 'INPUT', 'IMG',

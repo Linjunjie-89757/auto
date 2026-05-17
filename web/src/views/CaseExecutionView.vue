@@ -60,6 +60,7 @@ const bugCommenting = ref(false)
 const bugBasicSaving = ref(false)
 const bugDescriptionSaving = ref(false)
 const bugCaseAssociating = ref(false)
+const bugTitleSaving = ref(false)
 const bugAttachmentUploading = ref(false)
 const bugAttachmentRemovingId = ref<number | null>(null)
 const pendingBugInlineImages = ref<PendingInlineImage[]>([])
@@ -184,6 +185,13 @@ const associatedBugs = computed(() => {
     return []
   }
   return relatedBugs.value.filter(item => item.relatedCaseId === currentCaseId.value)
+})
+const activeRelatedBugIndex = computed(() => {
+  if (!activeBugDetail.value) {
+    return null
+  }
+  const index = associatedBugs.value.findIndex(item => item.id === activeBugDetail.value?.id)
+  return index >= 0 ? index : null
 })
 const bugStatusLabelMap: Record<string, string> = {
   TODO: '待处理',
@@ -585,6 +593,18 @@ async function openBugDetailDrawer(bugId: number) {
   }
 }
 
+async function navigateRelatedBug(step: -1 | 1) {
+  const currentIndex = activeRelatedBugIndex.value
+  if (currentIndex === null) {
+    return
+  }
+  const target = associatedBugs.value[currentIndex + step]
+  if (!target) {
+    return
+  }
+  await openBugDetailDrawer(target.id)
+}
+
 async function associateBug(bugIds: number[]) {
   if (!currentCaseId.value || !detail.value) {
     return
@@ -949,6 +969,34 @@ async function saveBugDescription(content: string) {
   }
   finally {
     bugDescriptionSaving.value = false
+  }
+}
+
+async function saveBugTitle(title: string) {
+  if (!detail.value || !activeBugDetail.value) {
+    return
+  }
+  bugTitleSaving.value = true
+  try {
+    activeBugDetail.value = await platformApi.updateBug(
+      detail.value.workspaceCode,
+      activeBugDetail.value.id,
+      {
+        ...buildDescriptionUpdatePayload(activeBugDetail.value),
+        title,
+      },
+    )
+    relatedBugDetails.value = {
+      ...relatedBugDetails.value,
+      [activeBugDetail.value.id]: activeBugDetail.value,
+    }
+    await loadRelatedBugs(currentCaseId.value ?? detail.value.id, detail.value.workspaceCode)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    bugTitleSaving.value = false
   }
 }
 
@@ -1893,6 +1941,9 @@ onUnmounted(() => {
     :detail="activeBugDetail"
     :summary="bugDetailSummary"
     :loading="bugDetailLoading"
+    :current-index="activeRelatedBugIndex"
+    :total-count="associatedBugs.length"
+    :title-saving="bugTitleSaving"
     :users="bugAssigneeOptions"
     :basic-saving="bugBasicSaving"
     :description-saving="bugDescriptionSaving"
@@ -1905,7 +1956,10 @@ onUnmounted(() => {
     @add-inline-image="addPendingBugInlineImage"
     @edit="openEditBugDrawer"
     @save-basic="saveBugBasic"
+    @save-title="saveBugTitle"
     @save-description="saveBugDescription"
+    @navigate-prev="navigateRelatedBug(-1)"
+    @navigate-next="navigateRelatedBug(1)"
     @associate-case="associateBugCase"
     @unlink-case="unlinkActiveBugCase"
     @upload-attachments="uploadBugAttachments"

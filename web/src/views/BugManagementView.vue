@@ -72,6 +72,7 @@ const drawerAttachmentRemovingId = ref<number | null>(null)
 const drawerBasicSaving = ref(false)
 const drawerCaseAssociating = ref(false)
 const drawerDescriptionSaving = ref(false)
+const drawerTitleSaving = ref(false)
 const pendingDrawerInlineImages = ref<PendingInlineImage[]>([])
 
 const bugFilters = reactive({
@@ -241,6 +242,13 @@ const pagedBugs = computed(() => {
   const start = (pageNo.value - 1) * pageSize.value
   return filteredBugs.value.slice(start, start + pageSize.value)
 })
+const activeDrawerBugIndex = computed(() => {
+  if (!detail.value) {
+    return null
+  }
+  const index = pagedBugs.value.findIndex(item => item.id === detail.value?.id)
+  return index >= 0 ? index : null
+})
 
 const visibleColumns = computed(() => bugListToolbar.visibleColumns.value
   .map(column => bugColumnSettings.find(item => item.key === column.key))
@@ -406,6 +414,18 @@ async function submitDrawerComment(content: string) {
   }
 }
 
+async function navigateDrawerBug(step: -1 | 1) {
+  const currentIndex = activeDrawerBugIndex.value
+  if (currentIndex === null) {
+    return
+  }
+  const target = pagedBugs.value[currentIndex + step]
+  if (!target) {
+    return
+  }
+  await openDetail(target.id)
+}
+
 function addPendingDrawerInlineImage(payload: PendingInlineImage) {
   pendingDrawerInlineImages.value = [...pendingDrawerInlineImages.value, payload]
 }
@@ -484,6 +504,33 @@ async function saveDrawerDescription(content: string) {
   }
   finally {
     drawerDescriptionSaving.value = false
+  }
+}
+
+async function saveDrawerTitle(title: string) {
+  if (!detail.value) {
+    return
+  }
+  drawerTitleSaving.value = true
+  try {
+    detail.value = await platformApi.updateBug(detail.value.workspaceCode, detail.value.id, {
+      workspaceCode: detail.value.workspaceCode,
+      title,
+      description: detail.value.description,
+      priority: detail.value.priority,
+      severity: detail.value.severity,
+      assigneeId: detail.value.assigneeId,
+      relatedCaseId: detail.value.relatedCaseId,
+      tags: detail.value.tags,
+    })
+    ElMessage.success('缺陷标题已更新')
+    await loadBaseData()
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    drawerTitleSaving.value = false
   }
 }
 
@@ -883,8 +930,12 @@ onMounted(() => {
     <BugDetailDrawer
       v-model="drawerVisible"
       :detail="detail"
+      default-tab="detail"
       :users="users"
       :loading="detailLoading"
+      :current-index="activeDrawerBugIndex"
+      :total-count="pagedBugs.length"
+      :title-saving="drawerTitleSaving"
       :basic-saving="drawerBasicSaving"
       :description-saving="drawerDescriptionSaving"
       :associating-case="drawerCaseAssociating"
@@ -894,8 +945,11 @@ onMounted(() => {
       :attachment-removing-id="drawerAttachmentRemovingId"
       :can-write="true"
       @save-basic="saveDrawerBasic"
+      @save-title="saveDrawerTitle"
       @add-inline-image="addPendingDrawerInlineImage"
       @save-description="saveDrawerDescription"
+      @navigate-prev="navigateDrawerBug(-1)"
+      @navigate-next="navigateDrawerBug(1)"
       @associate-case="associateDrawerCase"
       @unlink-case="unlinkDrawerCase"
       @transition="submitDrawerTransition"

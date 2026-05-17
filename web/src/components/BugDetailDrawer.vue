@@ -1,7 +1,7 @@
 ﻿<script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Close, Edit, EditPen, Link, MoreFilled, Paperclip } from '@element-plus/icons-vue'
+import { ArrowLeftBold, ArrowRightBold, Close, Edit, EditPen, Link, MoreFilled, Paperclip } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import type { BugActivity, BugAttachment, BugDetail, BugSummary, UpdateBugPayload, UserItem } from '../types/api'
 import BugCaseAssociateDialog from './BugCaseAssociateDialog.vue'
@@ -29,6 +29,10 @@ const props = withDefaults(defineProps<{
   attachmentUploading?: boolean
   attachmentRemovingId?: number | null
   canWrite?: boolean
+  currentIndex?: number | null
+  totalCount?: number
+  titleSaving?: boolean
+  defaultTab?: DrawerTab
 }>(), {
   summary: null,
   users: () => [],
@@ -42,6 +46,10 @@ const props = withDefaults(defineProps<{
   attachmentUploading: false,
   attachmentRemovingId: null,
   canWrite: false,
+  currentIndex: null,
+  totalCount: 0,
+  titleSaving: false,
+  defaultTab: 'basic',
 })
 
 const emit = defineEmits<{
@@ -52,11 +60,14 @@ const emit = defineEmits<{
   (event: 'save-description', content: string): void
   (event: 'add-inline-image', payload: { file: File, src: string }): void
   (event: 'save-basic', payload: UpdateBugPayload): void
+  (event: 'save-title', title: string): void
   (event: 'associate-case', caseId: number): void
   (event: 'unlink-case'): void
   (event: 'upload-attachments', files: File[]): void
   (event: 'download-attachment', attachmentId: number): void
   (event: 'remove-attachment', attachmentId: number): void
+  (event: 'navigate-prev'): void
+  (event: 'navigate-next'): void
 }>()
 
 type DrawerTab = 'basic' | 'detail' | 'case' | 'comment' | 'history'
@@ -70,8 +81,11 @@ type BasicFormState = {
 
 const router = useRouter()
 const uploadInput = ref<HTMLInputElement | null>(null)
+const titleInput = ref<{ input?: HTMLInputElement } | null>(null)
 const activeTab = ref<DrawerTab>('basic')
 const commentText = ref('')
+const titleEditing = ref(false)
+const titleDraft = ref('')
 const descriptionEditing = ref(false)
 const descriptionDraft = ref('')
 const richImagePreviewVisible = ref(false)
@@ -174,6 +188,12 @@ const descriptionEditorMinHeight = computed(() => {
   return displayLineCount * descriptionEditorLineHeight + descriptionEditorVerticalPadding
 })
 
+const hasRecordNavigation = computed(() => (props.totalCount || 0) > 1 && props.currentIndex !== null)
+const canNavigatePrev = computed(() => hasRecordNavigation.value && (props.currentIndex || 0) > 0)
+const canNavigateNext = computed(() => hasRecordNavigation.value && (props.currentIndex || 0) < (props.totalCount || 0) - 1)
+const displayTitle = computed(() => props.detail?.title || props.summary?.title || '未命名缺陷')
+const displayPriority = computed(() => props.detail?.priority || '')
+
 const caseRows = computed(() => {
   const summary = props.detail?.sourceContext.caseSummary
   if (!summary) {
@@ -197,7 +217,7 @@ const caseRows = computed(() => {
 
 watch(() => props.modelValue, (value) => {
   if (value) {
-    activeTab.value = 'basic'
+    activeTab.value = props.defaultTab
   }
   else {
     closeRichImagePreview()
@@ -235,6 +255,8 @@ watch(
   (detail) => {
     commentText.value = ''
     caseKeyword.value = ''
+    titleEditing.value = false
+    titleDraft.value = detail?.title || ''
     descriptionEditing.value = false
     descriptionDraft.value = normalizeInlineImageSources(
       detail?.description || '',
@@ -256,6 +278,16 @@ watch(
   { immediate: true },
 )
 
+watch(titleEditing, (editing) => {
+  if (!editing) {
+    return
+  }
+  nextTick(() => {
+    titleInput.value?.input?.focus()
+    titleInput.value?.input?.select()
+  })
+})
+
 watch(
   () => props.detail,
   (detail) => {
@@ -275,6 +307,35 @@ onBeforeUnmount(() => {
 
 function closeDrawer() {
   emit('update:modelValue', false)
+}
+
+function startTitleEdit() {
+  if (!props.canWrite || !props.detail || props.titleSaving) {
+    return
+  }
+  titleDraft.value = props.detail.title || ''
+  titleEditing.value = true
+}
+
+function cancelTitleEdit() {
+  titleDraft.value = props.detail?.title || ''
+  titleEditing.value = false
+}
+
+function submitTitleEdit() {
+  const nextTitle = titleDraft.value.trim()
+  if (!props.detail) {
+    return
+  }
+  if (!nextTitle) {
+    ElMessage.warning('请输入缺陷标题')
+    return
+  }
+  if (nextTitle === props.detail.title) {
+    titleEditing.value = false
+    return
+  }
+  emit('save-title', nextTitle)
 }
 
 function requestUpload() {
@@ -950,9 +1011,36 @@ function sanitizeStyle(value: string) {
 
       <div class="ms-bug-detail-topbar">
         <div class="ms-bug-detail-title-wrap">
-          <div class="ms-bug-detail-object-line">
+          <el-input
+            v-if="titleEditing"
+            ref="titleInput"
+            v-model.trim="titleDraft"
+            maxlength="255"
+            class="ms-bug-detail-title-input ms-bug-detail-title-input-full"
+            placeholder="请输入缺陷标题"
+            @blur="submitTitleEdit"
+            @keydown.enter.prevent="submitTitleEdit"
+            @keydown.esc.prevent="cancelTitleEdit"
+          />
+          <div v-else class="ms-bug-detail-object-line">
+            <el-tag v-if="displayPriority" effect="plain" size="small" class="ms-bug-detail-priority-tag">
+              {{ displayPriority }}
+            </el-tag>
             <span class="ms-bug-detail-object-no">{{ detail?.bugNo || summary?.bugNo || '-' }}</span>
-            <span class="ms-bug-detail-object-name">{{ detail?.title || summary?.title || '未命名缺陷' }}</span>
+            <el-tooltip
+              :content="displayTitle"
+              placement="bottom-start"
+              :show-after="250"
+              popper-class="ms-bug-detail-title-tooltip"
+            >
+              <button
+                type="button"
+                :class="['ms-bug-detail-object-name', { 'is-clickable': canWrite }]"
+                @click="startTitleEdit"
+              >
+                {{ displayTitle }}
+              </button>
+            </el-tooltip>
             <el-tag v-if="detail" effect="plain" size="small" class="ms-bug-detail-status-tag">
               {{ formatBugStatus(detail.status) }}
             </el-tag>
@@ -960,17 +1048,39 @@ function sanitizeStyle(value: string) {
         </div>
 
         <div class="ms-bug-detail-top-actions">
-          <el-button text :icon="Edit" @click="emit('edit')">编辑</el-button>
-          <el-button text :icon="Link" @click="copyShareLink">分享</el-button>
-          <el-dropdown trigger="click" placement="bottom-end">
-            <el-button text :icon="MoreFilled">更多</el-button>
-            <template #dropdown>
-              <el-dropdown-menu class="ms-bug-detail-more-menu">
-                <el-dropdown-item @click="copyBugStylePlaceholder">复制</el-dropdown-item>
-                <el-dropdown-item class="is-danger" @click="deleteBugStylePlaceholder">删除</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <div v-if="hasRecordNavigation && !titleEditing" class="ms-bug-detail-record-nav" aria-label="缺陷切换">
+            <el-tooltip content="上一条缺陷" placement="bottom">
+              <el-button
+                text
+                class="ms-bug-detail-nav-button"
+                :icon="ArrowLeftBold"
+                :disabled="!canNavigatePrev"
+                @click="emit('navigate-prev')"
+              />
+            </el-tooltip>
+            <el-tooltip content="下一条缺陷" placement="bottom">
+              <el-button
+                text
+                class="ms-bug-detail-nav-button"
+                :icon="ArrowRightBold"
+                :disabled="!canNavigateNext"
+                @click="emit('navigate-next')"
+              />
+            </el-tooltip>
+          </div>
+          <template v-if="!titleEditing">
+            <el-button text :icon="Edit" @click="emit('edit')">编辑</el-button>
+            <el-button text :icon="Link" @click="copyShareLink">分享</el-button>
+            <el-dropdown trigger="click" placement="bottom-end">
+              <el-button text :icon="MoreFilled">更多</el-button>
+              <template #dropdown>
+                <el-dropdown-menu class="ms-bug-detail-more-menu">
+                  <el-dropdown-item @click="copyBugStylePlaceholder">复制</el-dropdown-item>
+                  <el-dropdown-item class="is-danger" @click="deleteBugStylePlaceholder">删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </template>
           <el-button text class="ms-bug-detail-close" :icon="Close" @click="closeDrawer" />
         </div>
       </div>
@@ -1311,6 +1421,29 @@ function sanitizeStyle(value: string) {
 </template>
 
 <style scoped>
+:global(.ms-bug-detail-title-tooltip) {
+  max-width: 360px;
+  font-size: 18px !important;
+  font-weight: 600;
+  line-height: 1.6 !important;
+}
+
+:global(.ms-bug-detail-title-tooltip .el-tooltip__content) {
+  white-space: normal;
+  word-break: break-word;
+  font-size: 18px !important;
+  font-weight: 600;
+  line-height: 1.6 !important;
+}
+
+:global(.ms-bug-detail-title-tooltip .el-popper__inner) {
+  font-size: 18px !important;
+  font-weight: 600;
+  line-height: 1.6 !important;
+  white-space: normal;
+  word-break: break-word;
+}
+
 .bug-hidden-input {
   display: none;
 }
@@ -1346,10 +1479,11 @@ function sanitizeStyle(value: string) {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  flex-wrap: wrap;
+  white-space: nowrap;
 }
 
 .ms-bug-detail-object-no {
+  flex: 0 0 auto;
   color: #175cd3;
   font-size: 14px;
   font-weight: 600;
@@ -1358,11 +1492,53 @@ function sanitizeStyle(value: string) {
 
 .ms-bug-detail-object-name {
   min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  border: 0;
+  padding: 4px 6px;
+  background: transparent;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #101828;
   font-size: 18px;
   font-weight: 600;
   line-height: 1.5;
-  word-break: break-word;
+  cursor: default;
+}
+
+.ms-bug-detail-object-name.is-clickable {
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.ms-bug-detail-object-name.is-clickable:hover,
+.ms-bug-detail-object-name.is-clickable:focus-visible {
+  color: #175cd3;
+  background: #eff8ff;
+  outline: none;
+}
+
+.ms-bug-detail-title-input {
+  min-width: 0;
+  flex: 1;
+  max-width: 100%;
+}
+
+.ms-bug-detail-title-input-full {
+  width: 100%;
+}
+
+.ms-bug-detail-title-input :deep(.el-input__wrapper) {
+  border-radius: 6px;
+  min-height: 36px;
+}
+
+.ms-bug-detail-priority-tag {
+  flex: 0 0 auto;
+  --el-tag-border-color: #fec84b;
+  --el-tag-text-color: #b54708;
+  --el-tag-bg-color: #fffaeb;
 }
 
 .ms-bug-detail-status-tag,
@@ -1377,6 +1553,22 @@ function sanitizeStyle(value: string) {
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
+  min-width: 0;
+}
+
+.ms-bug-detail-record-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 12px;
+  padding-right: 12px;
+  border-right: 1px solid #e4e7ec;
+}
+
+.ms-bug-detail-nav-button {
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
 }
 
 .ms-bug-detail-top-actions :deep(.el-button) {
@@ -2039,6 +2231,16 @@ function sanitizeStyle(value: string) {
   .ms-bug-history-item,
   .ms-bug-case-toolbar {
     flex-direction: column;
+  }
+
+  .ms-bug-detail-record-nav {
+    margin-right: 0;
+    padding-right: 0;
+    border-right: 0;
+  }
+
+  .ms-bug-detail-object-line {
+    width: 100%;
   }
 
   .ms-bug-basic-row,

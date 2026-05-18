@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import {
+  Fold,
+  Folder,
+  FolderOpened,
   Plus,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -41,11 +44,13 @@ type RequestEditorTab = {
 
 type DefinitionDirectoryTreeNode = {
   key: string
-  type: 'root' | 'workspace' | 'module' | 'unassigned'
+  type: 'root' | 'workspace' | 'module' | 'unassigned' | 'request'
   label: string
   workspaceCode: string
   fullPath: string | null
   count: number
+  definitionId: number | null
+  method: string | null
   children: DefinitionDirectoryTreeNode[]
 }
 
@@ -59,6 +64,7 @@ const loading = ref(false)
 const saving = ref(false)
 const reportDrawerVisible = ref(false)
 const bugDialogVisible = ref(false)
+const definitionSaveDialogVisible = ref(false)
 const activeTab = ref<'definitions' | 'scenarios' | 'execution' | 'reports' | 'settings'>('definitions')
 const activeRequestTab = ref<'params' | 'headers' | 'body' | 'auth' | 'tests' | 'extract' | 'settings' | 'rest'>('params')
 const responsePreviewTab = ref<'body' | 'headers' | 'assertions' | 'extractions' | 'history'>('body')
@@ -83,10 +89,19 @@ const requestEditorTabs = ref<RequestEditorTab[]>([])
 const activeRequestEditorKey = ref('')
 const requestEditorSyncing = ref(false)
 const selectedDefinitionTreeKey = ref(DEFINITION_TREE_ROOT_KEY)
+const definitionTreeRenderKey = ref(0)
+const expandedDefinitionTreeKeys = ref<string[]>([DEFINITION_TREE_ROOT_KEY])
 
 const definitionFilters = reactive({
   keyword: '',
   directory: '',
+})
+
+const definitionSaveForm = reactive({
+  workspaceCode: '',
+  name: '',
+  path: '',
+  directoryName: '',
 })
 
 const scenarioFilters = reactive({
@@ -217,6 +232,21 @@ const definitionOptions = computed(() => definitions.value.map(item => ({
   label: `${item.method} ${item.name}`,
   value: item.id,
 })))
+const draftDefinitionDirectories = computed(() => requestEditorTabs.value
+  .map(item => ({
+    workspaceCode: item.draft.workspaceCode,
+    directoryName: (item.draft.directoryName || '').trim(),
+  }))
+  .filter(item => !!item.workspaceCode && !!item.directoryName))
+const definitionKeywordFilteredItems = computed(() => definitions.value.filter((item) => {
+  const keyword = definitionFilters.keyword.trim().toLowerCase()
+  if (!keyword) {
+    return true
+  }
+  return item.name.toLowerCase().includes(keyword)
+    || item.path.toLowerCase().includes(keyword)
+    || (item.description || '').toLowerCase().includes(keyword)
+}))
 
 const selectedDefinitionTreeNode = computed(() => {
   const walk = (nodes: DefinitionDirectoryTreeNode[]): DefinitionDirectoryTreeNode | null => {
@@ -238,19 +268,41 @@ const selectedDefinitionWorkspaceCode = computed(() => {
   return code || defaultEditableWorkspaceCode()
 })
 const selectedDefinitionModulePath = computed(() => {
-  return selectedDefinitionTreeNode.value?.type === 'module' ? (selectedDefinitionTreeNode.value.fullPath ?? '') : ''
+  return selectedDefinitionTreeNode.value?.type === 'module' || selectedDefinitionTreeNode.value?.type === 'request'
+    ? (selectedDefinitionTreeNode.value.fullPath ?? '')
+    : ''
 })
+function getDefinitionWorkspaceName(targetWorkspaceCode: string) {
+  return workspaces.value.find(item => item.code === targetWorkspaceCode)?.name ?? targetWorkspaceCode
+}
 
-const filteredDefinitions = computed(() => definitions.value.filter((item) => {
-  const keyword = definitionFilters.keyword.trim().toLowerCase()
-  if (keyword) {
-    const matched = item.name.toLowerCase().includes(keyword)
-      || item.path.toLowerCase().includes(keyword)
-      || (item.description || '').toLowerCase().includes(keyword)
-    if (!matched) {
-      return false
+function getDefinitionWorkspaceModuleOptions(targetWorkspaceCode: string) {
+  const result: Array<{ label: string, value: string }> = []
+  const walk = (nodes: DefinitionDirectoryTreeNode[]) => {
+    for (const node of nodes) {
+      if (node.type === 'module' && node.workspaceCode === targetWorkspaceCode && node.fullPath) {
+        result.push({ label: node.fullPath, value: node.fullPath })
+      }
+      if (node.children.length) {
+        walk(node.children)
+      }
     }
   }
+  walk(definitionDirectoryTree.value)
+  return result
+}
+
+const selectedDefinitionWorkspaceModules = computed(() => {
+  const targetWorkspaceCode = definitionSaveForm.workspaceCode || definitionForm.workspaceCode || selectedDefinitionWorkspaceCode.value
+  return targetWorkspaceCode ? getDefinitionWorkspaceModuleOptions(targetWorkspaceCode) : []
+})
+
+const selectedDefinitionWorkspaceRootLabel = computed(() => {
+  const targetWorkspaceCode = definitionSaveForm.workspaceCode || definitionForm.workspaceCode || selectedDefinitionWorkspaceCode.value
+  return targetWorkspaceCode ? getDefinitionWorkspaceName(targetWorkspaceCode) : '空间根目录'
+})
+
+const filteredDefinitions = computed(() => definitionKeywordFilteredItems.value.filter((item) => {
   const selectedNode = selectedDefinitionTreeNode.value
   if (selectedNode?.type === 'workspace' && item.workspaceCode !== selectedNode.workspaceCode) {
     return false
@@ -270,11 +322,26 @@ const filteredDefinitions = computed(() => definitions.value.filter((item) => {
       return false
     }
   }
+  if (selectedNode?.type === 'request') {
+    return item.id === selectedNode.definitionId
+  }
   return true
 }))
 
 const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
-  type MutableNode = DefinitionDirectoryTreeNode & { childMap: Map<string, MutableNode> }
+  type MutableNode = DefinitionDirectoryTreeNode & { childMap?: Map<string, MutableNode> }
+  const directoryItems = [
+    ...definitionKeywordFilteredItems.value.map(item => ({
+      workspaceCode: item.workspaceCode,
+      directoryName: (item.directoryName || '').trim(),
+      countWeight: 1,
+    })),
+    ...draftDefinitionDirectories.value.map(item => ({
+      workspaceCode: item.workspaceCode,
+      directoryName: item.directoryName,
+      countWeight: 0,
+    })),
+  ]
   const workspaceCodes = isAllScope.value
     ? workspaces.value.map(item => item.code)
     : [workspaceCode.value]
@@ -287,11 +354,14 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
       workspaceCode: code,
       fullPath: null,
       count: 0,
+      definitionId: null,
+      method: null,
       children: [],
       childMap: new Map<string, MutableNode>(),
     }
   })
   const workspaceMap = new Map(workspaceNodes.map(item => [item.workspaceCode, item]))
+  const unassignedRequestMap = new Map<string, MutableNode[]>()
   const ensureNode = (
     parentChildren: MutableNode[],
     parentMap: Map<string, MutableNode>,
@@ -308,6 +378,8 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
         workspaceCode,
         fullPath,
         count: 0,
+        definitionId: null,
+        method: null,
         children: [],
         childMap: new Map(),
       }
@@ -316,49 +388,98 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
     }
     return node
   }
-  for (const item of definitions.value) {
+  for (const item of directoryItems) {
     const workspaceNode = workspaceMap.get(item.workspaceCode)
     if (!workspaceNode) {
       continue
     }
-    workspaceNode.count += 1
     const path = (item.directoryName || '').trim()
     if (!path) {
+      workspaceNode.count += item.countWeight
       continue
     }
+    workspaceNode.count += item.countWeight
     const segments = path.split('/').map(part => part.trim()).filter(Boolean)
     let currentChildren = workspaceNode.children as MutableNode[]
-    let currentMap = workspaceNode.childMap
+    let currentMap = workspaceNode.childMap ?? new Map<string, MutableNode>()
     let assembled = ''
     for (const segment of segments) {
       assembled = assembled ? `${assembled}/${segment}` : segment
       const node = ensureNode(currentChildren, currentMap, item.workspaceCode, segment, assembled)
-      node.count += 1
+      node.count += item.countWeight
       currentChildren = node.children as MutableNode[]
-      currentMap = node.childMap
+      currentMap = node.childMap ?? new Map<string, MutableNode>()
     }
   }
-  const stripChildMap = (nodes: MutableNode[]): DefinitionDirectoryTreeNode[] => nodes.map(node => ({
-    key: node.key,
-    type: node.type,
-    label: node.label,
-    workspaceCode: node.workspaceCode,
-    fullPath: node.fullPath,
-    count: node.count,
-    children: stripChildMap(node.children as MutableNode[]),
-  }))
+  for (const item of definitionKeywordFilteredItems.value) {
+    const workspaceNode = workspaceMap.get(item.workspaceCode)
+    if (!workspaceNode) {
+      continue
+    }
+    const path = (item.directoryName || '').trim()
+    const requestNode: MutableNode = {
+      key: `definition-request:${item.id}`,
+      type: 'request',
+      label: item.name,
+      workspaceCode: item.workspaceCode,
+      fullPath: path || null,
+      count: 0,
+      definitionId: item.id,
+      method: item.method,
+      children: [],
+    }
+    if (!path) {
+      const current = unassignedRequestMap.get(item.workspaceCode) ?? []
+      current.push(requestNode)
+      unassignedRequestMap.set(item.workspaceCode, current)
+      continue
+    }
+    let parentChildren = workspaceNode.children as MutableNode[]
+    let parentMap = workspaceNode.childMap ?? new Map<string, MutableNode>()
+    const segments = path.split('/').map(part => part.trim()).filter(Boolean)
+    let assembled = ''
+    for (const segment of segments) {
+      assembled = assembled ? `${assembled}/${segment}` : segment
+      const node = ensureNode(parentChildren, parentMap, item.workspaceCode, segment, assembled)
+      parentChildren = node.children as MutableNode[]
+      parentMap = node.childMap ?? new Map<string, MutableNode>()
+    }
+    parentChildren.push(requestNode)
+  }
+  const stripChildMap = (nodes: MutableNode[]): DefinitionDirectoryTreeNode[] => nodes
+    .sort((left, right) => {
+      const leftOrder = left.type === 'request' ? 1 : 0
+      const rightOrder = right.type === 'request' ? 1 : 0
+      if (leftOrder !== rightOrder) {
+        return leftOrder - rightOrder
+      }
+      return left.label.localeCompare(right.label, 'zh-CN')
+    })
+    .map(node => ({
+      key: node.key,
+      type: node.type,
+      label: node.label,
+      workspaceCode: node.workspaceCode,
+      fullPath: node.fullPath,
+      count: node.count,
+      definitionId: node.definitionId,
+      method: node.method,
+      children: stripChildMap(node.children as MutableNode[]),
+    }))
   const workspaceTrees = workspaceNodes.map((workspaceNode) => {
-    const unassignedCount = definitions.value.filter(item => item.workspaceCode === workspaceNode.workspaceCode && !(item.directoryName || '').trim()).length
+    const unassignedRequests = unassignedRequestMap.get(workspaceNode.workspaceCode) ?? []
     const children = stripChildMap(workspaceNode.children as MutableNode[])
-    if (unassignedCount) {
+    if (unassignedRequests.length) {
       children.push({
         key: `${DEFINITION_TREE_UNASSIGNED_KEY}:${workspaceNode.workspaceCode}`,
         type: 'unassigned',
-        label: '未规划请求',
+        label: '\u672a\u89c4\u5212\u8bf7\u6c42',
         workspaceCode: workspaceNode.workspaceCode,
         fullPath: null,
-        count: unassignedCount,
-        children: [],
+        count: unassignedRequests.length,
+        definitionId: null,
+        method: null,
+        children: stripChildMap(unassignedRequests),
       })
     }
     return {
@@ -368,19 +489,75 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
       workspaceCode: workspaceNode.workspaceCode,
       fullPath: null,
       count: workspaceNode.count,
+      definitionId: null,
+      method: null,
       children,
     }
   })
   return [{
     key: DEFINITION_TREE_ROOT_KEY,
     type: 'root',
-    label: '请求目录',
+    label: '\u8bf7\u6c42\u76ee\u5f55',
     workspaceCode: isAllScope.value ? 'ALL' : workspaceCode.value,
     fullPath: null,
-    count: definitions.value.length,
+    count: definitionKeywordFilteredItems.value.length,
+    definitionId: null,
+    method: null,
     children: workspaceTrees,
   }]
 })
+
+function flattenDefinitionTreeNodes(nodes: DefinitionDirectoryTreeNode[]): DefinitionDirectoryTreeNode[] {
+  const result: DefinitionDirectoryTreeNode[] = []
+  const stack = [...nodes]
+  while (stack.length) {
+    const current = stack.shift()
+    if (!current) {
+      continue
+    }
+    result.push(current)
+    if (current.children.length) {
+      stack.unshift(...current.children)
+    }
+  }
+  return result
+}
+
+const flatDefinitionTreeNodes = computed(() => flattenDefinitionTreeNodes(definitionDirectoryTree.value))
+
+function findDefinitionTreeNode(targetKey: string) {
+  return flatDefinitionTreeNodes.value.find(node => node.key === targetKey) ?? null
+}
+
+function collectDefinitionDescendantKeys(node: DefinitionDirectoryTreeNode) {
+  const keys: string[] = []
+  const stack = [...node.children]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    keys.push(current.key)
+    stack.push(...current.children)
+  }
+  return keys
+}
+
+function collectDefinitionExpandableKeys(nodes: DefinitionDirectoryTreeNode[]) {
+  const keys: string[] = []
+  const stack = [...nodes]
+  while (stack.length) {
+    const current = stack.shift()
+    if (!current) {
+      continue
+    }
+    if (current.children.length) {
+      keys.push(current.key)
+      stack.unshift(...current.children)
+    }
+  }
+  return keys
+}
 
 const filteredScenarios = computed(() => scenarios.value.filter((item) => {
   const keyword = scenarioFilters.keyword.trim().toLowerCase()
@@ -476,6 +653,30 @@ watch(filteredScenarios, (items) => {
   }
 })
 
+watch(
+  () => definitionSaveForm.workspaceCode,
+  (workspace) => {
+    if (!workspace) {
+      definitionSaveForm.directoryName = ''
+      return
+    }
+    const validDirectories = new Set(getDefinitionWorkspaceModuleOptions(workspace).map(item => item.value))
+    if (definitionSaveForm.directoryName && !validDirectories.has(definitionSaveForm.directoryName)) {
+      definitionSaveForm.directoryName = ''
+    }
+  },
+)
+
+watch(definitionDirectoryTree, (tree) => {
+  const available = new Set(collectDefinitionExpandableKeys(tree))
+  const nextKeys = expandedDefinitionTreeKeys.value.filter(key => available.has(key))
+  if (!nextKeys.length && tree.length) {
+    syncDefinitionExpandedKeys()
+    return
+  }
+  expandedDefinitionTreeKeys.value = nextKeys
+}, { immediate: true })
+
 onMounted(() => {
   openNewRequestTab()
   void bootstrap()
@@ -546,7 +747,7 @@ function makeRequestEditorTab(detail?: ApiDefinitionDetail) {
   return {
     key,
     definitionId: draft.id || null,
-    title: draft.name || '新建请求',
+    title: draft.name || '\u65b0\u5efa\u8bf7\u6c42',
     method: draft.requestConfig.method || draft.method || 'GET',
     draft,
     savedFingerprint,
@@ -562,7 +763,7 @@ function syncActiveRequestEditorTab() {
   const snapshot = cloneDefinitionDetail(definitionForm)
   current.draft = snapshot
   current.definitionId = definitionForm.id || null
-  current.title = definitionForm.name || '新建请求'
+  current.title = definitionForm.name || '\u65b0\u5efa\u8bf7\u6c42'
   current.method = definitionForm.requestConfig.method || definitionForm.method || 'GET'
   current.isDirty = current.savedFingerprint !== fingerprintDefinitionDetail(snapshot)
 }
@@ -571,18 +772,21 @@ function applyDefinitionToEditor(detail: ApiDefinitionDetail, options?: { markSa
   requestEditorSyncing.value = true
   Object.assign(definitionForm, cloneDefinitionDetail(detail))
   selectedDefinitionId.value = detail.id || null
+  syncDefinitionTreeSelection(detail)
   const current = activeRequestEditorTab.value
   if (current) {
     current.draft = cloneDefinitionDetail(detail)
     current.definitionId = detail.id || null
-    current.title = detail.name || '新建请求'
+    current.title = detail.name || '\u65b0\u5efa\u8bf7\u6c42'
     current.method = detail.requestConfig.method || detail.method || 'GET'
     if (options?.markSaved) {
       current.savedFingerprint = fingerprintDefinitionDetail(detail)
       current.isDirty = false
     }
   }
-  requestEditorSyncing.value = false
+  void nextTick(() => {
+    requestEditorSyncing.value = false
+  })
 }
 
 function activateRequestEditorTab(key: string) {
@@ -600,13 +804,50 @@ function openNewRequestTab(detail?: ApiDefinitionDetail) {
   activateRequestEditorTab(tab.key)
 }
 
+function syncDefinitionTreeSelection(detail: Pick<ApiDefinitionDetail, 'id' | 'workspaceCode' | 'directoryName'>) {
+  const directoryName = (detail.directoryName || '').trim()
+  if (!detail.id) {
+    if (directoryName) {
+      const moduleKey = `definition-module:${detail.workspaceCode}:${directoryName}`
+      expandDefinitionTreeToKey(moduleKey)
+      selectedDefinitionTreeKey.value = moduleKey
+      return
+    }
+    if (isAllScope.value && detail.workspaceCode) {
+      selectedDefinitionTreeKey.value = `definition-workspace:${detail.workspaceCode}`
+      return
+    }
+    selectedDefinitionTreeKey.value = DEFINITION_TREE_ROOT_KEY
+    return
+  }
+  if (directoryName) {
+    expandDefinitionTreeToKey(`definition-module:${detail.workspaceCode}:${directoryName}`)
+  }
+  selectedDefinitionTreeKey.value = `definition-request:${detail.id}`
+}
+
+function openOrReuseDraftRequest(detail: ApiDefinitionDetail) {
+  const current = activeRequestEditorTab.value
+  if (current && current.definitionId == null && !current.isDirty) {
+    current.draft = cloneDefinitionDetail(detail)
+    current.definitionId = null
+    current.title = detail.name || '\u65b0\u5efa\u8bf7\u6c42'
+    current.method = detail.requestConfig.method || detail.method || 'GET'
+    current.savedFingerprint = fingerprintDefinitionDetail(detail)
+    current.isDirty = false
+    activateRequestEditorTab(current.key)
+    return
+  }
+  openNewRequestTab(detail)
+}
+
 async function closeRequestEditorTab(key: string) {
   const closing = requestEditorTabs.value.find(item => item.key === key)
   if (!closing) {
     return
   }
   if (closing.isDirty) {
-    await ElMessageBox.confirm('当前请求有未保存修改，确认关闭这个请求页签吗？', '关闭请求', { type: 'warning' })
+    await ElMessageBox.confirm('\u5f53\u524d\u8bf7\u6c42\u6709\u672a\u4fdd\u5b58\u4fee\u6539\uff0c\u786e\u8ba4\u5173\u95ed\u8fd9\u4e2a\u8bf7\u6c42\u9875\u7b7e\u5417\uff1f', '\u5173\u95ed\u8bf7\u6c42', { type: 'warning' })
   }
   if (requestEditorTabs.value.length <= 1) {
     const current = requestEditorTabs.value[0]
@@ -614,7 +855,7 @@ async function closeRequestEditorTab(key: string) {
       const emptyDetail = buildEmptyDefinitionDetail()
       current.draft = emptyDetail
       current.definitionId = null
-      current.title = '新建请求'
+      current.title = '\u65b0\u5efa\u8bf7\u6c42'
       current.method = 'GET'
       current.savedFingerprint = fingerprintDefinitionDetail(emptyDetail)
       current.isDirty = false
@@ -776,6 +1017,73 @@ function handleDefinitionTreeSelect(data: DefinitionDirectoryTreeNode | null) {
   selectedDefinitionTreeKey.value = data?.key ?? DEFINITION_TREE_ROOT_KEY
 }
 
+async function handleDefinitionTreeClick(data: DefinitionDirectoryTreeNode) {
+  if (data.type === 'request' && data.definitionId) {
+    await selectDefinition(data.definitionId)
+  }
+}
+
+function isDefinitionTreeExpanded(nodeKey: string) {
+  return expandedDefinitionTreeKeys.value.includes(nodeKey)
+}
+
+function syncDefinitionExpandedKeys(keys?: string[]) {
+  if (keys) {
+    expandedDefinitionTreeKeys.value = keys
+  }
+  else {
+    expandedDefinitionTreeKeys.value = collectDefinitionExpandableKeys(definitionDirectoryTree.value)
+  }
+  definitionTreeRenderKey.value += 1
+}
+
+function collapseAllDefinitionTreeChildren() {
+  syncDefinitionExpandedKeys([DEFINITION_TREE_ROOT_KEY])
+}
+
+function expandDefinitionTreeToKey(nodeKey: string) {
+  const parts = nodeKey.split(':')
+  if (parts.length < 3) {
+    expandedDefinitionTreeKeys.value = Array.from(new Set([
+      ...expandedDefinitionTreeKeys.value,
+      DEFINITION_TREE_ROOT_KEY,
+      nodeKey,
+    ]))
+    return
+  }
+  const workspaceCode = parts[1]
+  const workspaceKey = `definition-workspace:${workspaceCode}`
+  const fullPath = parts.slice(2).join(':')
+  const segments = fullPath.split('/').filter(Boolean)
+  const keys = new Set<string>([DEFINITION_TREE_ROOT_KEY, workspaceKey])
+  let assembled = ''
+  for (const segment of segments) {
+    assembled = assembled ? `${assembled}/${segment}` : segment
+    keys.add(`definition-module:${workspaceCode}:${assembled}`)
+  }
+  expandedDefinitionTreeKeys.value = Array.from(new Set([
+    ...expandedDefinitionTreeKeys.value,
+    ...keys,
+  ]))
+}
+
+function handleDefinitionTreeExpand(_: DefinitionDirectoryTreeNode, treeNode: { key: string }) {
+  const keys = new Set(expandedDefinitionTreeKeys.value)
+  keys.add(String(treeNode.key))
+  expandedDefinitionTreeKeys.value = [...keys]
+}
+
+function handleDefinitionTreeCollapse(_: DefinitionDirectoryTreeNode, treeNode: { key: string }) {
+  const collapsedKey = String(treeNode.key)
+  const currentNode = findDefinitionTreeNode(collapsedKey)
+  if (!currentNode) {
+    expandedDefinitionTreeKeys.value = expandedDefinitionTreeKeys.value.filter(key => key !== collapsedKey)
+    return
+  }
+  const blockedKeys = new Set([collapsedKey, ...collectDefinitionDescendantKeys(currentNode)])
+  expandedDefinitionTreeKeys.value = expandedDefinitionTreeKeys.value.filter(key => !blockedKeys.has(key))
+}
+
 async function createDefinitionModule(node: DefinitionDirectoryTreeNode) {
   const targetWorkspaceCode = node.type === 'root'
     ? defaultEditableWorkspaceCode()
@@ -794,12 +1102,15 @@ async function createDefinitionModule(node: DefinitionDirectoryTreeNode) {
     const moduleName = value.trim()
     const parentPath = node.type === 'module' ? (node.fullPath ?? '') : ''
     const fullPath = parentPath ? `${parentPath}/${moduleName}` : moduleName
-    selectedDefinitionTreeKey.value = `definition-module:${targetWorkspaceCode}:${fullPath}`
-    openNewRequestTab({
+    const nodeKey = `definition-module:${targetWorkspaceCode}:${fullPath}`
+    selectedDefinitionTreeKey.value = nodeKey
+    expandDefinitionTreeToKey(nodeKey)
+    openOrReuseDraftRequest({
       ...buildEmptyDefinitionDetail(),
       workspaceCode: targetWorkspaceCode,
       directoryName: fullPath,
     })
+    ElMessage.success(`已创建子模块：${fullPath}`)
   }
   catch (error) {
     if (error !== 'cancel') {
@@ -828,6 +1139,76 @@ function addVariableRow() {
   variableSetForm.variables.push(emptyVariable())
 }
 
+function syncDefinitionSaveForm() {
+  definitionSaveForm.workspaceCode = definitionForm.workspaceCode || selectedDefinitionWorkspaceCode.value || defaultEditableWorkspaceCode()
+  definitionSaveForm.name = definitionForm.name.trim()
+  definitionSaveForm.path = definitionForm.requestConfig.path.trim()
+  definitionSaveForm.directoryName = (definitionForm.directoryName || selectedDefinitionModulePath.value || '').trim()
+}
+
+async function persistDefinition(options?: { debugAfterSave?: boolean }) {
+  const isUpdate = !!definitionForm.id
+  saving.value = true
+  try {
+    definitionForm.name = definitionForm.name.trim()
+    definitionForm.requestConfig.path = definitionForm.requestConfig.path.trim()
+    definitionForm.directoryName = (definitionForm.directoryName || '').trim()
+    const payload = {
+      workspaceCode: isAllScope.value ? definitionForm.workspaceCode || writableWorkspaces.value[0]?.code : workspaceCode.value,
+      name: definitionForm.name,
+      directoryName: (definitionForm.directoryName || selectedDefinitionModulePath.value || '').trim() || null,
+      description: definitionForm.description,
+      tags: definitionForm.tags,
+      requestConfig: definitionForm.requestConfig,
+      assertions: definitionForm.assertions,
+      extractors: definitionForm.extractors,
+    }
+    const detail = isUpdate
+      ? await platformApi.updateApiDefinition(workspaceCode.value, definitionForm.id, payload)
+      : await platformApi.createApiDefinition(workspaceCode.value, payload)
+    ElMessage.success(isUpdate ? '更新成功' : '保存成功')
+    definitionSaveDialogVisible.value = false
+    await refreshData()
+    const latestDetail = await platformApi.getApiDefinitionDetail(workspaceCode.value, detail.id)
+    applyDefinitionToEditor(latestDetail, { markSaved: true })
+    if (options?.debugAfterSave) {
+      await debugDefinition()
+    }
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    saving.value = false
+  }
+}
+
+function openDefinitionSaveDialog() {
+  syncDefinitionSaveForm()
+  definitionSaveDialogVisible.value = true
+}
+
+async function confirmDefinitionSaveDialog(options?: { debugAfterSave?: boolean }) {
+  definitionSaveForm.workspaceCode = definitionSaveForm.workspaceCode.trim()
+  definitionSaveForm.name = definitionSaveForm.name.trim()
+  definitionSaveForm.path = definitionSaveForm.path.trim()
+  definitionSaveForm.directoryName = definitionSaveForm.directoryName.trim()
+  if (!definitionSaveForm.workspaceCode) {
+    ElMessage.warning('请先选择所属空间')
+    return
+  }
+  if (!definitionSaveForm.name || !definitionSaveForm.path) {
+    ElMessage.warning('请补全请求名称和请求 URL')
+    return
+  }
+  definitionForm.name = definitionSaveForm.name
+  definitionForm.requestConfig.path = definitionSaveForm.path
+  definitionForm.path = definitionSaveForm.path
+  definitionForm.workspaceCode = definitionSaveForm.workspaceCode
+  definitionForm.directoryName = definitionSaveForm.directoryName
+  await persistDefinition(options)
+}
+
 function moveScenarioStep(index: number, delta: number) {
   const target = index + delta
   if (target < 0 || target >= scenarioForm.steps.length) {
@@ -848,36 +1229,16 @@ async function saveDefinition() {
     ElMessage.warning((error as Error).message)
     return
   }
-  if (!definitionForm.name.trim() || !definitionForm.requestConfig.path.trim()) {
-    ElMessage.warning('请补全接口名称和路径')
+  if (definitionForm.id) {
+    if (!definitionForm.name.trim() || !definitionForm.requestConfig.path.trim()) {
+      ElMessage.warning('\u8bf7\u8865\u5168\u8bf7\u6c42\u540d\u79f0\u548c\u8bf7\u6c42 URL')
+      return
+    }
+    definitionForm.path = definitionForm.requestConfig.path.trim()
+    await persistDefinition()
     return
   }
-  saving.value = true
-  try {
-    const payload = {
-      workspaceCode: isAllScope.value ? definitionForm.workspaceCode || writableWorkspaces.value[0]?.code : workspaceCode.value,
-      name: definitionForm.name,
-      directoryName: (definitionForm.directoryName || selectedDefinitionModulePath.value || '').trim() || null,
-      description: definitionForm.description,
-      tags: definitionForm.tags,
-      requestConfig: definitionForm.requestConfig,
-      assertions: definitionForm.assertions,
-      extractors: definitionForm.extractors,
-    }
-    const detail = definitionForm.id
-      ? await platformApi.updateApiDefinition(workspaceCode.value, definitionForm.id, payload)
-      : await platformApi.createApiDefinition(workspaceCode.value, payload)
-    ElMessage.success(definitionForm.id ? '接口已更新' : '接口已创建')
-    await refreshData()
-    const latestDetail = await platformApi.getApiDefinitionDetail(workspaceCode.value, detail.id)
-    applyDefinitionToEditor(latestDetail, { markSaved: true })
-  }
-  catch (error) {
-    ElMessage.error((error as Error).message)
-  }
-  finally {
-    saving.value = false
-  }
+  openDefinitionSaveDialog()
 }
 
 async function removeDefinition() {
@@ -917,10 +1278,23 @@ async function debugDefinition() {
 }
 
 async function saveAndDebugDefinition() {
-  await saveDefinition()
-  if (definitionForm.id) {
-    await debugDefinition()
+  try {
+    ensureScopedTargetWorkspace(definitionForm.workspaceCode)
   }
+  catch (error) {
+    ElMessage.warning((error as Error).message)
+    return
+  }
+  if (definitionForm.id) {
+    if (!definitionForm.name.trim() || !definitionForm.requestConfig.path.trim()) {
+      ElMessage.warning('\u8bf7\u8865\u5168\u8bf7\u6c42\u540d\u79f0\u548c\u8bf7\u6c42 URL')
+      return
+    }
+    definitionForm.path = definitionForm.requestConfig.path.trim()
+    await persistDefinition({ debugAfterSave: true })
+    return
+  }
+  openDefinitionSaveDialog()
 }
 
 async function saveScenario() {
@@ -1245,30 +1619,53 @@ function formatTimeLabel(value?: string | null) {
               <el-input v-model="definitionFilters.keyword" placeholder="请输入模块请求名称" clearable />
               <el-button v-if="canCreateInCurrentScope" type="primary" @click="openNewRequestTab()">新建请求</el-button>
             </div>
-            <div class="ms-like-tree-toolbar">
-              <div class="ms-like-tree-title">全部请求 ({{ filteredDefinitions.length }})</div>
-              <el-button circle size="small" @click="openNewRequestTab()">
-                <el-icon><Plus /></el-icon>
-              </el-button>
-            </div>
             <div class="ms-like-directory-shell">
               <el-tree
+                :key="definitionTreeRenderKey"
                 :data="definitionDirectoryTree"
                 node-key="key"
+                :default-expanded-keys="expandedDefinitionTreeKeys"
                 highlight-current
-                default-expand-all
                 :expand-on-click-node="false"
                 :current-node-key="selectedDefinitionTreeKey"
                 class="ms-like-directory-tree"
                 @current-change="handleDefinitionTreeSelect"
+                @node-click="handleDefinitionTreeClick"
+                @node-expand="handleDefinitionTreeExpand"
+                @node-collapse="handleDefinitionTreeCollapse"
               >
                 <template #default="{ data }">
-                  <div class="ms-like-directory-node">
+                  <div :class="['ms-like-directory-node', { 'is-root': data.type === 'root', 'is-request': data.type === 'request' }]">
                     <div class="ms-like-directory-main">
-                      <span class="ms-like-directory-label">{{ data.label }}</span>
-                      <span class="ms-like-directory-count">{{ data.count }}</span>
+                      <span
+                        v-if="data.type === 'workspace'"
+                        :class="['tree-node-folder-svg', { 'is-open': isDefinitionTreeExpanded(data.key) }]"
+                        aria-hidden="true"
+                      >
+                        <el-icon class="tree-node-folder-icon">
+                          <FolderOpened v-if="isDefinitionTreeExpanded(data.key)" />
+                          <Folder v-else />
+                        </el-icon>
+                      </span>
+                      <template v-if="data.type === 'request'">
+                        <span :class="['ms-like-method', `method-${(data.method || 'GET').toLowerCase()}`]">{{ data.method }}</span>
+                        <span class="ms-like-tree-item-name">{{ data.label }}</span>
+                      </template>
+                      <template v-else>
+                        <span class="ms-like-directory-label">{{ data.label }}</span>
+                        <span class="ms-like-directory-count">{{ data.count }}</span>
+                      </template>
                     </div>
-                    <div class="ms-like-directory-actions" @click.stop>
+                    <div v-if="data.type !== 'request'" class="ms-like-directory-actions" @click.stop>
+                      <el-button
+                        v-if="data.type === 'root'"
+                        text
+                        class="tree-icon-button"
+                        title="\u6536\u8d77\u5168\u90e8\u5b50\u6a21\u5757"
+                        @click.stop="collapseAllDefinitionTreeChildren"
+                      >
+                        <el-icon class="tree-collapse-icon"><Fold /></el-icon>
+                      </el-button>
                       <el-button
                         v-if="(data.type === 'workspace' || data.type === 'module' || (!isAllScope && data.type === 'root')) && canWriteWorkspace(data.type === 'root' ? workspaceCode : data.workspaceCode)"
                         text
@@ -1281,18 +1678,6 @@ function formatTimeLabel(value?: string | null) {
                   </div>
                 </template>
               </el-tree>
-            </div>
-            <div class="ms-like-tree request-list">
-              <button
-                v-for="item in filteredDefinitions"
-                :key="item.id"
-                type="button"
-                :class="['ms-like-tree-item', { active: item.id === selectedDefinitionId }]"
-                @click="selectDefinition(item.id)"
-              >
-                <span :class="['ms-like-method', `method-${item.method.toLowerCase()}`]">{{ item.method }}</span>
-                <span class="ms-like-tree-item-name">{{ item.name }}</span>
-              </button>
             </div>
           </aside>
 
@@ -1910,6 +2295,44 @@ function formatTimeLabel(value?: string | null) {
       </el-tab-pane>
     </el-tabs>
 
+    <el-dialog v-model="definitionSaveDialogVisible" title="保存" width="520px" destroy-on-close>
+      <el-form label-position="top">
+        <el-form-item v-if="isAllScope" label="所属空间" required>
+          <el-select v-model="definitionSaveForm.workspaceCode" class="full-width" placeholder="请选择空间">
+            <el-option
+              v-for="item in writableWorkspaces"
+              :key="item.code"
+              :label="item.name"
+              :value="item.code"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="请求名称" required>
+          <el-input v-model="definitionSaveForm.name" placeholder="请输入请求名称" />
+        </el-form-item>
+        <el-form-item label="请求 URL" required>
+          <el-input v-model="definitionSaveForm.path" placeholder="请输入请求 URL" />
+        </el-form-item>
+        <el-form-item label="请求所属模块">
+          <el-select v-model="definitionSaveForm.directoryName" clearable placeholder="请选择请求所属模块" class="full-width">
+            <el-option :label="selectedDefinitionWorkspaceRootLabel" value="" />
+            <el-option
+              v-for="item in selectedDefinitionWorkspaceModules"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="definitionSaveDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="saving" @click="confirmDefinitionSaveDialog()">确定</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="bugDialogVisible" title="从报告创建缺陷" width="640px">
       <el-form label-width="90px">
         <el-form-item v-if="isAllScope" label="目标空间" required>
@@ -2138,6 +2561,15 @@ function formatTimeLabel(value?: string | null) {
   border-radius: 6px;
 }
 
+.ms-like-directory-tree :deep(.el-tree-node__expand-icon.is-leaf) {
+  color: transparent;
+}
+
+.ms-like-directory-tree :deep(.el-tree-node > .el-tree-node__content:has(.ms-like-directory-node.is-root) .el-tree-node__expand-icon) {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .ms-like-directory-tree :deep(.el-tree-node.is-current > .el-tree-node__content) {
   background: #f3e8ff;
 }
@@ -2147,18 +2579,47 @@ function formatTimeLabel(value?: string | null) {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  gap: 12px;
+  min-width: 0;
+  gap: 8px;
 }
 
 .ms-like-directory-main {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
 
-.ms-like-directory-actions {
+.tree-node-folder-svg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
+}
+
+.tree-node-folder-icon {
+  font-size: 16px;
+  color: #d7a12b;
+}
+
+.tree-node-folder-svg.is-open .tree-node-folder-icon {
+  color: #c98312;
+}
+
+.ms-like-directory-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.ms-like-directory-node:hover .ms-like-directory-actions,
+.ms-like-directory-node.is-root .ms-like-directory-actions {
+  opacity: 1;
 }
 
 .ms-like-directory-label,
@@ -2173,12 +2634,28 @@ function formatTimeLabel(value?: string | null) {
   white-space: nowrap;
 }
 
+.ms-like-directory-node.is-root .ms-like-directory-label {
+  font-weight: 700;
+  color: #101828;
+}
+
 .ms-like-directory-count {
   color: var(--el-text-color-secondary);
 }
 
+.ms-like-directory-node.is-root .ms-like-directory-count {
+  color: var(--text-subtle, #667085);
+}
+
 .tree-icon-button {
-  padding: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+}
+
+.tree-collapse-icon {
+  font-size: 14px;
+  color: var(--text-subtle, #667085);
 }
 
 .request-list {

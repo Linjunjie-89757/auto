@@ -1,5 +1,14 @@
 import type {
   ApiResponse,
+  ApiDefinitionDetail,
+  ApiDefinitionItem,
+  ApiEnvironmentItem,
+  ApiRunPayload,
+  ApiRunResponse,
+  ApiRunStepResult,
+  ApiScenarioDetail,
+  ApiScenarioItem,
+  ApiVariableSetItem,
   AiCaseConfig,
   AiCaseConfigResponse,
   AiCaseConfigSecretResponse,
@@ -56,7 +65,11 @@ import type {
   UpdateReportContentPayload,
   UpdateUserPayload,
   ResetPasswordResponse,
+  SaveApiDefinitionPayload,
+  SaveApiEnvironmentPayload,
+  SaveApiScenarioPayload,
   UserItem,
+  SaveApiVariableSetPayload,
   WorkspaceMemberItem,
   WorkspaceItem,
 } from '../types/api'
@@ -80,6 +93,29 @@ type RequestOptions = RequestInit & {
   workspaceCode?: string
 }
 
+function normalizeBugSummary<T extends Partial<BugSummary>>(bug: T): T & Pick<BugSummary, 'tags'> {
+  return {
+    ...bug,
+    tags: Array.isArray(bug.tags) ? bug.tags : [],
+  }
+}
+
+function normalizeBugDetail(detail: BugDetail): BugDetail {
+  return {
+    ...normalizeBugSummary(detail),
+    attachments: Array.isArray(detail.attachments) ? detail.attachments : [],
+    activities: Array.isArray(detail.activities) ? detail.activities : [],
+    comments: Array.isArray(detail.comments) ? detail.comments : [],
+    flows: Array.isArray(detail.flows) ? detail.flows : [],
+    sourceContext: detail.sourceContext ?? {
+      sourceType: detail.sourceType,
+      caseSummary: null,
+      reportSummary: null,
+      taskSummary: null,
+    },
+  }
+}
+
 function buildError(message: string, status: number) {
   const error = new Error(message) as Error & { status?: number }
   error.status = status
@@ -87,7 +123,7 @@ function buildError(message: string, status: number) {
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { workspaceCode = 'account-open', headers, ...rest } = options
+  const { workspaceCode = 'ALL', headers, ...rest } = options
   const mergedHeaders = new Headers(headers)
   if (!mergedHeaders.has('Content-Type') && rest.body && !(rest.body instanceof FormData)) {
     mergedHeaders.set('Content-Type', 'application/json')
@@ -515,6 +551,121 @@ export const platformApi = {
       workspaceCode,
     })
   },
+  getApiDefinitions(workspaceCode: string) {
+    return request<PageResponse<ApiDefinitionItem>>('/automation/api/definitions', { workspaceCode })
+  },
+  getApiDefinitionDetail(workspaceCode: string, id: number) {
+    return request<ApiDefinitionDetail>(`/automation/api/definitions/${id}`, { workspaceCode })
+  },
+  createApiDefinition(workspaceCode: string, payload: SaveApiDefinitionPayload) {
+    return request<ApiDefinitionDetail>('/automation/api/definitions', {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  updateApiDefinition(workspaceCode: string, id: number, payload: SaveApiDefinitionPayload) {
+    return request<ApiDefinitionDetail>(`/automation/api/definitions/${id}`, {
+      method: 'PUT',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  deleteApiDefinition(workspaceCode: string, id: number) {
+    return request<void>(`/automation/api/definitions/${id}`, {
+      method: 'DELETE',
+      workspaceCode,
+    })
+  },
+  debugApiDefinition(workspaceCode: string, id: number, payload: ApiRunPayload) {
+    return request<ApiRunResponse>(`/automation/api/definitions/${id}/debug-run`, {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  getApiScenarios(workspaceCode: string) {
+    return request<PageResponse<ApiScenarioItem>>('/automation/api/scenarios', { workspaceCode })
+  },
+  getApiScenarioDetail(workspaceCode: string, id: number) {
+    return request<ApiScenarioDetail>(`/automation/api/scenarios/${id}`, { workspaceCode })
+  },
+  createApiScenario(workspaceCode: string, payload: SaveApiScenarioPayload) {
+    return request<ApiScenarioDetail>('/automation/api/scenarios', {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  updateApiScenario(workspaceCode: string, id: number, payload: SaveApiScenarioPayload) {
+    return request<ApiScenarioDetail>(`/automation/api/scenarios/${id}`, {
+      method: 'PUT',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  deleteApiScenario(workspaceCode: string, id: number) {
+    return request<void>(`/automation/api/scenarios/${id}`, {
+      method: 'DELETE',
+      workspaceCode,
+    })
+  },
+  runApiScenario(workspaceCode: string, id: number, payload: ApiRunPayload) {
+    return request<ApiRunResponse>(`/automation/api/scenarios/${id}/run`, {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  getApiEnvironments(workspaceCode: string) {
+    return request<PageResponse<ApiEnvironmentItem>>('/automation/api/environments', { workspaceCode })
+  },
+  createApiEnvironment(workspaceCode: string, payload: SaveApiEnvironmentPayload) {
+    return request<ApiEnvironmentItem>('/automation/api/environments', {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  updateApiEnvironment(workspaceCode: string, id: number, payload: SaveApiEnvironmentPayload) {
+    return request<ApiEnvironmentItem>(`/automation/api/environments/${id}`, {
+      method: 'PUT',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  deleteApiEnvironment(workspaceCode: string, id: number) {
+    return request<void>(`/automation/api/environments/${id}`, {
+      method: 'DELETE',
+      workspaceCode,
+    })
+  },
+  getApiVariableSets(workspaceCode: string) {
+    return request<PageResponse<ApiVariableSetItem>>('/automation/api/variable-sets', { workspaceCode })
+  },
+  createApiVariableSet(workspaceCode: string, payload: SaveApiVariableSetPayload) {
+    return request<ApiVariableSetItem>('/automation/api/variable-sets', {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  updateApiVariableSet(workspaceCode: string, id: number, payload: SaveApiVariableSetPayload) {
+    return request<ApiVariableSetItem>(`/automation/api/variable-sets/${id}`, {
+      method: 'PUT',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  deleteApiVariableSet(workspaceCode: string, id: number) {
+    return request<void>(`/automation/api/variable-sets/${id}`, {
+      method: 'DELETE',
+      workspaceCode,
+    })
+  },
+  getApiRunStepResults(workspaceCode: string, reportId: number) {
+    return request<ApiRunStepResult[]>(`/automation/api/runs/reports/${reportId}/steps`, { workspaceCode })
+  },
   async downloadReportAttachment(workspaceCode: string, reportId: number, attachmentId: number, fileName: string) {
     const response = await fetch(`${API_BASE}/reports/${reportId}/attachments/${attachmentId}/download`, {
       method: 'GET',
@@ -674,39 +825,48 @@ export const platformApi = {
   getBugStats(workspaceCode: string) {
     return request<BugStats>('/bugs/statistics', { workspaceCode })
   },
-  getBugs(workspaceCode: string) {
-    return request<PageResponse<BugSummary>>('/bugs', { workspaceCode })
+  async getBugs(workspaceCode: string) {
+    const page = await request<PageResponse<BugSummary>>('/bugs', { workspaceCode })
+    return {
+      ...page,
+      items: Array.isArray(page.items) ? page.items.map(item => normalizeBugSummary(item)) : [],
+    }
   },
-  getBugDetail(workspaceCode: string, id: number) {
-    return request<BugDetail>(`/bugs/${id}`, { workspaceCode })
+  async getBugDetail(workspaceCode: string, id: number) {
+    const detail = await request<BugDetail>(`/bugs/${id}`, { workspaceCode })
+    return normalizeBugDetail(detail)
   },
-  createBug(workspaceCode: string, payload: CreateBugPayload) {
-    return request<BugDetail>('/bugs', {
+  async createBug(workspaceCode: string, payload: CreateBugPayload) {
+    const detail = await request<BugDetail>('/bugs', {
       method: 'POST',
       workspaceCode,
       body: JSON.stringify(payload),
     })
+    return normalizeBugDetail(detail)
   },
-  updateBug(workspaceCode: string, id: number, payload: UpdateBugPayload) {
-    return request<BugDetail>(`/bugs/${id}`, {
+  async updateBug(workspaceCode: string, id: number, payload: UpdateBugPayload) {
+    const detail = await request<BugDetail>(`/bugs/${id}`, {
       method: 'PUT',
       workspaceCode,
       body: JSON.stringify(payload),
     })
+    return normalizeBugDetail(detail)
   },
-  assignBug(workspaceCode: string, id: number, assigneeId: number) {
-    return request<BugDetail>(`/bugs/${id}/assign`, {
+  async assignBug(workspaceCode: string, id: number, assigneeId: number) {
+    const detail = await request<BugDetail>(`/bugs/${id}/assign`, {
       method: 'POST',
       workspaceCode,
       body: JSON.stringify({ assigneeId }),
     })
+    return normalizeBugDetail(detail)
   },
-  transitionBug(workspaceCode: string, id: number, toStatus: string, actionComment: string) {
-    return request<BugDetail>(`/bugs/${id}/transition`, {
+  async transitionBug(workspaceCode: string, id: number, toStatus: string, actionComment: string) {
+    const detail = await request<BugDetail>(`/bugs/${id}/transition`, {
       method: 'POST',
       workspaceCode,
       body: JSON.stringify({ toStatus, actionComment }),
     })
+    return normalizeBugDetail(detail)
   },
   addBugComment(workspaceCode: string, id: number, content: string) {
     return request<void>(`/bugs/${id}/comments`, {
@@ -715,18 +875,20 @@ export const platformApi = {
       body: JSON.stringify({ content }),
     })
   },
-  createBugFromCase(workspaceCode: string, caseId: number, payload: CreateBugPayload) {
-    return request<BugDetail>(`/cases/${caseId}/bugs`, {
+  async createBugFromCase(workspaceCode: string, caseId: number, payload: CreateBugPayload) {
+    const detail = await request<BugDetail>(`/cases/${caseId}/bugs`, {
       method: 'POST',
       workspaceCode,
       body: JSON.stringify(payload),
     })
+    return normalizeBugDetail(detail)
   },
-  createBugFromReport(workspaceCode: string, reportId: number, payload: CreateBugPayload) {
-    return request<BugDetail>(`/reports/${reportId}/bugs`, {
+  async createBugFromReport(workspaceCode: string, reportId: number, payload: CreateBugPayload) {
+    const detail = await request<BugDetail>(`/reports/${reportId}/bugs`, {
       method: 'POST',
       workspaceCode,
       body: JSON.stringify(payload),
     })
+    return normalizeBugDetail(detail)
   },
 }

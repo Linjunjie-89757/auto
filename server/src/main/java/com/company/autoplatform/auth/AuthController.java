@@ -41,7 +41,7 @@ public class AuthController {
         SecurityContextHolder.setContext(context);
         HttpSession session = httpServletRequest.getSession(true);
         session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, context);
-        return ApiResponse.ok(authService.currentUser(), "登录成功");
+        return ApiResponse.ok(authService.currentUser(), "Login successful");
     }
 
     @GetMapping("/me")
@@ -56,6 +56,6 @@ public class AuthController {
             session.invalidate();
         }
         SecurityContextHolder.clearContext();
-        return ApiResponse.ok(null, "退出登录成功");
+        return ApiResponse.ok(null, "Logout successful");
     }
 }

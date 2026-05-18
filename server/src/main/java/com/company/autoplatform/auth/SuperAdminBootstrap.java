@@ -3,7 +3,6 @@ package com.company.autoplatform.auth;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.company.autoplatform.user.UserEntity;
 import com.company.autoplatform.user.UserMapper;
-import com.company.autoplatform.user.UserService;
 import com.company.autoplatform.workspace.WorkspaceMemberMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
@@ -26,7 +25,7 @@ public class SuperAdminBootstrap implements ApplicationRunner {
     @Value("${app.super-admin.email:superadmin@local}")
     private String email;
 
-    @Value("${app.super-admin.display-name:超级管理员}")
+    @Value("${app.super-admin.display-name:Super Admin}")
     private String displayName;
 
     @Value("${app.super-admin.password:superadmin123}")

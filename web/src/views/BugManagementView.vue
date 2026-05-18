@@ -94,7 +94,6 @@ const bugFilterDefaults = {
 }
 
 const bugStatusOptions = [
-  { label: '待指派', value: 'TODO' },
   { label: '已指派', value: 'ASSIGNED' },
   { label: '处理中', value: 'IN_PROGRESS' },
   { label: '待验证', value: 'PENDING_VERIFY' },
@@ -189,7 +188,6 @@ const statusCounts = computed(() => bugs.value.reduce<Record<string, number>>((c
 
 const statCards = computed(() => [
   { label: '缺陷总数', value: bugs.value.length, status: '', description: '全部缺陷' },
-  { label: '待指派', value: statusCounts.value.TODO ?? 0, status: 'TODO', description: '未分配处理人' },
   { label: '待处理', value: statusCounts.value.ASSIGNED ?? 0, status: 'ASSIGNED', description: '已指派待处理' },
   { label: '处理中', value: statusCounts.value.IN_PROGRESS ?? 0, status: 'IN_PROGRESS', description: '正在处理中' },
   { label: '待验证', value: statusCounts.value.PENDING_VERIFY ?? 0, status: 'PENDING_VERIFY', description: '等待验证结果' },
@@ -679,6 +677,10 @@ async function submitCaseBug() {
   if (!sourceBugState.sourceId) {
     return
   }
+  if (sourceBugState.assigneeId === null) {
+    ElMessage.warning('请选择处理人')
+    return
+  }
   saving.value = true
   try {
     await platformApi.createBugFromCase(workspaceCode.value, sourceBugState.sourceId, {
@@ -704,6 +706,10 @@ async function submitCaseBug() {
 
 async function submitReportBug() {
   if (!sourceBugState.sourceId) {
+    return
+  }
+  if (sourceBugState.assigneeId === null) {
+    ElMessage.warning('请选择处理人')
     return
   }
   saving.value = true
@@ -969,6 +975,11 @@ onMounted(() => {
         </el-form-item>
         <el-form-item label="缺陷名称"><el-input v-model="sourceBugState.title" /></el-form-item>
         <el-form-item label="缺陷描述"><el-input v-model="sourceBugState.description" type="textarea" :rows="4" /></el-form-item>
+        <el-form-item label="处理人" required>
+          <el-select v-model="sourceBugState.assigneeId" placeholder="请选择">
+            <el-option v-for="item in users" :key="item.id" :label="item.displayName" :value="item.id" />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="caseBugVisible = false">取消</el-button>
@@ -985,6 +996,11 @@ onMounted(() => {
         </el-form-item>
         <el-form-item label="缺陷名称"><el-input v-model="sourceBugState.title" /></el-form-item>
         <el-form-item label="缺陷描述"><el-input v-model="sourceBugState.description" type="textarea" :rows="4" /></el-form-item>
+        <el-form-item label="处理人" required>
+          <el-select v-model="sourceBugState.assigneeId" placeholder="请选择">
+            <el-option v-for="item in users" :key="item.id" :label="item.displayName" :value="item.id" />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="reportBugVisible = false">取消</el-button>
@@ -1038,7 +1054,7 @@ onMounted(() => {
 }
 
 .bug-stats-grid {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .bug-stat-card {
@@ -1262,16 +1278,20 @@ onMounted(() => {
 
 @media (max-width: 1200px) {
   .bug-stats-grid {
-    grid-template-columns: repeat(5, minmax(180px, 1fr));
-    overflow-x: auto;
-    padding-bottom: 4px;
-    scrollbar-width: thin;
+    grid-template-columns: repeat(4, minmax(180px, 1fr));
+    gap: 12px;
   }
 
   .table-pagination,
   .table-pagination-right {
     flex-direction: column;
     align-items: stretch;
+  }
+}
+
+@media (max-width: 720px) {
+  .bug-stats-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

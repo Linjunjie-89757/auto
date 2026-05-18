@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { Calendar, Files, Operation, Plus, RefreshRight, Upload, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
+import ApiAutomationWorkspace from '../components/ApiAutomationWorkspace.vue'
 import ListToolbar from '../components/ListToolbar.vue'
 import TableSettingsDrawer from '../components/TableSettingsDrawer.vue'
 import { useListToolbarState } from '../composables/useListToolbarState'
@@ -216,6 +217,9 @@ function resetReportFilters() {
 }
 
 async function loadExecution() {
+  if (props.engine === 'api') {
+    return
+  }
   loading.value = true
   try {
     const [taskPage, reportPage, userList, workspaceList] = await Promise.all([
@@ -691,6 +695,10 @@ function openReportBugDialog(row: ReportItem) {
 
 async function submitReportBug() {
   if (!reportBugState.reportId) return
+  if (reportBugState.assigneeId === null) {
+    ElMessage.error('请选择处理人')
+    return
+  }
   saving.value = true
   try {
     await platformApi.createBugFromReport(workspaceCode.value, reportBugState.reportId, {
@@ -784,6 +792,9 @@ watch([workspaceCode, () => props.engine], () => {
 })
 
 onMounted(() => {
+  if (props.engine === 'api') {
+    return
+  }
   taskListToolbar.load()
   reportListToolbar.load()
   loadExecution()
@@ -792,7 +803,9 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-shell">
+  <ApiAutomationWorkspace v-if="props.engine === 'api'" />
+
+  <section v-else class="page-shell">
     <div class="page-header">
       <div class="page-title">{{ moduleConfig.title }}</div>
       <div class="page-actions">
@@ -1095,11 +1108,11 @@ onMounted(() => {
         <el-form-item label="&#x63CF;&#x8FF0;" required>
           <el-input v-model="reportBugState.description" type="textarea" :rows="4" />
         </el-form-item>
-        <el-form-item label="&#x8D1F;&#x8D23;&#x4EBA;">
-          <el-select v-model="reportBugState.assigneeId" clearable>
-            <el-option v-for="item in users" :key="item.id" :label="item.displayName" :value="item.id" />
-          </el-select>
-        </el-form-item>
+          <el-form-item label="&#x8D1F;&#x8D23;&#x4EBA;" required>
+            <el-select v-model="reportBugState.assigneeId" placeholder="请选择">
+              <el-option v-for="item in users" :key="item.id" :label="item.displayName" :value="item.id" />
+            </el-select>
+          </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="reportBugVisible = false">&#x53D6;&#x6D88;</el-button>

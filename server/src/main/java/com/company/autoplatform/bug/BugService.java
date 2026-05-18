@@ -82,9 +82,7 @@ public class BugService {
     public BugDetailResponse createBug(String headerWorkspaceCode, CreateBugRequest request, BugSourceType sourceType) {
         WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
                 workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode()));
-        if (request.assigneeId() != null) {
-            userService.requireUser(request.assigneeId());
-        }
+        userService.requireUser(request.assigneeId());
         if (request.relatedCaseId() != null) {
             caseService.requireCase(request.relatedCaseId());
         }
@@ -99,7 +97,7 @@ public class BugService {
         entity.setDescription(request.description());
         entity.setPriority(request.priority().name());
         entity.setSeverity(request.severity().name());
-        entity.setStatus((request.assigneeId() == null ? BugStatus.TODO : BugStatus.ASSIGNED).name());
+        entity.setStatus(BugStatus.ASSIGNED.name());
         entity.setSourceType(sourceType.name());
         entity.setAssigneeId(request.assigneeId());
         entity.setReporterId(CurrentUserContext.get());
@@ -112,7 +110,7 @@ public class BugService {
         bugMapper.insert(entity);
 
         if (request.assigneeId() != null) {
-            appendFlow(entity.getId(), BugStatus.TODO, BugStatus.ASSIGNED, "创建时直接指派");
+            appendFlow(entity.getId(), BugStatus.TODO, BugStatus.ASSIGNED, "创建缺陷并分配处理人");
         }
         return toDetail(requireBug(entity.getId()));
     }
@@ -123,7 +121,7 @@ public class BugService {
         WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
                 workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode()));
         if (!entity.getWorkspaceId().equals(workspace.getId())) {
-            throw new BadRequestException("不允许修改缺陷归属空间");
+            throw new BadRequestException("不允许修改缺陷所属空间");
         }
         if (request.assigneeId() != null) {
             userService.requireUser(request.assigneeId());
@@ -165,7 +163,7 @@ public class BugService {
         entity.setStatus(BugStatus.ASSIGNED.name());
         entity.setUpdatedAt(LocalDateTime.now());
         bugMapper.updateById(entity);
-        appendFlow(id, fromStatus, BugStatus.ASSIGNED, "重新指派给 " + assignee.getDisplayName());
+        appendFlow(id, fromStatus, BugStatus.ASSIGNED, "分配处理人: " + assignee.getDisplayName());
         return toDetail(entity);
     }
 
@@ -175,7 +173,7 @@ public class BugService {
         workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
         BugStatus fromStatus = BugStatus.valueOf(entity.getStatus());
         if (fromStatus == request.toStatus()) {
-            throw new BadRequestException("目标状态不能与当前状态相同");
+            throw new BadRequestException("目标状态与当前状态一致，无需流转");
         }
         entity.setStatus(request.toStatus().name());
         entity.setUpdatedAt(LocalDateTime.now());
@@ -366,7 +364,7 @@ public class BugService {
         flow.setFromStatus(fromStatus.name());
         flow.setToStatus(toStatus.name());
         flow.setOperatorId(CurrentUserContext.get());
-        flow.setActionComment(comment == null || comment.isBlank() ? "状态流转" : comment);
+        flow.setActionComment(comment == null || comment.isBlank() ? "状态变更" : comment);
         flow.setCreatedAt(LocalDateTime.now());
         flow.setUpdatedAt(LocalDateTime.now());
         bugFlowMapper.insert(flow);
@@ -483,10 +481,10 @@ public class BugService {
         String workspaceCode = workspace.getWorkspaceCode();
         BugCaseSummaryResponse caseSummary = entity.getRelatedCaseId() == null
                 ? null
-                : toCaseSummary(caseService.getCase(entity.getRelatedCaseId(), workspaceCode));
+                : safeCaseSummary(entity.getRelatedCaseId(), workspaceCode);
         BugReportSummaryResponse reportSummary = entity.getRelatedReportId() == null
                 ? null
-                : toReportSummary(executionService.getReport(entity.getRelatedReportId(), workspaceCode));
+                : safeReportSummary(entity.getRelatedReportId(), workspaceCode);
 
         Long taskId = entity.getRelatedTaskId();
         if (taskId == null && reportSummary != null) {
@@ -494,7 +492,7 @@ public class BugService {
         }
         BugTaskSummaryResponse taskSummary = taskId == null
                 ? null
-                : toTaskSummary(executionService.getTask(taskId, workspaceCode));
+                : safeTaskSummary(taskId, workspaceCode);
 
         return new BugSourceContextResponse(
                 BugSourceType.valueOf(entity.getSourceType()),
@@ -502,6 +500,30 @@ public class BugService {
                 reportSummary,
                 taskSummary
         );
+    }
+
+    private BugCaseSummaryResponse safeCaseSummary(Long caseId, String workspaceCode) {
+        try {
+            return toCaseSummary(caseService.getCase(caseId, workspaceCode));
+        } catch (NotFoundException exception) {
+            return null;
+        }
+    }
+
+    private BugReportSummaryResponse safeReportSummary(Long reportId, String workspaceCode) {
+        try {
+            return toReportSummary(executionService.getReport(reportId, workspaceCode));
+        } catch (NotFoundException exception) {
+            return null;
+        }
+    }
+
+    private BugTaskSummaryResponse safeTaskSummary(Long taskId, String workspaceCode) {
+        try {
+            return toTaskSummary(executionService.getTask(taskId, workspaceCode));
+        } catch (NotFoundException exception) {
+            return null;
+        }
     }
 
     private List<BugActivityResponse> buildActivities(
@@ -534,8 +556,8 @@ public class BugService {
             BugStatus toStatus = BugStatus.valueOf(flow.getToStatus());
             BugActivityType type = toStatus == BugStatus.ASSIGNED ? BugActivityType.ASSIGNED : BugActivityType.STATUS_CHANGED;
             String title = type == BugActivityType.ASSIGNED
-                    ? operator.getDisplayName() + " 更新了负责人"
-                    : operator.getDisplayName() + " 更新了状态";
+                    ? operator.getDisplayName() + " 更新了处理人"
+                    : operator.getDisplayName() + " 更新了缺陷状态";
             activities.add(new BugActivityResponse(
                     "flow-" + flow.getId(),
                     type,
@@ -591,7 +613,7 @@ public class BugService {
                 .sorted(Comparator
                         .comparing(BugActivityResponse::occurredAt, Comparator.nullsLast(Comparator.naturalOrder()))
                         .reversed()
-                .thenComparing(BugActivityResponse::id, Comparator.nullsLast(String::compareTo)))
+                        .thenComparing(BugActivityResponse::id, Comparator.nullsLast(String::compareTo)))
                 .toList();
     }
 

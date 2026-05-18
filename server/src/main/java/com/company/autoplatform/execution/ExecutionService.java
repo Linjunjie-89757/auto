@@ -475,6 +475,9 @@ public class ExecutionService {
         if (normalized.isEmpty()) {
             normalized = DEFAULT_LOG_SOURCE;
         }
+        if ("INLINE".equals(normalized)) {
+            normalized = DEFAULT_LOG_SOURCE;
+        }
         if (!REPORT_LOG_SOURCES.contains(normalized)) {
             throw new BadRequestException("无效的日志来源: " + logSource);
         }

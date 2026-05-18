@@ -255,15 +255,11 @@ const fontSizeOptions = [
 ]
 
 const bugStatus = computed({
-  get: () => (props.form.assigneeId === null ? 'TODO' : 'ASSIGNED'),
+  get: () => 'ASSIGNED',
   set: () => {},
 })
 
-const statusOptions = computed(() => (
-  bugStatus.value === 'ASSIGNED'
-    ? [{ label: '已指派', value: 'ASSIGNED' }]
-    : [{ label: '待指派', value: 'TODO' }]
-))
+const statusOptions = [{ label: '已指派', value: 'ASSIGNED' }]
 
 const toolbarTooltipProps = {
   showAfter: 200,
@@ -912,8 +908,8 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="处理人" class="bug-editor-form-item bug-editor-side-item">
-          <el-select v-model="form.assigneeId" clearable placeholder="请选择">
+        <el-form-item label="处理人" required class="bug-editor-form-item bug-editor-side-item">
+          <el-select v-model="form.assigneeId" placeholder="请选择">
             <el-option v-for="item in users" :key="item.id" :label="item.displayName" :value="item.id" />
           </el-select>
         </el-form-item>

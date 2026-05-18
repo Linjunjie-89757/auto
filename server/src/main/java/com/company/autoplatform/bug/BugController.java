@@ -72,7 +72,7 @@ public class BugController {
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
             @Valid @RequestBody AssignBugRequest request
     ) {
-        return ApiResponse.ok(bugService.assignBug(id, workspaceCode, request), "负责人更新成功");
+        return ApiResponse.ok(bugService.assignBug(id, workspaceCode, request), "处理人更新成功");
     }
 
     @PostMapping("/bugs/{id}/transition")
@@ -81,7 +81,7 @@ public class BugController {
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
             @Valid @RequestBody TransitionBugRequest request
     ) {
-        return ApiResponse.ok(bugService.transitionBug(id, workspaceCode, request), "缺陷状态已流转");
+        return ApiResponse.ok(bugService.transitionBug(id, workspaceCode, request), "缺陷状态流转成功");
     }
 
     @GetMapping("/bugs/{id}/comments")

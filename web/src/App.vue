@@ -25,6 +25,7 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 const workspaceOptions = ref<WorkspaceItem[]>([])
+const workspaceReady = ref(false)
 const isMenuCollapsed = ref(localStorage.getItem('app-menu-collapsed') === '1')
 
 const iconMap = {
@@ -47,13 +48,38 @@ const activeMenu = computed(() => {
 const isPublicRoute = computed(() => route.meta.public === true)
 const asideWidth = computed(() => (isMenuCollapsed.value ? '72px' : '248px'))
 
+function resolveWorkspaceFallback() {
+  return workspaceOptions.value.find(item => item.code === 'ALL')?.code
+    ?? workspaceOptions.value.find(item => !item.allScope)?.code
+    ?? workspaceOptions.value[0]?.code
+    ?? 'ALL'
+}
+
+function isValidWorkspaceCode(value?: string | null) {
+  return !!value && workspaceOptions.value.some(item => item.code === value)
+}
+
+async function ensureValidWorkspaceRoute() {
+  const currentQuery = route.query.workspace?.toString()
+  if (isValidWorkspaceCode(currentQuery)) {
+    return
+  }
+
+  await router.replace({
+    path: route.path,
+    query: {
+      ...route.query,
+      workspace: resolveWorkspaceFallback(),
+    },
+  })
+}
+
 const currentWorkspace = computed(() => {
   const fromQuery = route.query.workspace?.toString()
-  if (fromQuery && workspaceOptions.value.some(item => item.code === fromQuery)) {
+  if (isValidWorkspaceCode(fromQuery)) {
     return fromQuery
   }
-  const firstBusinessWorkspace = workspaceOptions.value.find(item => !item.allScope)?.code
-  return firstBusinessWorkspace ?? 'ALL'
+  return resolveWorkspaceFallback()
 })
 
 const currentUserName = computed(() => authStore.currentUser?.displayName ?? '')
@@ -77,6 +103,15 @@ function handleWorkspaceChange(value: string) {
   })
 }
 
+function handleMenuSelect(path: string) {
+  router.push({
+    path,
+    query: {
+      workspace: currentWorkspace.value,
+    },
+  })
+}
+
 async function handleLogout() {
   await authStore.logout()
   workspaceOptions.value = []
@@ -85,31 +120,39 @@ async function handleLogout() {
 }
 
 async function loadWorkspaces() {
+  workspaceReady.value = false
+
+  if (isPublicRoute.value) {
+    workspaceReady.value = true
+    return
+  }
+
   if (!authStore.isAuthenticated) {
     workspaceOptions.value = []
+    workspaceReady.value = true
     return
   }
 
   try {
     workspaceOptions.value = await platformApi.getSwitchableWorkspaces()
-    const currentQuery = route.query.workspace?.toString()
-    if (!currentQuery || !workspaceOptions.value.some(item => item.code === currentQuery)) {
-      const nextWorkspace = workspaceOptions.value.find(item => !item.allScope)?.code ?? 'ALL'
-      router.replace({
-        path: route.path,
-        query: {
-          ...route.query,
-          workspace: nextWorkspace,
-        },
-      })
-    }
+    await ensureValidWorkspaceRoute()
+    workspaceReady.value = true
   }
   catch (error) {
+    workspaceReady.value = true
     ElMessage.error((error as Error).message)
   }
 }
 
 watch(() => authStore.currentUser?.id, loadWorkspaces)
+watch(() => route.query.workspace, async () => {
+  if (!authStore.isAuthenticated || workspaceOptions.value.length === 0) {
+    return
+  }
+  workspaceReady.value = false
+  await ensureValidWorkspaceRoute()
+  workspaceReady.value = true
+})
 onMounted(loadWorkspaces)
 </script>
 
@@ -129,9 +172,9 @@ onMounted(loadWorkspaces)
       <el-menu
         :default-active="activeMenu"
         class="app-menu"
-        router
         :collapse="isMenuCollapsed"
         :collapse-transition="false"
+        @select="handleMenuSelect"
       >
         <el-menu-item
           v-for="item in navigationItems"
@@ -206,9 +249,10 @@ onMounted(loadWorkspaces)
         </div>
       </el-header>
 
-      <el-main class="app-main">
+      <el-main v-if="workspaceReady" class="app-main">
         <router-view />
       </el-main>
+      <el-main v-else class="app-main" />
     </el-container>
   </el-container>
 </template>

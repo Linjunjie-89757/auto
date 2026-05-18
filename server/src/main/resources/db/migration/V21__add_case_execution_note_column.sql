@@ -1,1 +1,1 @@
-ALTER TABLE tb_case_info ADD COLUMN IF NOT EXISTS execution_note TEXT;
+ALTER TABLE tb_case_info ADD COLUMN execution_note TEXT;

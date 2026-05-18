@@ -1758,7 +1758,7 @@ onMounted(bootstrap)
         <el-form-item label="描述" required>
           <el-input v-model="bugState.description" type="textarea" :rows="4" />
         </el-form-item>
-        <el-form-item label="负责人">
+        <el-form-item label="处理人">
           <el-select v-model="bugState.assigneeId" clearable>
             <el-option v-for="item in activeOwnerOptions" :key="item.id" :label="item.displayName" :value="item.id" />
           </el-select>
@@ -2487,6 +2487,5 @@ onMounted(bootstrap)
   }
 }
 </style>
-
 
 

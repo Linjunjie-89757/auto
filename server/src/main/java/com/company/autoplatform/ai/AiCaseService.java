@@ -150,7 +150,7 @@ public class AiCaseService {
         int effectiveMaxCases = Math.min(requestedMaxCases, systemMaxCases);
         List<AiRequirementAssetEntity> assets = loadRequirementAssets(request.assetIds());
         if (!assets.isEmpty() && !supportsImageInput(config)) {
-            throw new BadRequestException("鐟滅増鎸告晶鐘绘偨閻旂鐏囨俊顖椻偓宕団偓鐑藉嫉椤忓嫮纾婚柛姘煎灠濞存﹢鎮ч崶顏嗙炕闁稿繈鍎查弫顕€骞愭笟濠勭閻犲洤鍢查崺?AI 闂佹澘绉堕悿鍡樸亜闂堟稒鍎欓柣顫妼閹宕樺鍫㈡Ц");
+            throw new BadRequestException("The current AI config does not support image input. Remove the images or enable an image-capable model.");
         }
         String prompt = buildGeneratorPrompt(config, request, workspace, effectiveMaxCases, assets);
         AiGeneratedCasesResult result = aiProviderClient.generate(config, decryptedApiKey, prompt, toImageInputs(assets));
@@ -172,7 +172,7 @@ public class AiCaseService {
 
     public ImportRequirementDocumentResponse importRequirementDocument(String headerWorkspaceCode, MultipartFile file) {
         CurrentUserContext.require();
-        validateSelectedFile(file, "请先选择需求文档");
+        validateSelectedFile(file, "Please select a requirement document first");
         String fileName = file.getOriginalFilename() == null ? "requirement" : file.getOriginalFilename().trim();
         if (file.getSize() <= 0) {
             return new ImportRequirementDocumentResponse(

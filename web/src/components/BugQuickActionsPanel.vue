@@ -73,9 +73,9 @@ function submitComment() {
     </section>
 
     <section class="bug-quick-card">
-      <div class="bug-quick-card-title">负责人信息</div>
+      <div class="bug-quick-card-title">处理人信息</div>
       <div class="bug-quick-card-row">
-        <span>负责人</span>
+        <span>处理人</span>
         <strong>{{ detail.assigneeName || '-' }}</strong>
       </div>
       <div class="bug-quick-card-row">

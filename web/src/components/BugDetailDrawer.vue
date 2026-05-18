@@ -95,14 +95,13 @@ const caseKeyword = ref('')
 const associateDialogVisible = ref(false)
 const basicForm = ref<BasicFormState>({
   assigneeId: null,
-  status: 'TODO',
+  status: 'ASSIGNED',
   severity: 'HIGH',
   tags: [],
 })
 
 const severityOptions = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
 const statusOptions = [
-  { label: '未指派', value: 'TODO' },
   { label: '已指派', value: 'ASSIGNED' },
   { label: '处理中', value: 'IN_PROGRESS' },
   { label: '待验证', value: 'PENDING_VERIFY' },
@@ -155,6 +154,8 @@ const basicAutoSaveTimer = ref<ReturnType<typeof setTimeout> | null>(null)
 const statusAutoSaveTimer = ref<ReturnType<typeof setTimeout> | null>(null)
 const lastBasicSubmitSignature = ref('')
 const lastStatusSubmitValue = ref('')
+const assigneeTouched = ref(false)
+const suppressNextStatusAutoSave = ref(false)
 
 const basicFormSignature = computed(() => JSON.stringify({
   assigneeId: basicForm.value.assigneeId,
@@ -171,6 +172,13 @@ const basicDirty = computed(() => {
   return basicForm.value.assigneeId !== props.detail.assigneeId
     || basicForm.value.severity !== props.detail.severity
     || draftTags.join('|') !== currentTags.join('|')
+})
+
+const assigneeInvalid = computed(() => {
+  if (basicForm.value.assigneeId !== null) {
+    return false
+  }
+  return assigneeTouched.value || basicForm.value.status === 'ASSIGNED'
 })
 
 const statusDirty = computed(() => {
@@ -211,7 +219,7 @@ const caseRows = computed(() => {
     caseNo: summary.caseNo,
     title: summary.title,
     workspaceName: summary.workspaceName,
-    caseType: '??????',
+    caseType: '功能用例',
   }]
 })
 
@@ -232,8 +240,26 @@ watch(
 )
 
 watch(
+  () => basicForm.value.assigneeId,
+  (assigneeId, previousAssigneeId) => {
+    if (syncingBasicForm.value || assigneeId === previousAssigneeId) {
+      return
+    }
+    assigneeTouched.value = true
+    if (assigneeId !== null && basicForm.value.status === 'TODO') {
+      suppressNextStatusAutoSave.value = true
+      basicForm.value.status = 'ASSIGNED'
+    }
+  }
+)
+
+watch(
   () => basicForm.value.status,
   () => {
+    if (suppressNextStatusAutoSave.value) {
+      suppressNextStatusAutoSave.value = false
+      return
+    }
     scheduleStatusAutoSave()
   }
 )
@@ -265,12 +291,13 @@ watch(
     syncingBasicForm.value = true
     basicForm.value = {
       assigneeId: detail?.assigneeId ?? null,
-      status: detail?.status ?? 'TODO',
+      status: detail?.status ?? 'ASSIGNED',
       severity: detail?.severity ?? 'HIGH',
       tags: [...(detail?.tags ?? [])],
     }
+    assigneeTouched.value = false
     lastBasicSubmitSignature.value = basicFormSignature.value
-    lastStatusSubmitValue.value = detail?.status ?? 'TODO'
+    lastStatusSubmitValue.value = detail?.status ?? 'ASSIGNED'
     setTimeout(() => {
       syncingBasicForm.value = false
     }, 0)
@@ -305,8 +332,32 @@ onBeforeUnmount(() => {
   closeRichImagePreview()
 })
 
-function closeDrawer() {
+function requestDrawerClose(done?: () => void) {
+  if (assigneeInvalid.value) {
+    ElMessage.warning('处理人不能为空')
+    return
+  }
+  if (done) {
+    done()
+    return
+  }
   emit('update:modelValue', false)
+}
+
+function closeDrawer() {
+  requestDrawerClose()
+}
+
+function handleDrawerBeforeClose(done: () => void) {
+  requestDrawerClose(done)
+}
+
+function handleDrawerModelValueChange(value: boolean) {
+  if (value) {
+    emit('update:modelValue', value)
+    return
+  }
+  closeDrawer()
 }
 
 function startTitleEdit() {
@@ -784,6 +835,10 @@ function submitBasicSave() {
   if (!props.detail || !basicDirty.value) {
     return
   }
+  if (assigneeInvalid.value) {
+    ElMessage.warning('处理人不能为空')
+    return
+  }
   lastBasicSubmitSignature.value = basicFormSignature.value
   emit('save-basic', {
     workspaceCode: props.detail.workspaceCode,
@@ -798,7 +853,7 @@ function submitBasicSave() {
 }
 
 function scheduleBasicAutoSave() {
-  if (!props.canWrite || syncingBasicForm.value || !basicDirty.value) {
+  if (!props.canWrite || syncingBasicForm.value || !basicDirty.value || assigneeInvalid.value) {
     return
   }
   if (basicAutoSaveTimer.value) {
@@ -1001,10 +1056,12 @@ function sanitizeStyle(value: string) {
       :with-header="false"
       append-to-body
       close-on-click-modal
+      close-on-press-escape
+      :before-close="handleDrawerBeforeClose"
       :show-close="false"
       size="850px"
       class="ms-bug-detail-drawer"
-      @update:model-value="emit('update:modelValue', $event)"
+        @update:model-value="handleDrawerModelValueChange"
   >
     <div class="ms-bug-detail-shell">
       <input ref="uploadInput" type="file" multiple class="bug-hidden-input" @change="handleUploadChange">
@@ -1109,11 +1166,13 @@ function sanitizeStyle(value: string) {
                       v-model="basicForm.assigneeId"
                       clearable
                       :disabled="!canWrite || !users.length"
+                      :class="{ 'is-error': assigneeInvalid }"
                       class="ms-bug-basic-select"
                       :placeholder="basicFieldText.selectPlaceholder"
                     >
                       <el-option v-for="item in users" :key="item.id" :label="item.displayName" :value="item.id" />
                     </el-select>
+                    <div v-if="assigneeInvalid" class="ms-bug-basic-error">处理人不能为空</div>
                   </div>
                 </div>
 
@@ -2223,6 +2282,17 @@ function sanitizeStyle(value: string) {
 .ms-bug-case-link {
   padding-left: 0;
   padding-right: 0;
+}
+
+.ms-bug-basic-error {
+  margin-top: 6px;
+  color: #f04438;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ms-bug-basic-select.is-error :deep(.el-select__wrapper) {
+  box-shadow: 0 0 0 1px #f04438 inset;
 }
 
 @media (max-width: 900px) {

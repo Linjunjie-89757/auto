@@ -1827,7 +1827,7 @@ onUnmounted(() => {
                     <el-tag size="small" effect="plain">{{ bugStatusLabel(row.status) }}</el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column prop="assigneeName" label="负责人" width="120">
+                <el-table-column prop="assigneeName" label="处理人" width="120">
                   <template #default="{ row }">
                     {{ row.assigneeName || '-' }}
                   </template>

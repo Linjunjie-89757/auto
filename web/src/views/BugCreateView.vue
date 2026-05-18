@@ -63,7 +63,9 @@ const canSubmit = computed(() => {
   if (isAllScope.value && !form.workspaceCode) {
     return false
   }
-  return form.title.trim().length > 0 && hasRichDescriptionContent(form.description)
+  return form.title.trim().length > 0
+    && hasRichDescriptionContent(form.description)
+    && form.assigneeId !== null
 })
 
 onMounted(loadOptions)
@@ -257,6 +259,10 @@ function resetFormForNextCreate() {
 async function submitBug(keepOpen = false) {
   if (!canSubmit.value) {
     ElMessage.warning('请先补充必填信息')
+    return
+  }
+  if (form.assigneeId === null) {
+    ElMessage.warning('请选择处理人')
     return
   }
   saving.value = true

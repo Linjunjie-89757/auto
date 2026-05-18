@@ -25,7 +25,7 @@ function formatActivitySummary(item: BugActivity) {
     case 'CREATED':
       return `${item.operatorName || '未知用户'} 创建了缺陷`
     case 'ASSIGNED':
-      return `${item.operatorName || '未知用户'} 更新了负责人`
+      return `${item.operatorName || '未知用户'} 更新了处理人`
     case 'STATUS_CHANGED':
       return `${item.operatorName || '未知用户'} 更新了状态`
     case 'COMMENT_ADDED':

@@ -44,13 +44,13 @@ public class SecurityConfig {
                             response.setStatus(HttpStatus.UNAUTHORIZED.value());
                             response.setCharacterEncoding(StandardCharsets.UTF_8.name());
                             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-                            response.getWriter().write("{\"success\":false,\"data\":null,\"message\":\"请先登录\"}");
+                            response.getWriter().write("{\"success\":false,\"data\":null,\"message\":\"Please log in first\"}");
                         })
                         .accessDeniedHandler((request, response, accessDeniedException) -> {
                             response.setStatus(HttpStatus.FORBIDDEN.value());
                             response.setCharacterEncoding(StandardCharsets.UTF_8.name());
                             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-                            response.getWriter().write("{\"success\":false,\"data\":null,\"message\":\"当前账号没有权限执行此操作\"}");
+                            response.getWriter().write("{\"success\":false,\"data\":null,\"message\":\"You do not have permission to perform this action\"}");
                         })
                 )
                 .build();

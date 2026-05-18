@@ -429,6 +429,228 @@ export interface ReportDetail extends ReportItem {
   updatedAt: string
 }
 
+export interface ApiKeyValue {
+  key: string
+  value: string
+  enabled?: boolean
+}
+
+export interface ApiAuthConfig {
+  type: string
+  token?: string | null
+  username?: string | null
+  password?: string | null
+}
+
+export interface ApiRequestBodyConfig {
+  type: string
+  rawText?: string | null
+  formItems: ApiKeyValue[]
+}
+
+export interface ApiAssertionConfig {
+  type: string
+  subject: string
+  operator: string
+  expectedValue: string
+}
+
+export interface ApiExtractorConfig {
+  name: string
+  sourceType: string
+  expression: string
+}
+
+export interface ApiRequestConfig {
+  method: string
+  path: string
+  timeoutMs?: number | null
+  queryParams: ApiKeyValue[]
+  headers: ApiKeyValue[]
+  cookies: ApiKeyValue[]
+  body: ApiRequestBodyConfig
+  authConfig: ApiAuthConfig
+}
+
+export interface ApiDefinitionItem {
+  id: number
+  workspaceCode: string
+  workspaceName: string
+  name: string
+  method: string
+  path: string
+  directoryName: string | null
+  description: string | null
+  tags: string[]
+  lastRunResult: string | null
+  lastRunAt: string | null
+  updatedAt: string | null
+}
+
+export interface ApiDefinitionDetail extends ApiDefinitionItem {
+  requestConfig: ApiRequestConfig
+  assertions: ApiAssertionConfig[]
+  extractors: ApiExtractorConfig[]
+  createdAt: string | null
+}
+
+export interface ApiScenarioStep {
+  stepName: string
+  definitionId: number
+  enabled?: boolean
+}
+
+export interface ApiScenarioItem {
+  id: number
+  workspaceCode: string
+  workspaceName: string
+  name: string
+  directoryName: string | null
+  description: string | null
+  tags: string[]
+  stepCount: number
+  defaultEnvironmentId: number | null
+  variableSetId: number | null
+  continueOnFailure: boolean
+  lastRunResult: string | null
+  lastRunAt: string | null
+  updatedAt: string | null
+}
+
+export interface ApiScenarioDetail extends ApiScenarioItem {
+  relatedCaseId: number | null
+  steps: ApiScenarioStep[]
+  createdAt: string | null
+}
+
+export interface ApiEnvironmentItem {
+  id: number
+  workspaceCode: string
+  workspaceName: string
+  name: string
+  baseUrl: string
+  headers: ApiKeyValue[]
+  authConfig: ApiAuthConfig
+  timeoutMs: number
+  status: number
+}
+
+export interface ApiVariableItem {
+  name: string
+  value: string
+  sensitive?: boolean
+}
+
+export interface ApiVariableSetItem {
+  id: number
+  workspaceCode: string
+  workspaceName: string
+  name: string
+  variables: ApiVariableItem[]
+  status: number
+}
+
+export interface ApiRequestSnapshot {
+  method: string
+  url: string
+  headers: Record<string, string>
+  body: string | null
+}
+
+export interface ApiResponseSnapshot {
+  statusCode: number
+  headers: Record<string, string>
+  body: string | null
+  contentType: string | null
+}
+
+export interface ApiAssertionResult {
+  type: string
+  subject: string
+  success: boolean
+  message: string
+}
+
+export interface ApiExtractionResult {
+  name: string
+  success: boolean
+  value: string | null
+  message: string
+}
+
+export interface ApiRunStepResult {
+  id: number | null
+  reportId: number | null
+  stepOrder: number
+  stepName: string
+  definitionId: number | null
+  success: boolean
+  durationMs: number
+  request: ApiRequestSnapshot | null
+  response: ApiResponseSnapshot | null
+  assertionResults: ApiAssertionResult[]
+  extractionResults: ApiExtractionResult[]
+  errorMessage: string | null
+  createdAt: string | null
+}
+
+export interface ApiRunResponse {
+  taskId: number
+  reportId: number
+  taskName: string
+  reportName: string
+  result: string
+  failureSummary: string | null
+  stepResults: ApiRunStepResult[]
+}
+
+export interface SaveApiDefinitionPayload {
+  workspaceCode?: string
+  name: string
+  directoryName?: string | null
+  description?: string | null
+  tags: string[]
+  requestConfig: ApiRequestConfig
+  assertions: ApiAssertionConfig[]
+  extractors: ApiExtractorConfig[]
+}
+
+export interface SaveApiScenarioPayload {
+  workspaceCode?: string
+  name: string
+  directoryName?: string | null
+  description?: string | null
+  tags: string[]
+  defaultEnvironmentId?: number | null
+  variableSetId?: number | null
+  continueOnFailure: boolean
+  relatedCaseId?: number | null
+  steps: ApiScenarioStep[]
+}
+
+export interface SaveApiEnvironmentPayload {
+  workspaceCode?: string
+  name: string
+  baseUrl: string
+  headers: ApiKeyValue[]
+  authConfig: ApiAuthConfig
+  timeoutMs: number
+  status?: number
+}
+
+export interface SaveApiVariableSetPayload {
+  workspaceCode?: string
+  name: string
+  variables: ApiVariableItem[]
+  status?: number
+}
+
+export interface ApiRunPayload {
+  workspaceCode?: string
+  environmentId?: number | null
+  variableSetId?: number | null
+}
+
 export interface CreateReportPayload {
   workspaceCode?: string
   taskId: number | null

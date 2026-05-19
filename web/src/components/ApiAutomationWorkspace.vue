@@ -2420,7 +2420,7 @@ function formatTimeLabel(value?: string | null) {
                         placeholder="参数值 / {{variable}}"
                         @input="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
                       />
-                      <div class="ms-like-switch-cell">
+                      <div class="ms-like-switch-cell ms-like-switch-cell--query">
                         <el-switch v-model="row.encode" size="small" />
                       </div>
                       <el-input
@@ -4080,6 +4080,10 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-switch-cell {
   display: flex;
   justify-content: center;
+}
+
+.ms-like-param-table--query .ms-like-switch-cell--query {
+  justify-content: flex-start;
 }
 
 .ms-like-link-button,

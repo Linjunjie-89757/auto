@@ -79,6 +79,14 @@ public class ApiAutomationController {
                 request == null ? new ApiRunRequest(null, null, null) : request));
     }
 
+    @PostMapping("/definitions/debug-run")
+    public ApiResponse<ApiRunResponse> debugRunDefinitionDraft(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody ApiDebugDefinitionRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.debugRunDefinitionDraft(workspaceCode, request));
+    }
+
     @GetMapping("/scenarios")
     public ApiResponse<PageResponse<ApiScenarioItem>> listScenarios(
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode

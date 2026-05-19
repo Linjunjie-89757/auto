@@ -1,4 +1,5 @@
 import type {
+  ApiDebugDefinitionPayload,
   ApiResponse,
   ApiDefinitionDetail,
   ApiDefinitionItem,
@@ -579,6 +580,13 @@ export const platformApi = {
   },
   debugApiDefinition(workspaceCode: string, id: number, payload: ApiRunPayload) {
     return request<ApiRunResponse>(`/automation/api/definitions/${id}/debug-run`, {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  debugApiDefinitionDraft(workspaceCode: string, payload: ApiDebugDefinitionPayload) {
+    return request<ApiRunResponse>('/automation/api/definitions/debug-run', {
       method: 'POST',
       workspaceCode,
       body: JSON.stringify(payload),

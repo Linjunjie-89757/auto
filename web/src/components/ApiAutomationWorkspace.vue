@@ -10,6 +10,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
 import { useWorkspace } from '../composables/useWorkspace'
 import { useWorkspaceAccess } from '../composables/useWorkspaceAccess'
+import MonacoCodeEditor from './MonacoCodeEditor.vue'
 import type {
   ApiAssertionConfig,
   ApiDefinitionDetail,
@@ -41,6 +42,8 @@ type RequestEditorTab = {
   savedFingerprint: string
   isDirty: boolean
 }
+
+const requestMethodOptions = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'TRACE'] as const
 
 type DefinitionDirectoryTreeNode = {
   key: string
@@ -601,6 +604,7 @@ const currentResponseSize = computed(() => {
   const body = currentResponseStep.value?.response?.body
   return body ? `${new Blob([body]).size} B` : '0 B'
 })
+const currentResponseContentType = computed(() => currentResponseStep.value?.response?.contentType ?? '')
 const currentResponseBody = computed(() => currentResponseStep.value?.response?.body ?? '')
 const currentResponseHeaders = computed(() => currentResponseStep.value?.response?.headers ?? {})
 const currentAssertionResults = computed(() => currentResponseStep.value?.assertionResults ?? [])
@@ -681,10 +685,55 @@ function setBodyMode(mode: 'NONE' | 'FORM_DATA' | 'FORM_URLENCODED' | 'RAW_JSON'
   syncActiveBodyText()
 }
 
+function requestMethodClass(method: string) {
+  return `request-method-${method.toLowerCase()}`
+}
+
 const activeBodyRawText = computed({
   get: () => getModeBodyText(definitionForm.requestConfig.body.type),
   set: (value: string) => setModeBodyText(definitionForm.requestConfig.body.type, value),
 })
+
+const activeBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
+  const type = definitionForm.requestConfig.body.type
+  if (type === 'RAW_JSON') return 'json'
+  if (type === 'RAW_XML') return 'xml'
+  return 'text'
+})
+
+const responseBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
+  const contentType = currentResponseContentType.value.toLowerCase()
+  const body = currentResponseBody.value.trim()
+  if (contentType.includes('json')) return 'json'
+  if (contentType.includes('xml') || contentType.includes('html')) return 'xml'
+  if (!body) return 'text'
+  if ((body.startsWith('{') && body.endsWith('}')) || (body.startsWith('[') && body.endsWith(']'))) {
+    try {
+      JSON.parse(body)
+      return 'json'
+    }
+    catch {
+      return 'text'
+    }
+  }
+  if (body.startsWith('<') && body.endsWith('>')) {
+    return 'xml'
+  }
+  return 'text'
+})
+
+const responseBodyPreview = computed(() => currentResponseBody.value || 'Run the request to view the response body.')
+const responseHeadersPreview = computed(() => JSON.stringify(currentResponseHeaders.value, null, 2))
+
+async function copyText(value: string) {
+  try {
+    await navigator.clipboard.writeText(value)
+    ElMessage.success('Copied')
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message || 'Copy failed')
+  }
+}
 
 async function pickBinaryBodyFile() {
   const input = document.createElement('input')
@@ -2073,12 +2122,19 @@ function formatTimeLabel(value?: string | null) {
               </div>
 
               <div class="ms-like-request-row">
-                <el-select v-model="definitionForm.requestConfig.method" class="request-method-select">
-                  <el-option label="GET" value="GET" />
-                  <el-option label="POST" value="POST" />
-                  <el-option label="PUT" value="PUT" />
-                  <el-option label="DELETE" value="DELETE" />
-                  <el-option label="PATCH" value="PATCH" />
+                <el-select
+                  v-model="definitionForm.requestConfig.method"
+                  :class="['request-method-select', requestMethodClass(definitionForm.requestConfig.method)]"
+                  popper-class="request-method-popper"
+                >
+                  <el-option
+                    v-for="method in requestMethodOptions"
+                    :key="method"
+                    :label="method"
+                    :value="method"
+                  >
+                    <span :class="['request-method-option', requestMethodClass(method)]">{{ method }}</span>
+                  </el-option>
                 </el-select>
                 <el-input v-model="definitionForm.requestConfig.path" class="request-url-input" placeholder="&#35831;&#36755;&#20837;&#21253;&#21547; http/https &#30340;&#23436;&#25972; URL &#25110;&#25509;&#21475;&#36335;&#24452;" />
                 <el-button @click="promptImportCurl">Curl</el-button>
@@ -2180,13 +2236,12 @@ function formatTimeLabel(value?: string | null) {
                       <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_TEXT') }]" @click="setBodyMode('RAW_TEXT')">raw</button>
                       <button :class="['ms-like-body-chip', { active: isBodyMode('BINARY') }]" @click="setBodyMode('BINARY')">binary</button>
                     </div>
-                    <el-input
+                    <MonacoCodeEditor
                       v-if="['RAW_JSON', 'RAW_XML', 'RAW_TEXT'].includes(definitionForm.requestConfig.body.type)"
                       v-model="activeBodyRawText"
-                      type="textarea"
-                      :rows="16"
-                      class="code-textarea ms-like-code-editor"
-                      placeholder="&#25903;&#25345; {{variable}} &#21344;&#20301;&#31526;"
+                      :language="activeBodyLanguage"
+                      :show-format-button="activeBodyLanguage !== 'text'"
+                      height="420px"
                     />
                     <div v-else-if="definitionForm.requestConfig.body.type === 'BINARY'" class="request-section ms-like-form-panel">
                       <div class="ms-like-form-row">
@@ -2379,7 +2434,25 @@ function formatTimeLabel(value?: string | null) {
                   <span>耗时 {{ currentResponseDuration ?? '-' }}<template v-if="currentResponseDuration !== null"> ms</template></span>
                   <span>大小 {{ currentResponseSize }}</span>
                 </div>
-                <el-button v-if="selectedReportId" text type="primary" @click="openReportDetail(selectedReportId)">完整报告</el-button>
+                <div class="ms-like-response-actions">
+                  <el-button
+                    v-if="responsePreviewTab === 'body'"
+                    text
+                    type="primary"
+                    @click="copyText(responseBodyPreview)"
+                  >
+                    Copy
+                  </el-button>
+                  <el-button
+                    v-else-if="responsePreviewTab === 'headers'"
+                    text
+                    type="primary"
+                    @click="copyText(responseHeadersPreview)"
+                  >
+                    Copy
+                  </el-button>
+                  <el-button v-if="selectedReportId" text type="primary" @click="openReportDetail(selectedReportId)">完整报告</el-button>
+                </div>
               </div>
 
               <div v-if="currentDebugError" class="response-error-banner">
@@ -2395,8 +2468,22 @@ function formatTimeLabel(value?: string | null) {
               </div>
 
               <div class="ms-like-response-body">
-                <pre v-if="responsePreviewTab === 'body'">{{ currentResponseBody || '点击“服务端执行”获取响应内容' }}</pre>
-                <pre v-else-if="responsePreviewTab === 'headers'">{{ JSON.stringify(currentResponseHeaders, null, 2) }}</pre>
+                <MonacoCodeEditor
+                  v-if="responsePreviewTab === 'body'"
+                  :model-value="responseBodyPreview"
+                  :language="responseBodyLanguage"
+                  :read-only="true"
+                  :show-format-button="false"
+                  height="360px"
+                />
+                <MonacoCodeEditor
+                  v-else-if="responsePreviewTab === 'headers'"
+                  :model-value="responseHeadersPreview"
+                  language="json"
+                  :read-only="true"
+                  :show-format-button="false"
+                  height="360px"
+                />
                 <div v-else-if="responsePreviewTab === 'assertions'" class="result-list">
                   <div class="result-summary">通过 {{ currentAssertionSummary.passed }} / {{ currentAssertionSummary.total }}</div>
                   <div v-for="(item, index) in currentAssertionResults" :key="`assertion-preview-${index}`" class="result-item">
@@ -2910,6 +2997,7 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-tree-toolbar,
 .ms-like-request-row,
 .ms-like-response-header,
+.ms-like-response-actions,
 .ms-like-response-metrics {
   display: flex;
   align-items: center;
@@ -3099,16 +3187,125 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-method.method-post {
-  color: #2563eb;
+  color: #f97316;
 }
 
 .ms-like-method.method-put,
+.ms-like-method.method-options,
+.ms-like-method.method-head {
+  color: #3b82f6;
+}
+
 .ms-like-method.method-patch {
-  color: #d97706;
+  color: #ec4899;
 }
 
 .ms-like-method.method-delete {
   color: #dc2626;
+}
+
+.ms-like-method.method-trace {
+  color: #8b5cf6;
+}
+
+.request-method-select {
+  width: 112px;
+  min-width: 112px;
+  flex: 0 0 112px;
+}
+
+.request-method-option {
+  font-weight: 600;
+}
+
+.request-method-get {
+  color: #16a34a;
+}
+
+.request-method-post {
+  color: #f97316;
+}
+
+.request-method-put,
+.request-method-options,
+.request-method-head {
+  color: #3b82f6;
+}
+
+.request-method-patch {
+  color: #ec4899;
+}
+
+.request-method-delete {
+  color: #dc2626;
+}
+
+.request-method-trace {
+  color: #8b5cf6;
+}
+
+.request-method-select :deep(.el-select__wrapper) {
+  min-height: 36px;
+}
+
+.request-method-select :deep(.el-select__selected-item) {
+  font-weight: 600;
+}
+
+.request-method-select.request-method-get :deep(.el-select__selected-item) {
+  color: #16a34a;
+}
+
+.request-method-select.request-method-post :deep(.el-select__selected-item) {
+  color: #f97316;
+}
+
+.request-method-select.request-method-put :deep(.el-select__selected-item),
+.request-method-select.request-method-options :deep(.el-select__selected-item),
+.request-method-select.request-method-head :deep(.el-select__selected-item) {
+  color: #3b82f6;
+}
+
+.request-method-select.request-method-delete :deep(.el-select__selected-item) {
+  color: #dc2626;
+}
+
+.request-method-select.request-method-patch :deep(.el-select__selected-item) {
+  color: #ec4899;
+}
+
+.request-method-select.request-method-trace :deep(.el-select__selected-item) {
+  color: #8b5cf6;
+}
+
+:deep(.request-method-popper .el-select-dropdown__item) {
+  font-weight: 600;
+}
+
+:deep(.request-method-popper .request-method-get) {
+  color: #16a34a;
+}
+
+:deep(.request-method-popper .request-method-post) {
+  color: #f97316;
+}
+
+:deep(.request-method-popper .request-method-put),
+:deep(.request-method-popper .request-method-options),
+:deep(.request-method-popper .request-method-head) {
+  color: #3b82f6;
+}
+
+:deep(.request-method-popper .request-method-delete) {
+  color: #dc2626;
+}
+
+:deep(.request-method-popper .request-method-patch) {
+  color: #ec4899;
+}
+
+:deep(.request-method-popper .request-method-trace) {
+  color: #8b5cf6;
 }
 
 .ms-like-main {
@@ -3599,7 +3796,6 @@ function formatTimeLabel(value?: string | null) {
   background: var(--el-color-warning-light-9);
 }
 
-.request-method-select,
 .request-url-input {
   width: 100%;
 }

@@ -235,6 +235,18 @@ public final class ApiAutomationModels {
     ) {
     }
 
+    public record ApiDebugDefinitionRequest(
+            String workspaceCode,
+            Long definitionId,
+            String name,
+            @Valid @NotNull(message = "Request config cannot be blank") ApiRequestConfigInput requestConfig,
+            List<ApiAssertionInput> assertions,
+            List<ApiExtractorInput> extractors,
+            Long environmentId,
+            Long variableSetId
+    ) {
+    }
+
     public record ApiRequestSnapshot(
             String method,
             String url,

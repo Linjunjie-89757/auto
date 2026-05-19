@@ -287,6 +287,61 @@ public class ApiAutomationService {
         );
     }
 
+    public ApiRunResponse debugRunDefinitionDraft(String workspaceCode, ApiDebugDefinitionRequest request) {
+        WorkspaceEntity workspace = workspaceService.requireWorkspace(
+                blankToFallback(request.workspaceCode(), workspaceCode)
+        );
+        validateReadable(workspace.getId(), workspaceCode, "Current workspace cannot run the definition");
+        workspaceService.requireWritableWorkspace(workspace.getWorkspaceCode());
+
+        if (request.definitionId() != null) {
+            ApiDefinitionEntity definition = requireDefinition(request.definitionId());
+            if (!definition.getWorkspaceId().equals(workspace.getId())) {
+                throw new BadRequestException("Definition does not belong to the selected workspace");
+            }
+        }
+
+        ApiRequestConfigInput config = request.requestConfig();
+        String method = Optional.ofNullable(config.method()).orElse("").trim().toUpperCase();
+        String path = Optional.ofNullable(config.path()).orElse("").trim();
+        if (method.isEmpty()) {
+            throw new BadRequestException("HTTP method cannot be blank");
+        }
+        if (path.isEmpty()) {
+            throw new BadRequestException("Path cannot be blank");
+        }
+
+        ApiDefinitionEntity draftDefinition = new ApiDefinitionEntity();
+        draftDefinition.setId(request.definitionId());
+        draftDefinition.setWorkspaceId(workspace.getId());
+        draftDefinition.setDefinitionName(blankToFallback(request.name(), method + " " + path));
+        draftDefinition.setHttpMethod(method);
+        draftDefinition.setPath(path);
+        draftDefinition.setRequestJson(ApiAutomationJsonSupport.toJson(config, "Failed to serialize request config"));
+        draftDefinition.setAssertionsJson(ApiAutomationJsonSupport.toJson(defaultList(request.assertions()), "Failed to serialize assertions"));
+        draftDefinition.setExtractorsJson(ApiAutomationJsonSupport.toJson(defaultList(request.extractors()), "Failed to serialize extractors"));
+
+        ExecutionContext context = buildExecutionContext(workspace.getId(), request.environmentId(), request.variableSetId());
+        RunEnvelope envelope = createRunEnvelope(workspace.getId(), "API", "接口调试", draftDefinition.getDefinitionName());
+        RunStepComputation step = executeDefinition(draftDefinition, draftDefinition.getDefinitionName(), 1, context.variables(), context.environment());
+        persistStep(envelope.report(), workspace.getId(), step);
+        finalizeRunTaskAndReport(
+                envelope.task(),
+                envelope.report(),
+                step.success() ? "SUCCESS" : "FAILED",
+                step.response().errorMessage()
+        );
+        return new ApiRunResponse(
+                envelope.task().getId(),
+                envelope.report().getId(),
+                envelope.task().getTaskName(),
+                envelope.report().getReportName(),
+                envelope.report().getResult(),
+                envelope.report().getFailureSummary(),
+                List.of(step.response())
+        );
+    }
+
     public ApiRunResponse runScenario(Long id, String workspaceCode, ApiRunRequest request) {
         ApiScenarioEntity scenario = requireScenario(id);
         validateReadable(scenario.getWorkspaceId(), workspaceCode, "Current workspace cannot run the scenario");

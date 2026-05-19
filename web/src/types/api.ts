@@ -432,6 +432,7 @@ export interface ReportDetail extends ReportItem {
 export interface ApiKeyValue {
   key: string
   value: string
+  description?: string
   enabled?: boolean
 }
 
@@ -653,6 +654,17 @@ export interface SaveApiVariableSetPayload {
 
 export interface ApiRunPayload {
   workspaceCode?: string
+  environmentId?: number | null
+  variableSetId?: number | null
+}
+
+export interface ApiDebugDefinitionPayload {
+  workspaceCode?: string
+  definitionId?: number | null
+  name?: string
+  requestConfig: ApiRequestConfig
+  assertions: ApiAssertionConfig[]
+  extractors: ApiExtractorConfig[]
   environmentId?: number | null
   variableSetId?: number | null
 }

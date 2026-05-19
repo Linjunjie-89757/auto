@@ -2366,13 +2366,14 @@ function formatTimeLabel(value?: string | null) {
                 <template v-if="activeRequestTab === 'params'">
                   <div class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--query">
                     <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--query">
-                      <label class="ms-like-check-cell">
+                      <div class="ms-like-drag-cell"></div>
+                      <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
                         <el-checkbox
                           v-model="queryTableSelectionModel"
                           :indeterminate="tableSelectionState(definitionForm.requestConfig.queryParams).indeterminate"
                         />
-                        <span>Query 参数</span>
-                      </label>
+                      </div>
+                      <span class="ms-like-header-input-title">Query 参数</span>
                       <span>类型</span>
                       <span>参数值</span>
                       <span>长度范围</span>
@@ -2399,8 +2400,10 @@ function formatTimeLabel(value?: string | null) {
                           <span v-for="dotIndex in 6" :key="`query-dot-${index}-${dotIndex}`" class="ms-like-drag-dot"></span>
                         </button>
                       </div>
-                      <div class="ms-like-checkbox-field">
+                      <div class="ms-like-checkbox-cell">
                         <el-checkbox v-model="row.enabled" />
+                      </div>
+                      <div class="ms-like-name-field">
                         <button
                           type="button"
                           :class="['ms-like-required-button', { active: row.required }]"
@@ -2493,18 +2496,18 @@ function formatTimeLabel(value?: string | null) {
                       <div class="ms-like-header-input-cell">
                         <el-input
                           v-model="row.key"
-                          placeholder=""
+                          placeholder="参数名称"
                           @input="handleKeyValueRowInput(definitionForm.requestConfig.headers, headerParamDefaults())"
                         />
                       </div>
                       <el-input
                         v-model="row.value"
-                        placeholder=""
+                        placeholder="参数值"
                         @input="handleKeyValueRowInput(definitionForm.requestConfig.headers, headerParamDefaults())"
                       />
                       <el-input
                         v-model="row.description"
-                        placeholder=""
+                        placeholder="描述"
                         @input="handleKeyValueRowInput(definitionForm.requestConfig.headers, headerParamDefaults())"
                       />
                       <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(definitionForm.requestConfig.headers, index, headerParamDefaults())">删除</button>
@@ -2559,13 +2562,14 @@ function formatTimeLabel(value?: string | null) {
                       class="body-form-grid ms-like-table-surface ms-like-param-table ms-like-param-table--body-form"
                     >
                       <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--body-form">
-                        <label class="ms-like-check-cell">
+                        <div class="ms-like-drag-cell"></div>
+                        <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
                           <el-checkbox
                             v-model="bodyFormTableSelectionModel"
                             :indeterminate="tableSelectionState(definitionForm.requestConfig.body.formItems).indeterminate"
                           />
-                          <span>参数名称</span>
-                        </label>
+                        </div>
+                        <span class="ms-like-header-input-title">参数名称</span>
                         <span>类型</span>
                         <span>参数值</span>
                         <span>描述</span>
@@ -2590,8 +2594,10 @@ function formatTimeLabel(value?: string | null) {
                             <span v-for="dotIndex in 6" :key="`body-dot-${index}-${dotIndex}`" class="ms-like-drag-dot"></span>
                           </button>
                         </div>
-                        <div class="ms-like-checkbox-field">
+                        <div class="ms-like-checkbox-cell">
                           <el-checkbox v-model="row.enabled" />
+                        </div>
+                        <div class="ms-like-name-field">
                           <button
                             type="button"
                             :class="['ms-like-required-button', { active: row.required }]"
@@ -3847,15 +3853,15 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-param-table-grid--query {
-  grid-template-columns: 32px minmax(220px, 1.5fr) 112px minmax(180px, 1.1fr) 180px 88px minmax(180px, 1fr) 68px;
+  grid-template-columns: 24px 32px minmax(220px, 1.2fr) 130px minmax(220px, 1.15fr) 200px 80px minmax(180px, 1fr) 80px;
 }
 
 .ms-like-param-table-grid--header {
-  grid-template-columns: 32px 28px minmax(240px, 1.4fr) minmax(220px, 1.1fr) minmax(180px, 1fr) 70px;
+  grid-template-columns: 24px 32px repeat(3, minmax(0, 1fr)) 80px;
 }
 
 .ms-like-param-table-grid--body-form {
-  grid-template-columns: 32px minmax(220px, 1.45fr) 112px minmax(200px, 1.15fr) minmax(180px, 1fr) 68px;
+  grid-template-columns: 24px 32px minmax(220px, 1.15fr) 130px minmax(220px, 1.05fr) minmax(180px, 1fr) 80px;
 }
 
 .ms-like-table-header {
@@ -3866,7 +3872,7 @@ function formatTimeLabel(value?: string | null) {
   padding-right: 10px;
 }
 
-.ms-like-param-table--header .ms-like-table-header {
+.ms-like-param-table .ms-like-table-header {
   color: #7d7d7f;
   font-size: 14px;
   font-weight: 500;
@@ -3880,6 +3886,7 @@ function formatTimeLabel(value?: string | null) {
   gap: 8px;
 }
 
+.ms-like-name-field,
 .ms-like-header-name-cell,
 .ms-like-checkbox-cell {
   display: flex;
@@ -3887,13 +3894,17 @@ function formatTimeLabel(value?: string | null) {
   min-width: 0;
 }
 
+.ms-like-name-field {
+  position: relative;
+}
+
 .ms-like-checkbox-cell {
   justify-content: center;
 }
 
 .ms-like-checkbox-cell--header {
-  justify-content: flex-start;
-  padding-left: 6px;
+  justify-content: center;
+  padding-left: 0;
 }
 
 .ms-like-check-cell {
@@ -3907,8 +3918,13 @@ function formatTimeLabel(value?: string | null) {
   padding-left: 0;
 }
 
-.ms-like-param-table--header .ms-like-header-input-title,
-.ms-like-param-table--header .ms-like-table-header > span {
+.ms-like-param-table--query .ms-like-header-input-title,
+.ms-like-param-table--body-form .ms-like-header-input-title {
+  padding-left: 28px;
+}
+
+.ms-like-param-table .ms-like-header-input-title,
+.ms-like-param-table .ms-like-table-header > span {
   color: #7d7d7f;
   font-size: 14px;
   font-weight: 500;
@@ -3984,11 +4000,17 @@ function formatTimeLabel(value?: string | null) {
   min-width: 0;
 }
 
+.ms-like-name-field :deep(.el-input),
 .ms-like-header-input-cell :deep(.el-input) {
   width: 100%;
 }
 
 .ms-like-required-button {
+  position: absolute;
+  top: 50%;
+  left: 6px;
+  z-index: 1;
+  transform: translateY(-50%);
   width: 18px;
   height: 18px;
   border: 0;
@@ -4007,6 +4029,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-checkbox-field :deep(.el-input),
+.ms-like-name-field :deep(.el-input),
 .ms-like-table-row :deep(.el-input),
 .ms-like-table-row :deep(.el-select),
 .ms-like-length-range :deep(.el-input-number) {
@@ -4014,6 +4037,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-checkbox-field :deep(.el-input__wrapper),
+.ms-like-name-field :deep(.el-input__wrapper),
 .ms-like-table-row :deep(.el-input__wrapper),
 .ms-like-table-row :deep(.el-select__wrapper),
 .ms-like-length-range :deep(.el-input-number .el-input__wrapper) {
@@ -4025,7 +4049,12 @@ function formatTimeLabel(value?: string | null) {
   transition: box-shadow 0.15s ease, background-color 0.15s ease;
 }
 
+.ms-like-name-field :deep(.el-input__wrapper) {
+  padding-left: 28px;
+}
+
 .ms-like-checkbox-field :deep(.el-input__inner),
+.ms-like-name-field :deep(.el-input__inner),
 .ms-like-table-row :deep(.el-input__inner),
 .ms-like-table-row :deep(.el-select__placeholder),
 .ms-like-table-row :deep(.el-select__selected-item),
@@ -4034,6 +4063,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-checkbox-field :deep(.el-input__wrapper:hover),
+.ms-like-name-field :deep(.el-input__wrapper:hover),
 .ms-like-table-row :deep(.el-input__wrapper:hover),
 .ms-like-table-row :deep(.el-select__wrapper:hover),
 .ms-like-length-range :deep(.el-input-number .el-input__wrapper:hover) {
@@ -4042,6 +4072,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-checkbox-field :deep(.el-input.is-focus .el-input__wrapper),
+.ms-like-name-field :deep(.el-input.is-focus .el-input__wrapper),
 .ms-like-table-row :deep(.el-input.is-focus .el-input__wrapper),
 .ms-like-table-row :deep(.el-select.is-focus .el-select__wrapper),
 .ms-like-table-row :deep(.el-select__wrapper.is-focused),
@@ -4479,15 +4510,15 @@ pre {
 
 @media (max-width: 1480px) {
   .ms-like-param-table-grid--query {
-      grid-template-columns: 28px minmax(210px, 1.35fr) 100px minmax(160px, 1fr) 160px 78px minmax(160px, 0.95fr) 64px;
+      grid-template-columns: 24px 28px minmax(190px, 1.15fr) 112px minmax(180px, 1fr) 176px 72px minmax(150px, 0.9fr) 64px;
   }
 
   .ms-like-param-table-grid--header {
-      grid-template-columns: 28px 26px minmax(210px, 1.35fr) minmax(180px, 1fr) minmax(150px, 0.9fr) 64px;
+      grid-template-columns: 24px 28px repeat(3, minmax(0, 1fr)) 64px;
   }
 
   .ms-like-param-table-grid--body-form {
-      grid-template-columns: 28px minmax(200px, 1.3fr) 100px minmax(180px, 1fr) minmax(150px, 0.9fr) 64px;
+      grid-template-columns: 24px 28px minmax(190px, 1.1fr) 112px minmax(180px, 1fr) minmax(150px, 0.9fr) 64px;
   }
 }
 
@@ -4523,9 +4554,17 @@ pre {
     grid-column: 1 / -1;
   }
 
+  .ms-like-table-header > .ms-like-checkbox-cell,
+  .ms-like-table-row > .ms-like-checkbox-cell {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    padding-left: 6px;
+  }
+
   .ms-like-table-header > span,
+  .ms-like-table-header > .ms-like-header-input-title,
   .ms-like-table-header > .ms-like-link-button,
-  .ms-like-table-row > :not(.ms-like-drag-cell):not(.ms-like-checkbox-field) {
+  .ms-like-table-row > :not(.ms-like-drag-cell):not(.ms-like-checkbox-field):not(.ms-like-checkbox-cell) {
     grid-column: 2 / -1;
   }
 

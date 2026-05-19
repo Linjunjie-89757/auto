@@ -2527,12 +2527,13 @@ function formatTimeLabel(value?: string | null) {
                       <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_TEXT') }]" @click="setBodyMode('RAW_TEXT')">raw</button>
                       <button :class="['ms-like-body-chip', { active: isBodyMode('BINARY') }]" @click="setBodyMode('BINARY')">binary</button>
                     </div>
+                    <div class="ms-like-body-mode-shell">
                     <MonacoCodeEditor
                       v-if="['RAW_JSON', 'RAW_XML', 'RAW_TEXT'].includes(definitionForm.requestConfig.body.type)"
                       v-model="activeBodyRawText"
                       :language="activeBodyLanguage"
-                      :show-format-button="activeBodyLanguage !== 'text'"
-                      height="420px"
+                      :show-format-button="false"
+                      height="300px"
                     />
                     <div v-else-if="definitionForm.requestConfig.body.type === 'BINARY'" class="request-section ms-like-form-panel">
                       <div class="ms-like-form-row">
@@ -2629,6 +2630,7 @@ function formatTimeLabel(value?: string | null) {
                       <button type="button" class="ms-like-add-row" @click="definitionForm.requestConfig.body.formItems.push(emptyKeyValue(bodyFormParamDefaults()))">+ 添加一行</button>
                     </div>
                     <div v-else class="ms-like-empty-body">&#35831;&#27714;&#27809;&#26377; Body</div>
+                    </div>
                   </div>
                 </template>
 
@@ -3786,7 +3788,23 @@ function formatTimeLabel(value?: string | null) {
   display: flex;
   align-items: center;
   gap: 0;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
+}
+
+.ms-like-body-mode-shell {
+  min-height: 300px;
+}
+
+.ms-like-body-mode-shell > .ms-monaco-editor,
+.ms-like-body-mode-shell > .ms-like-table-surface,
+.ms-like-body-mode-shell > .ms-like-form-panel,
+.ms-like-body-mode-shell > .ms-like-empty-body {
+  width: 100%;
+}
+
+.ms-like-body-mode-shell > .ms-like-table-surface,
+.ms-like-body-mode-shell > .ms-like-form-panel {
+  min-height: 300px;
 }
 
 .ms-like-body-chip {
@@ -3825,7 +3843,7 @@ function formatTimeLabel(value?: string | null) {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 220px;
+  min-height: 300px;
   border-radius: 8px;
   background: #faf8ff;
   color: var(--el-text-color-secondary);

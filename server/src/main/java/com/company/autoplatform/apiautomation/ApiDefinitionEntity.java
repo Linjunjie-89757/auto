@@ -41,6 +41,12 @@ public class ApiDefinitionEntity extends BaseEntity {
     @TableField("extractors_json")
     private String extractorsJson;
 
+    @TableField("preprocessors_json")
+    private String preprocessorsJson;
+
+    @TableField("postprocessors_json")
+    private String postprocessorsJson;
+
     @TableField("last_run_result")
     private String lastRunResult;
 

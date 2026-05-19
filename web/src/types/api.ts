@@ -442,10 +442,15 @@ export interface ApiKeyValue {
 }
 
 export interface ApiAuthConfig {
-  type: string
-  token?: string | null
-  username?: string | null
-  password?: string | null
+  authType: 'NONE' | 'BASIC' | 'DIGEST'
+  basicAuth: ApiAuthCredential
+  digestAuth: ApiAuthCredential
+}
+
+export interface ApiAuthCredential {
+  userName: string
+  password: string
+  valid?: boolean
 }
 
 export interface ApiRequestBodyConfig {
@@ -472,6 +477,46 @@ export interface ApiExtractorConfig {
   sourceType: string
   expression: string
 }
+
+export interface ApiProcessorExtractorConfig {
+  name: string
+  sourceType: 'BODY_JSONPATH' | 'HEADER' | 'STATUS_CODE'
+  expression: string
+  enabled?: boolean
+}
+
+export interface ApiProcessorBaseConfig {
+  id: string
+  processorType: 'SCRIPT' | 'TIME_WAITING' | 'EXTRACT'
+  name: string
+  enabled: boolean
+}
+
+export interface ApiScriptProcessorConfig extends ApiProcessorBaseConfig {
+  processorType: 'SCRIPT'
+  script: string
+  delayMs?: number | null
+  extractors?: ApiProcessorExtractorConfig[]
+}
+
+export interface ApiWaitProcessorConfig extends ApiProcessorBaseConfig {
+  processorType: 'TIME_WAITING'
+  script?: string | null
+  delayMs: number
+  extractors?: ApiProcessorExtractorConfig[]
+}
+
+export interface ApiExtractProcessorConfig extends ApiProcessorBaseConfig {
+  processorType: 'EXTRACT'
+  script?: string | null
+  delayMs?: number | null
+  extractors: ApiProcessorExtractorConfig[]
+}
+
+export type ApiProcessorConfig =
+  | ApiScriptProcessorConfig
+  | ApiWaitProcessorConfig
+  | ApiExtractProcessorConfig
 
 export interface ApiRequestConfig {
   method: string
@@ -503,6 +548,8 @@ export interface ApiDefinitionDetail extends ApiDefinitionItem {
   requestConfig: ApiRequestConfig
   assertions: ApiAssertionConfig[]
   extractors: ApiExtractorConfig[]
+  preProcessors: ApiProcessorConfig[]
+  postProcessors: ApiProcessorConfig[]
   createdAt: string | null
 }
 
@@ -590,6 +637,17 @@ export interface ApiExtractionResult {
   message: string
 }
 
+export interface ApiProcessorResult {
+  stage: 'PRE' | 'POST'
+  processorType: string
+  name: string
+  success: boolean
+  durationMs: number
+  message: string
+  logs: string[]
+  outputVariables: Record<string, string>
+}
+
 export interface ApiRunStepResult {
   id: number | null
   reportId: number | null
@@ -602,6 +660,7 @@ export interface ApiRunStepResult {
   response: ApiResponseSnapshot | null
   assertionResults: ApiAssertionResult[]
   extractionResults: ApiExtractionResult[]
+  processorResults: ApiProcessorResult[]
   errorMessage: string | null
   createdAt: string | null
 }
@@ -625,6 +684,8 @@ export interface SaveApiDefinitionPayload {
   requestConfig: ApiRequestConfig
   assertions: ApiAssertionConfig[]
   extractors: ApiExtractorConfig[]
+  preProcessors: ApiProcessorConfig[]
+  postProcessors: ApiProcessorConfig[]
 }
 
 export interface SaveApiScenarioPayload {
@@ -670,6 +731,8 @@ export interface ApiDebugDefinitionPayload {
   requestConfig: ApiRequestConfig
   assertions: ApiAssertionConfig[]
   extractors: ApiExtractorConfig[]
+  preProcessors: ApiProcessorConfig[]
+  postProcessors: ApiProcessorConfig[]
   environmentId?: number | null
   variableSetId?: number | null
 }

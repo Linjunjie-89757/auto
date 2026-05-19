@@ -22,22 +22,27 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.http.HttpHeaders;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.Flow;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -61,6 +66,7 @@ public class ApiAutomationService {
     private final TaskMapper taskMapper;
     private final ReportMapper reportMapper;
     private final WorkspaceService workspaceService;
+    private final ApiAutomationScriptRunner scriptRunner;
     private final HttpClient httpClient;
 
     public ApiAutomationService(
@@ -71,7 +77,8 @@ public class ApiAutomationService {
             ParamSetMapper paramSetMapper,
             TaskMapper taskMapper,
             ReportMapper reportMapper,
-            WorkspaceService workspaceService
+            WorkspaceService workspaceService,
+            ApiAutomationScriptRunner scriptRunner
     ) {
         this.definitionMapper = definitionMapper;
         this.scenarioMapper = scenarioMapper;
@@ -81,6 +88,7 @@ public class ApiAutomationService {
         this.taskMapper = taskMapper;
         this.reportMapper = reportMapper;
         this.workspaceService = workspaceService;
+        this.scriptRunner = scriptRunner;
         this.httpClient = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(10))
@@ -320,6 +328,10 @@ public class ApiAutomationService {
         draftDefinition.setRequestJson(ApiAutomationJsonSupport.toJson(config, "Failed to serialize request config"));
         draftDefinition.setAssertionsJson(ApiAutomationJsonSupport.toJson(defaultList(request.assertions()), "Failed to serialize assertions"));
         draftDefinition.setExtractorsJson(ApiAutomationJsonSupport.toJson(defaultList(request.extractors()), "Failed to serialize extractors"));
+        draftDefinition.setPreprocessorsJson(ApiAutomationJsonSupport.toJson(normalizeProcessors(request.preProcessors(), "PRE"),
+                "Failed to serialize pre-processors"));
+        draftDefinition.setPostprocessorsJson(ApiAutomationJsonSupport.toJson(normalizePostProcessors(request.postProcessors(), request.extractors()),
+                "Failed to serialize post-processors"));
 
         ExecutionContext context = buildExecutionContext(workspace.getId(), request.environmentId(), request.variableSetId());
         RunEnvelope envelope = createRunEnvelope(workspace.getId(), "API", "接口调试", draftDefinition.getDefinitionName());
@@ -419,7 +431,11 @@ public class ApiAutomationService {
         entity.setTagsJson(ApiAutomationJsonSupport.toJson(defaultList(request.tags()), "Failed to serialize tags"));
         entity.setRequestJson(ApiAutomationJsonSupport.toJson(request.requestConfig(), "Failed to serialize request config"));
         entity.setAssertionsJson(ApiAutomationJsonSupport.toJson(defaultList(request.assertions()), "Failed to serialize assertions"));
-        entity.setExtractorsJson(ApiAutomationJsonSupport.toJson(defaultList(request.extractors()), "Failed to serialize extractors"));
+        entity.setExtractorsJson(null);
+        entity.setPreprocessorsJson(ApiAutomationJsonSupport.toJson(normalizeProcessors(request.preProcessors(), "PRE"),
+                "Failed to serialize pre-processors"));
+        entity.setPostprocessorsJson(ApiAutomationJsonSupport.toJson(normalizePostProcessors(request.postProcessors(), request.extractors()),
+                "Failed to serialize post-processors"));
     }
 
     private void fillScenarioEntity(ApiScenarioEntity entity, WorkspaceEntity workspace, SaveApiScenarioRequest request) {
@@ -510,9 +526,11 @@ public class ApiAutomationService {
                 readTags(entity.getTagsJson()),
                 ApiAutomationJsonSupport.read(entity.getRequestJson(), ApiRequestConfigInput.class,
                         new ApiRequestConfigInput(entity.getHttpMethod(), entity.getPath(), 10000, List.of(), List.of(), List.of(),
-                                 new ApiRequestBodyInput("NONE", null, List.of(), null, null, null), normalizeAuth(null))),
+                                 new ApiRequestBodyInput("NONE", null, List.of(), null, null, null), emptyAuthConfig())),
                 readAssertions(entity.getAssertionsJson()),
-                readExtractors(entity.getExtractorsJson()),
+                List.of(),
+                readPreProcessors(entity),
+                readPostProcessors(entity),
                 entity.getLastRunResult(),
                 entity.getLastRunAt(),
                 entity.getCreatedAt(),
@@ -566,7 +584,7 @@ public class ApiAutomationService {
     private ApiEnvironmentItem toEnvironmentItem(EnvConfigEntity entity) {
         WorkspaceEntity workspace = workspaceService.requireWorkspaceById(entity.getWorkspaceId());
         EnvironmentConfigPayload config = ApiAutomationJsonSupport.read(entity.getConfigJson(), EnvironmentConfigPayload.class,
-                new EnvironmentConfigPayload(List.of(), normalizeAuth(null), 10000));
+                new EnvironmentConfigPayload(List.of(), emptyAuthConfig(), 10000));
         return new ApiEnvironmentItem(
                 entity.getId(),
                 workspace.getWorkspaceCode(),
@@ -605,6 +623,7 @@ public class ApiAutomationService {
                 ApiAutomationJsonSupport.read(entity.getResponseSnapshotJson(), ApiResponseSnapshot.class, null),
                 readAssertionResults(entity.getAssertionResultsJson()),
                 readExtractionResults(entity.getExtractionResultsJson()),
+                readProcessorResults(entity.getProcessorResultsJson()),
                 entity.getErrorMessage(),
                 entity.getCreatedAt()
         );
@@ -629,14 +648,14 @@ public class ApiAutomationService {
 
     private ResolvedEnvironment resolveEnvironment(Long workspaceId, Long environmentId) {
         if (environmentId == null) {
-            return new ResolvedEnvironment("", List.of(), normalizeAuth(null), 10000);
+            return new ResolvedEnvironment("", List.of(), emptyAuthConfig(), 10000);
         }
         EnvConfigEntity environment = requireEnvironment(environmentId);
         if (!environment.getWorkspaceId().equals(workspaceId)) {
             throw new BadRequestException("Environment must belong to the same workspace");
         }
         EnvironmentConfigPayload config = ApiAutomationJsonSupport.read(environment.getConfigJson(), EnvironmentConfigPayload.class,
-                new EnvironmentConfigPayload(List.of(), normalizeAuth(null), 10000));
+                new EnvironmentConfigPayload(List.of(), emptyAuthConfig(), 10000));
         return new ResolvedEnvironment(
                 environment.getBaseUrl(),
                 defaultList(config.headers()),
@@ -681,15 +700,23 @@ public class ApiAutomationService {
     ) {
         ApiRequestConfigInput config = ApiAutomationJsonSupport.read(definition.getRequestJson(), ApiRequestConfigInput.class,
                 new ApiRequestConfigInput(definition.getHttpMethod(), definition.getPath(), 10000, List.of(), List.of(), List.of(),
-                        new ApiRequestBodyInput("NONE", null, List.of(), null, null, null), normalizeAuth(null)));
+                        new ApiRequestBodyInput("NONE", null, List.of(), null, null, null), emptyAuthConfig()));
         List<ApiAssertionInput> assertions = readAssertions(definition.getAssertionsJson());
-        List<ApiExtractorInput> extractors = readExtractors(definition.getExtractorsJson());
+        List<ApiProcessorInput> preProcessors = readPreProcessors(definition);
+        List<ApiProcessorInput> postProcessors = readPostProcessors(definition);
 
         long started = System.currentTimeMillis();
         try {
-            ResolvedRequest request = resolveRequest(config, environment, variables);
-            HttpRequest httpRequest = buildHttpRequest(request, config, environment);
-            HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            MutableRequestConfig requestConfig = toMutableRequestConfig(config);
+            List<ApiProcessorResult> processorResults = new ArrayList<>();
+            List<ApiExtractionResult> extractionResults = new ArrayList<>();
+
+            executeProcessors("PRE", preProcessors, requestConfig, null, variables, processorResults, extractionResults);
+
+            ApiRequestConfigInput resolvedConfig = toRequestConfig(requestConfig);
+            ResolvedRequest request = resolveRequest(resolvedConfig, environment, variables);
+            SentRequestResult sentRequest = sendRequest(request, resolvedConfig, environment, variables);
+            HttpResponse<String> response = sentRequest.response();
             long durationMs = System.currentTimeMillis() - started;
 
             ApiResponseSnapshot responseSnapshot = new ApiResponseSnapshot(
@@ -698,9 +725,10 @@ public class ApiAutomationService {
                     response.body(),
                     response.headers().firstValue("content-type").orElse(null)
             );
-            List<ApiAssertionResult> assertionResults = evaluateAssertions(assertions, responseSnapshot, durationMs);
+            executeProcessors("POST", postProcessors, requestConfig, responseSnapshot, variables, processorResults, extractionResults);
+
+            List<ApiAssertionResult> assertionResults = evaluateAssertions(assertions, responseSnapshot, durationMs, variables);
             boolean success = assertionResults.stream().allMatch(ApiAssertionResult::success);
-            List<ApiExtractionResult> extractionResults = applyExtractors(extractors, responseSnapshot, variables);
             String errorMessage = success ? null : firstFailedMessage(assertionResults);
             ApiRunStepResultResponse result = new ApiRunStepResultResponse(
                     null,
@@ -710,10 +738,11 @@ public class ApiAutomationService {
                     definition.getId(),
                     success,
                     durationMs,
-                    new ApiRequestSnapshot(request.method(), request.url(), request.headers(), request.body()),
+                    new ApiRequestSnapshot(request.method(), request.url(), sentRequest.headers(), request.body()),
                     responseSnapshot,
                     assertionResults,
                     extractionResults,
+                    processorResults,
                     errorMessage,
                     LocalDateTime.now()
             );
@@ -733,6 +762,7 @@ public class ApiAutomationService {
                     null,
                     List.of(),
                     List.of(),
+                    List.of(),
                     exception.getMessage(),
                     LocalDateTime.now()
             );
@@ -749,6 +779,7 @@ public class ApiAutomationService {
                     durationMs,
                     null,
                     null,
+                    List.of(),
                     List.of(),
                     List.of(),
                     exception.getMessage(),
@@ -772,9 +803,9 @@ public class ApiAutomationService {
         LinkedHashMap<String, String> headers = new LinkedHashMap<>();
         headers.putAll(toEnabledMap(defaultList(environment.headers()), variables));
         headers.putAll(toEnabledMap(defaultList(config.headers()), variables));
+        headers.entrySet().removeIf(entry -> "authorization".equalsIgnoreCase(entry.getKey()));
 
         LinkedHashMap<String, String> cookies = new LinkedHashMap<>(toEnabledMap(defaultList(config.cookies()), variables));
-        applyAuth(headers, normalizeAuth(config.authConfig()), environment.authConfig(), variables);
 
         String body = null;
         ApiRequestBodyInput bodyConfig = config.body() == null ? new ApiRequestBodyInput("NONE", null, List.of(), null, null, null) : config.body();
@@ -795,14 +826,26 @@ public class ApiAutomationService {
         if (!cookies.isEmpty()) {
             headers.put("Cookie", buildCookieHeader(cookies));
         }
-        return new ResolvedRequest(config.method().toUpperCase(), url, headers, body, bodyConfig);
+        return new ResolvedRequest(config.method().toUpperCase(), url, headers, body, bodyConfig, normalizeAuth(config.authConfig()));
     }
 
     private HttpRequest buildHttpRequest(ResolvedRequest request, ApiRequestConfigInput config, ResolvedEnvironment environment) {
+        return buildHttpRequest(request, config, environment, null);
+    }
+
+    private HttpRequest buildHttpRequest(
+            ResolvedRequest request,
+            ApiRequestConfigInput config,
+            ResolvedEnvironment environment,
+            String authorizationHeader
+    ) {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(request.url()))
                 .timeout(Duration.ofMillis(config.timeoutMs() == null || config.timeoutMs() <= 0 ? environment.timeoutMs() : config.timeoutMs()));
         request.headers().forEach(builder::header);
+        if (authorizationHeader != null && !authorizationHeader.isBlank()) {
+            builder.header("Authorization", authorizationHeader);
+        }
 
         HttpRequest.BodyPublisher publisher = HttpRequest.BodyPublishers.noBody();
         if ("FORM_DATA".equalsIgnoreCase(request.bodyConfig().type())) {
@@ -841,65 +884,260 @@ public class ApiAutomationService {
         return builder.method(request.method(), publisher).build();
     }
 
-    private List<ApiAssertionResult> evaluateAssertions(List<ApiAssertionInput> assertions, ApiResponseSnapshot response, long durationMs) {
+    private SentRequestResult sendRequest(
+            ResolvedRequest request,
+            ApiRequestConfigInput config,
+            ResolvedEnvironment environment,
+            Map<String, String> variables
+    ) throws IOException, InterruptedException {
+        ApiAuthConfigInput authConfig = normalizeAuth(request.authConfig());
+        String authType = Optional.ofNullable(authConfig.authType()).orElse("NONE").toUpperCase();
+        return switch (authType) {
+            case "NONE" -> {
+                HttpRequest httpRequest = buildHttpRequest(request, config, environment);
+                yield new SentRequestResult(
+                        httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)),
+                        flattenHeaders(httpRequest.headers().map())
+                );
+            }
+            case "BASIC" -> sendBasicAuthRequest(request, config, environment, variables, authConfig);
+            case "DIGEST" -> sendDigestAuthRequest(request, config, environment, variables, authConfig);
+            default -> throw new BadRequestException("Unsupported auth type: " + authType);
+        };
+    }
+
+    private SentRequestResult sendBasicAuthRequest(
+            ResolvedRequest request,
+            ApiRequestConfigInput config,
+            ResolvedEnvironment environment,
+            Map<String, String> variables,
+            ApiAuthConfigInput authConfig
+    ) throws IOException, InterruptedException {
+        ApiAuthCredentialInput credential = requireCredential(authConfig.basicAuth(), "Basic");
+        String userName = replaceVariables(Optional.ofNullable(credential.userName()).orElse(""), variables);
+        String password = replaceVariables(Optional.ofNullable(credential.password()).orElse(""), variables);
+        String encoded = Base64.getEncoder().encodeToString((userName + ":" + password).getBytes(StandardCharsets.UTF_8));
+        HttpRequest httpRequest = buildHttpRequest(request, config, environment, "Basic " + encoded);
+        return new SentRequestResult(
+                httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)),
+                flattenHeaders(httpRequest.headers().map())
+        );
+    }
+
+    private SentRequestResult sendDigestAuthRequest(
+            ResolvedRequest request,
+            ApiRequestConfigInput config,
+            ResolvedEnvironment environment,
+            Map<String, String> variables,
+            ApiAuthConfigInput authConfig
+    ) throws IOException, InterruptedException {
+        ApiAuthCredentialInput credential = requireCredential(authConfig.digestAuth(), "Digest");
+        String userName = replaceVariables(Optional.ofNullable(credential.userName()).orElse(""), variables);
+        String password = replaceVariables(Optional.ofNullable(credential.password()).orElse(""), variables);
+
+        HttpRequest initialRequest = buildHttpRequest(request, config, environment);
+        HttpResponse<String> initialResponse = httpClient.send(initialRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if (initialResponse.statusCode() != 401) {
+            return new SentRequestResult(initialResponse, flattenHeaders(initialRequest.headers().map()));
+        }
+
+        String challengeHeader = extractDigestChallenge(initialResponse.headers());
+        if (challengeHeader == null) {
+            return new SentRequestResult(initialResponse, flattenHeaders(initialRequest.headers().map()));
+        }
+
+        DigestChallenge challenge = parseDigestChallenge(challengeHeader);
+        String authorizationHeader = buildDigestAuthorizationHeader(request, userName, password, challenge);
+        HttpRequest digestRequest = buildHttpRequest(request, config, environment, authorizationHeader);
+        return new SentRequestResult(
+                httpClient.send(digestRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)),
+                flattenHeaders(digestRequest.headers().map())
+        );
+    }
+
+    private void executeProcessors(
+            String stage,
+            List<ApiProcessorInput> processors,
+            MutableRequestConfig requestConfig,
+            ApiResponseSnapshot response,
+            Map<String, String> variables,
+            List<ApiProcessorResult> processorResults,
+            List<ApiExtractionResult> extractionResults
+    ) {
+        for (ApiProcessorInput processor : processors) {
+            if (Boolean.FALSE.equals(processor.enabled())) {
+                continue;
+            }
+            long started = System.currentTimeMillis();
+            Map<String, String> beforeVariables = new LinkedHashMap<>(variables);
+            try {
+                String type = Optional.ofNullable(processor.processorType()).orElse("").trim().toUpperCase();
+                String message;
+                List<String> logs = List.of();
+                switch (type) {
+                    case "SCRIPT" -> {
+                        ApiAutomationScriptRunner.ScriptExecutionResult scriptResult = executeScriptProcessor(processor, requestConfig, response, variables);
+                        variables.clear();
+                        variables.putAll(scriptResult.variables());
+                        applyScriptRequestChanges(requestConfig, scriptResult.request());
+                        message = scriptResult.message();
+                        logs = scriptResult.logs();
+                    }
+                    case "TIME_WAITING" -> {
+                        int delayMs = processor.delayMs() == null || processor.delayMs() <= 0 ? 1000 : processor.delayMs();
+                        sleep(delayMs);
+                        message = "Waited " + delayMs + " ms";
+                    }
+                    case "EXTRACT" -> {
+                        if (!"POST".equals(stage)) {
+                            throw new BadRequestException("Extract processor is only supported in post-processors");
+                        }
+                        message = applyProcessorExtractors(defaultList(processor.extractors()), response, variables, extractionResults);
+                    }
+                    default -> throw new BadRequestException("Unsupported processor type: " + type);
+                }
+                processorResults.add(new ApiProcessorResult(
+                        stage,
+                        type,
+                        blankToFallback(processor.name(), defaultProcessorName(type, stage)),
+                        true,
+                        System.currentTimeMillis() - started,
+                        message,
+                        logs,
+                        diffVariables(beforeVariables, variables)
+                ));
+            } catch (RuntimeException exception) {
+                processorResults.add(new ApiProcessorResult(
+                        stage,
+                        Optional.ofNullable(processor.processorType()).orElse(""),
+                        blankToFallback(processor.name(), defaultProcessorName(processor.processorType(), stage)),
+                        false,
+                        System.currentTimeMillis() - started,
+                        blankToFallback(exception.getMessage(), "Processor failed"),
+                        List.of(),
+                        diffVariables(beforeVariables, variables)
+                ));
+                throw new BadRequestException(blankToFallback(processor.name(), defaultProcessorName(processor.processorType(), stage))
+                        + " failed: " + blankToFallback(exception.getMessage(), "Processor failed"));
+            }
+        }
+    }
+
+    private ApiAutomationScriptRunner.ScriptExecutionResult executeScriptProcessor(
+            ApiProcessorInput processor,
+            MutableRequestConfig requestConfig,
+            ApiResponseSnapshot response,
+            Map<String, String> variables
+    ) {
+        String script = Optional.ofNullable(processor.script()).orElse("");
+        if (script.isBlank()) {
+            throw new BadRequestException("Script processor content cannot be blank");
+        }
+        return scriptRunner.execute(script, new LinkedHashMap<>(variables), requestConfig.toScriptMap(), toResponseContext(response));
+    }
+
+    private Map<String, Object> toResponseContext(ApiResponseSnapshot response) {
+        if (response == null) {
+            return Map.of();
+        }
+        LinkedHashMap<String, Object> context = new LinkedHashMap<>();
+        context.put("statusCode", response.statusCode());
+        context.put("headers", response.headers() == null ? Map.of() : response.headers());
+        context.put("body", response.body());
+        context.put("contentType", response.contentType());
+        return context;
+    }
+
+    private void applyScriptRequestChanges(MutableRequestConfig requestConfig, Map<String, Object> requestValues) {
+        if (requestValues == null || requestValues.isEmpty()) {
+            return;
+        }
+        requestConfig.applyScriptMap(requestValues, OBJECT_MAPPER);
+    }
+
+    private void sleep(int delayMs) {
+        try {
+            Thread.sleep(delayMs);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new BadRequestException("Wait processor was interrupted");
+        }
+    }
+
+    private String applyProcessorExtractors(
+            List<ApiProcessorExtractItemInput> extractors,
+            ApiResponseSnapshot response,
+            Map<String, String> variables,
+            List<ApiExtractionResult> extractionResults
+    ) {
+        if (extractors.isEmpty()) {
+            throw new BadRequestException("Extract processor requires at least one extractor");
+        }
+        int successCount = 0;
+        for (ApiProcessorExtractItemInput extractor : extractors) {
+            if (Boolean.FALSE.equals(extractor.enabled())) {
+                continue;
+            }
+            try {
+                String value = extractValue(response, extractor.sourceType(), extractor.expression());
+                variables.put(extractor.name(), value);
+                extractionResults.add(new ApiExtractionResult(extractor.name(), true, value, "Extracted"));
+                successCount++;
+            } catch (Exception exception) {
+                extractionResults.add(new ApiExtractionResult(extractor.name(), false, null, exception.getMessage()));
+                throw new BadRequestException(exception.getMessage());
+            }
+        }
+        return "Extracted " + successCount + " variable(s)";
+    }
+
+    private List<ApiAssertionResult> evaluateAssertions(
+            List<ApiAssertionInput> assertions,
+            ApiResponseSnapshot response,
+            long durationMs,
+            Map<String, String> variables
+    ) {
         List<ApiAssertionResult> results = new ArrayList<>();
         for (ApiAssertionInput assertion : assertions) {
             String type = Optional.ofNullable(assertion.type()).orElse("").toUpperCase();
             try {
+                String subject = replaceVariables(Optional.ofNullable(assertion.subject()).orElse(""), variables);
+                String expectedValue = replaceVariables(Optional.ofNullable(assertion.expectedValue()).orElse(""), variables);
                 boolean success;
                 String actual;
                 switch (type) {
                     case "STATUS_CODE" -> {
                         actual = String.valueOf(response.statusCode());
-                        success = actual.equals(Optional.ofNullable(assertion.expectedValue()).orElse(""));
+                        success = actual.equals(expectedValue);
                     }
                     case "HEADER_EQUALS" -> {
-                        actual = Optional.ofNullable(response.headers().get(assertion.subject())).orElse("");
-                        success = actual.equals(Optional.ofNullable(assertion.expectedValue()).orElse(""));
+                        actual = Optional.ofNullable(response.headers().get(subject)).orElse("");
+                        success = actual.equals(expectedValue);
                     }
                     case "HEADER_CONTAINS" -> {
-                        actual = Optional.ofNullable(response.headers().get(assertion.subject())).orElse("");
-                        success = actual.contains(Optional.ofNullable(assertion.expectedValue()).orElse(""));
+                        actual = Optional.ofNullable(response.headers().get(subject)).orElse("");
+                        success = actual.contains(expectedValue);
                     }
                     case "BODY_JSONPATH_EQUALS" -> {
-                        actual = extractJsonValue(response.body(), assertion.subject());
-                        success = actual.equals(Optional.ofNullable(assertion.expectedValue()).orElse(""));
+                        actual = extractJsonValue(response.body(), subject);
+                        success = actual.equals(expectedValue);
                     }
                     case "BODY_JSONPATH_CONTAINS" -> {
-                        actual = extractJsonValue(response.body(), assertion.subject());
-                        success = actual.contains(Optional.ofNullable(assertion.expectedValue()).orElse(""));
+                        actual = extractJsonValue(response.body(), subject);
+                        success = actual.contains(expectedValue);
                     }
                     case "RESPONSE_TIME_LE" -> {
                         actual = String.valueOf(durationMs);
-                        success = durationMs <= Long.parseLong(Optional.ofNullable(assertion.expectedValue()).orElse("0"));
+                        success = durationMs <= Long.parseLong(expectedValue.isBlank() ? "0" : expectedValue);
                     }
                     default -> throw new BadRequestException("Unsupported assertion type: " + type);
                 }
                 String message = success
                         ? "Assertion passed"
-                        : "Expected " + assertion.expectedValue() + " but got " + actual;
-                results.add(new ApiAssertionResult(type, assertion.subject(), success, message));
+                        : "Expected " + expectedValue + " but got " + actual;
+                results.add(new ApiAssertionResult(type, subject, success, message));
             } catch (Exception exception) {
                 results.add(new ApiAssertionResult(type, assertion.subject(), false, exception.getMessage()));
-            }
-        }
-        return results;
-    }
-
-    private List<ApiExtractionResult> applyExtractors(List<ApiExtractorInput> extractors, ApiResponseSnapshot response, Map<String, String> variables) {
-        List<ApiExtractionResult> results = new ArrayList<>();
-        for (ApiExtractorInput extractor : extractors) {
-            String type = Optional.ofNullable(extractor.sourceType()).orElse("").toUpperCase();
-            try {
-                String value = switch (type) {
-                    case "BODY_JSONPATH" -> extractJsonValue(response.body(), extractor.expression());
-                    case "HEADER" -> Optional.ofNullable(response.headers().get(extractor.expression())).orElse("");
-                    default -> throw new BadRequestException("Unsupported extractor type: " + type);
-                };
-                variables.put(extractor.name(), value);
-                results.add(new ApiExtractionResult(extractor.name(), true, value, "Extracted"));
-            } catch (Exception exception) {
-                results.add(new ApiExtractionResult(extractor.name(), false, null, exception.getMessage()));
             }
         }
         return results;
@@ -919,6 +1157,7 @@ public class ApiAutomationService {
         entity.setResponseSnapshotJson(ApiAutomationJsonSupport.toJson(response.response(), "Failed to serialize response snapshot"));
         entity.setAssertionResultsJson(ApiAutomationJsonSupport.toJson(response.assertionResults(), "Failed to serialize assertion results"));
         entity.setExtractionResultsJson(ApiAutomationJsonSupport.toJson(response.extractionResults(), "Failed to serialize extraction results"));
+        entity.setProcessorResultsJson(ApiAutomationJsonSupport.toJson(response.processorResults(), "Failed to serialize processor results"));
         entity.setErrorMessage(response.errorMessage());
         entity.setCreatedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
@@ -983,6 +1222,16 @@ public class ApiAutomationService {
         return current.isMissingNode() || current.isNull() ? "" : (current.isValueNode() ? current.asText() : current.toString());
     }
 
+    private String extractValue(ApiResponseSnapshot response, String sourceType, String expression) throws IOException {
+        String type = Optional.ofNullable(sourceType).orElse("").trim().toUpperCase();
+        return switch (type) {
+            case "BODY_JSONPATH" -> extractJsonValue(response.body(), expression);
+            case "HEADER" -> Optional.ofNullable(response.headers().get(expression)).orElse("");
+            case "STATUS_CODE" -> String.valueOf(response.statusCode());
+            default -> throw new BadRequestException("Unsupported extractor type: " + type);
+        };
+    }
+
     private Map<String, String> toEnabledMap(List<ApiKeyValueInput> items, Map<String, String> variables) {
         LinkedHashMap<String, String> result = new LinkedHashMap<>();
         for (ApiKeyValueInput item : items) {
@@ -1028,28 +1277,127 @@ public class ApiAutomationService {
         return buffer.toString();
     }
 
-    private void applyAuth(
-            Map<String, String> headers,
-            ApiAuthConfigInput definitionAuth,
-            ApiAuthConfigInput environmentAuth,
-            Map<String, String> variables
-    ) {
-        ApiAuthConfigInput effective = "INHERIT".equalsIgnoreCase(Optional.ofNullable(definitionAuth.type()).orElse("INHERIT"))
-                ? environmentAuth
-                : definitionAuth;
-        String type = Optional.ofNullable(effective.type()).orElse("NONE").toUpperCase();
-        switch (type) {
-            case "NONE", "INHERIT" -> {
-            }
-            case "BEARER" -> headers.put("Authorization", "Bearer " + replaceVariables(Optional.ofNullable(effective.token()).orElse(""), variables));
-            case "BASIC" -> {
-                String username = replaceVariables(Optional.ofNullable(effective.username()).orElse(""), variables);
-                String password = replaceVariables(Optional.ofNullable(effective.password()).orElse(""), variables);
-                String encoded = java.util.Base64.getEncoder().encodeToString((username + ":" + password).getBytes(StandardCharsets.UTF_8));
-                headers.put("Authorization", "Basic " + encoded);
-            }
-            default -> throw new BadRequestException("Unsupported auth type: " + type);
+    private ApiAuthCredentialInput requireCredential(ApiAuthCredentialInput credential, String authType) {
+        if (credential == null
+                || credential.userName() == null
+                || credential.userName().isBlank()
+                || credential.password() == null
+                || credential.password().isBlank()) {
+            throw new BadRequestException(authType + " auth username and password cannot be blank");
         }
+        return credential;
+    }
+
+    private String extractDigestChallenge(HttpHeaders headers) {
+        for (String value : headers.allValues("WWW-Authenticate")) {
+            if (value != null && value.regionMatches(true, 0, "Digest ", 0, 7)) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private DigestChallenge parseDigestChallenge(String header) {
+        String content = header.substring(7).trim();
+        Matcher matcher = Pattern.compile("(\\w+)=(\"([^\"]*)\"|([^,]+))").matcher(content);
+        Map<String, String> values = new LinkedHashMap<>();
+        while (matcher.find()) {
+            String key = matcher.group(1);
+            String value = matcher.group(3) != null ? matcher.group(3) : matcher.group(4);
+            values.put(key, value == null ? "" : value.trim());
+        }
+        String realm = values.get("realm");
+        String nonce = values.get("nonce");
+        if (realm == null || realm.isBlank() || nonce == null || nonce.isBlank()) {
+            throw new BadRequestException("Digest auth challenge is missing realm or nonce");
+        }
+        return new DigestChallenge(
+                realm,
+                nonce,
+                values.get("opaque"),
+                Optional.ofNullable(values.get("algorithm")).filter(value -> !value.isBlank()).orElse("MD5"),
+                Optional.ofNullable(values.get("qop")).map(String::trim).orElse("")
+        );
+    }
+
+    private String buildDigestAuthorizationHeader(
+            ResolvedRequest request,
+            String userName,
+            String password,
+            DigestChallenge challenge
+    ) {
+        String algorithm = challenge.algorithm().toUpperCase();
+        if (!"MD5".equals(algorithm) && !"MD5-SESS".equals(algorithm)) {
+            throw new BadRequestException("Unsupported digest algorithm: " + challenge.algorithm());
+        }
+        String qop = resolveDigestQop(challenge.qop());
+        String uri = URI.create(request.url()).getRawPath();
+        String rawQuery = URI.create(request.url()).getRawQuery();
+        if (uri == null || uri.isBlank()) {
+            uri = "/";
+        }
+        if (rawQuery != null && !rawQuery.isBlank()) {
+            uri = uri + "?" + rawQuery;
+        }
+
+        String cnonce = UUID.randomUUID().toString().replace("-", "");
+        String nonceCount = "00000001";
+        String ha1 = md5Hex(userName + ":" + challenge.realm() + ":" + password);
+        if ("MD5-SESS".equals(algorithm)) {
+            ha1 = md5Hex(ha1 + ":" + challenge.nonce() + ":" + cnonce);
+        }
+        String ha2 = md5Hex(request.method() + ":" + uri);
+        String response = qop == null
+                ? md5Hex(ha1 + ":" + challenge.nonce() + ":" + ha2)
+                : md5Hex(ha1 + ":" + challenge.nonce() + ":" + nonceCount + ":" + cnonce + ":" + qop + ":" + ha2);
+
+        List<String> parts = new ArrayList<>();
+        parts.add("username=\"" + escapeDigestValue(userName) + "\"");
+        parts.add("realm=\"" + escapeDigestValue(challenge.realm()) + "\"");
+        parts.add("nonce=\"" + escapeDigestValue(challenge.nonce()) + "\"");
+        parts.add("uri=\"" + escapeDigestValue(uri) + "\"");
+        parts.add("response=\"" + response + "\"");
+        parts.add("algorithm=" + challenge.algorithm());
+        if (challenge.opaque() != null && !challenge.opaque().isBlank()) {
+            parts.add("opaque=\"" + escapeDigestValue(challenge.opaque()) + "\"");
+        }
+        if (qop != null) {
+            parts.add("qop=" + qop);
+            parts.add("nc=" + nonceCount);
+            parts.add("cnonce=\"" + cnonce + "\"");
+        }
+        return "Digest " + String.join(", ", parts);
+    }
+
+    private String resolveDigestQop(String qopHeader) {
+        if (qopHeader == null || qopHeader.isBlank()) {
+            return null;
+        }
+        for (String candidate : qopHeader.split(",")) {
+            String normalized = candidate.trim().toLowerCase();
+            if ("auth".equals(normalized)) {
+                return "auth";
+            }
+        }
+        throw new BadRequestException("Unsupported digest qop: " + qopHeader);
+    }
+
+    private String md5Hex(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("MD5");
+            byte[] bytes = digest.digest(value.getBytes(StandardCharsets.ISO_8859_1));
+            StringBuilder builder = new StringBuilder(bytes.length * 2);
+            for (byte item : bytes) {
+                builder.append(String.format("%02x", item & 0xff));
+            }
+            return builder.toString();
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("MD5 algorithm is not available", exception);
+        }
+    }
+
+    private String escapeDigestValue(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private MultipartPayload buildMultipart(List<ApiKeyValueInput> items) {
@@ -1130,6 +1478,34 @@ public class ApiAutomationService {
         }, List.of());
     }
 
+    private List<ApiProcessorInput> readPreProcessors(ApiDefinitionEntity entity) {
+        return normalizeProcessors(ApiAutomationJsonSupport.readList(entity.getPreprocessorsJson(), new TypeReference<>() {
+        }, List.of()), "PRE");
+    }
+
+    private List<ApiProcessorInput> readPostProcessors(ApiDefinitionEntity entity) {
+        List<ApiProcessorInput> processors = ApiAutomationJsonSupport.readList(entity.getPostprocessorsJson(), new TypeReference<>() {
+        }, List.of());
+        if (!processors.isEmpty()) {
+            return normalizeProcessors(processors, "POST");
+        }
+        List<ApiExtractorInput> legacyExtractors = readExtractors(entity.getExtractorsJson());
+        if (legacyExtractors.isEmpty()) {
+            return List.of();
+        }
+        return List.of(new ApiProcessorInput(
+                "legacy-extract",
+                "EXTRACT",
+                "Extract",
+                true,
+                null,
+                null,
+                legacyExtractors.stream()
+                        .map(item -> new ApiProcessorExtractItemInput(item.name(), item.sourceType(), item.expression(), true))
+                        .toList()
+        ));
+    }
+
     private List<ApiScenarioStepInput> readScenarioSteps(String json) {
         return ApiAutomationJsonSupport.readList(json, new TypeReference<>() {
         }, List.of());
@@ -1150,15 +1526,90 @@ public class ApiAutomationService {
         }, List.of());
     }
 
+    private List<ApiProcessorResult> readProcessorResults(String json) {
+        return ApiAutomationJsonSupport.readList(json, new TypeReference<>() {
+        }, List.of());
+    }
+
+    private List<ApiProcessorInput> normalizePostProcessors(List<ApiProcessorInput> processors, List<ApiExtractorInput> legacyExtractors) {
+        List<ApiProcessorInput> normalized = new ArrayList<>(normalizeProcessors(processors, "POST"));
+        if (!defaultList(legacyExtractors).isEmpty()) {
+            normalized.add(new ApiProcessorInput(
+                    "legacy-extract",
+                    "EXTRACT",
+                    "Extract",
+                    true,
+                    null,
+                    null,
+                    defaultList(legacyExtractors).stream()
+                            .map(item -> new ApiProcessorExtractItemInput(item.name(), item.sourceType(), item.expression(), true))
+                            .toList()
+            ));
+        }
+        return normalized;
+    }
+
+    private List<ApiProcessorInput> normalizeProcessors(List<ApiProcessorInput> processors, String stage) {
+        List<ApiProcessorInput> normalized = new ArrayList<>();
+        int index = 0;
+        for (ApiProcessorInput processor : defaultList(processors)) {
+            if (processor == null) {
+                continue;
+            }
+            String type = Optional.ofNullable(processor.processorType()).orElse("").trim().toUpperCase();
+            if (type.isBlank()) {
+                continue;
+            }
+            if ("PRE".equals(stage) && "EXTRACT".equals(type)) {
+                continue;
+            }
+            normalized.add(new ApiProcessorInput(
+                    blankToFallback(processor.id(), stage.toLowerCase() + "-processor-" + index++),
+                    type,
+                    blankToNull(processor.name()),
+                    !Boolean.FALSE.equals(processor.enabled()),
+                    Optional.ofNullable(processor.script()).orElse(""),
+                    processor.delayMs() == null || processor.delayMs() <= 0 ? 1000 : processor.delayMs(),
+                    defaultList(processor.extractors()).stream()
+                            .filter(item -> item != null && !blankToFallback(item.name(), "").isBlank())
+                            .map(item -> new ApiProcessorExtractItemInput(
+                                    item.name().trim(),
+                                    blankToFallback(item.sourceType(), "BODY_JSONPATH").toUpperCase(),
+                                    Optional.ofNullable(item.expression()).orElse(""),
+                                    !Boolean.FALSE.equals(item.enabled())
+                            ))
+                            .toList()
+            ));
+        }
+        return normalized;
+    }
+
     private ApiAuthConfigInput normalizeAuth(ApiAuthConfigInput authConfig) {
         if (authConfig == null) {
-            return new ApiAuthConfigInput("INHERIT", null, null, null);
+            return emptyAuthConfig();
         }
         return new ApiAuthConfigInput(
-                Optional.ofNullable(authConfig.type()).orElse("INHERIT"),
-                authConfig.token(),
-                authConfig.username(),
-                authConfig.password()
+                Optional.ofNullable(authConfig.authType()).filter(value -> !value.isBlank()).map(String::toUpperCase).orElse("NONE"),
+                normalizeCredential(authConfig.basicAuth()),
+                normalizeCredential(authConfig.digestAuth())
+        );
+    }
+
+    private ApiAuthCredentialInput normalizeCredential(ApiAuthCredentialInput credential) {
+        if (credential == null) {
+            return new ApiAuthCredentialInput("", "");
+        }
+        return new ApiAuthCredentialInput(
+                Optional.ofNullable(credential.userName()).orElse(""),
+                Optional.ofNullable(credential.password()).orElse("")
+        );
+    }
+
+    private ApiAuthConfigInput emptyAuthConfig() {
+        return new ApiAuthConfigInput(
+                "NONE",
+                new ApiAuthCredentialInput("", ""),
+                new ApiAuthCredentialInput("", "")
         );
     }
 
@@ -1251,6 +1702,53 @@ public class ApiAutomationService {
         return value == null || value.isBlank() ? fallback : value.trim();
     }
 
+    private String defaultProcessorName(String type, String stage) {
+        String normalized = Optional.ofNullable(type).orElse("").trim().toUpperCase();
+        return switch (normalized) {
+            case "SCRIPT" -> "PRE".equals(stage) ? "Pre Script" : "Post Script";
+            case "TIME_WAITING" -> "Wait";
+            case "EXTRACT" -> "Extract";
+            default -> "Processor";
+        };
+    }
+
+    private Map<String, String> diffVariables(Map<String, String> before, Map<String, String> after) {
+        LinkedHashMap<String, String> changed = new LinkedHashMap<>();
+        after.forEach((key, value) -> {
+            String beforeValue = before.get(key);
+            if (!before.containsKey(key) || !Optional.ofNullable(beforeValue).orElse("").equals(Optional.ofNullable(value).orElse(""))) {
+                changed.put(key, value);
+            }
+        });
+        return changed;
+    }
+
+    private MutableRequestConfig toMutableRequestConfig(ApiRequestConfigInput config) {
+        return new MutableRequestConfig(
+                Optional.ofNullable(config.method()).orElse("GET"),
+                Optional.ofNullable(config.path()).orElse(""),
+                config.timeoutMs(),
+                new ArrayList<>(defaultList(config.queryParams())),
+                new ArrayList<>(defaultList(config.headers())),
+                new ArrayList<>(defaultList(config.cookies())),
+                config.body() == null ? new ApiRequestBodyInput("NONE", null, List.of(), null, null, null) : config.body(),
+                normalizeAuth(config.authConfig())
+        );
+    }
+
+    private ApiRequestConfigInput toRequestConfig(MutableRequestConfig config) {
+        return new ApiRequestConfigInput(
+                config.method(),
+                config.path(),
+                config.timeoutMs(),
+                config.queryParams(),
+                config.headers(),
+                config.cookies(),
+                config.body(),
+                config.authConfig()
+        );
+    }
+
     private record EnvironmentConfigPayload(
             List<ApiKeyValueInput> headers,
             ApiAuthConfigInput authConfig,
@@ -1284,13 +1782,117 @@ public class ApiAutomationService {
     ) {
     }
 
+    private record SentRequestResult(
+            HttpResponse<String> response,
+            Map<String, String> headers
+    ) {
+    }
+
     private record ResolvedRequest(
             String method,
             String url,
             Map<String, String> headers,
             String body,
-            ApiRequestBodyInput bodyConfig
+            ApiRequestBodyInput bodyConfig,
+            ApiAuthConfigInput authConfig
     ) {
+    }
+
+    private record DigestChallenge(
+            String realm,
+            String nonce,
+            String opaque,
+            String algorithm,
+            String qop
+    ) {
+    }
+
+    private class MutableRequestConfig {
+        private String method;
+        private String path;
+        private Integer timeoutMs;
+        private List<ApiKeyValueInput> queryParams;
+        private List<ApiKeyValueInput> headers;
+        private List<ApiKeyValueInput> cookies;
+        private ApiRequestBodyInput body;
+        private ApiAuthConfigInput authConfig;
+
+        private MutableRequestConfig(
+                String method,
+                String path,
+                Integer timeoutMs,
+                List<ApiKeyValueInput> queryParams,
+                List<ApiKeyValueInput> headers,
+                List<ApiKeyValueInput> cookies,
+                ApiRequestBodyInput body,
+                ApiAuthConfigInput authConfig
+        ) {
+            this.method = method;
+            this.path = path;
+            this.timeoutMs = timeoutMs;
+            this.queryParams = queryParams;
+            this.headers = headers;
+            this.cookies = cookies;
+            this.body = body;
+            this.authConfig = authConfig;
+        }
+
+        private String method() {
+            return method;
+        }
+
+        private String path() {
+            return path;
+        }
+
+        private Integer timeoutMs() {
+            return timeoutMs;
+        }
+
+        private List<ApiKeyValueInput> queryParams() {
+            return queryParams;
+        }
+
+        private List<ApiKeyValueInput> headers() {
+            return headers;
+        }
+
+        private List<ApiKeyValueInput> cookies() {
+            return cookies;
+        }
+
+        private ApiRequestBodyInput body() {
+            return body;
+        }
+
+        private ApiAuthConfigInput authConfig() {
+            return authConfig;
+        }
+
+        private Map<String, Object> toScriptMap() {
+            LinkedHashMap<String, Object> request = new LinkedHashMap<>();
+            request.put("method", method);
+            request.put("path", path);
+            request.put("timeoutMs", timeoutMs);
+            request.put("queryParams", new ArrayList<>(queryParams));
+            request.put("headers", new ArrayList<>(headers));
+            request.put("cookies", new ArrayList<>(cookies));
+            request.put("body", body);
+            request.put("authConfig", authConfig);
+            return request;
+        }
+
+        private void applyScriptMap(Map<String, Object> requestValues, ObjectMapper objectMapper) {
+            ApiRequestConfigInput next = objectMapper.convertValue(requestValues, ApiRequestConfigInput.class);
+            method = blankToFallback(next.method(), method).toUpperCase();
+            path = blankToFallback(next.path(), path);
+            timeoutMs = next.timeoutMs() == null ? timeoutMs : next.timeoutMs();
+            queryParams = new ArrayList<>(defaultList(next.queryParams()));
+            headers = new ArrayList<>(defaultList(next.headers()));
+            cookies = new ArrayList<>(defaultList(next.cookies()));
+            body = next.body() == null ? body : next.body();
+            authConfig = next.authConfig() == null ? authConfig : normalizeAuth(next.authConfig());
+        }
     }
 
     private record MultipartPayload(

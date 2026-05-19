@@ -29,11 +29,17 @@ public final class ApiAutomationModels {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record ApiAuthConfigInput(
-            String type,
-            String token,
-            String username,
+    public record ApiAuthCredentialInput(
+            String userName,
             String password
+    ) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ApiAuthConfigInput(
+            String authType,
+            ApiAuthCredentialInput basicAuth,
+            ApiAuthCredentialInput digestAuth
     ) {
     }
 
@@ -66,6 +72,27 @@ public final class ApiAutomationModels {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ApiProcessorExtractItemInput(
+            String name,
+            String sourceType,
+            String expression,
+            Boolean enabled
+    ) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ApiProcessorInput(
+            String id,
+            String processorType,
+            String name,
+            Boolean enabled,
+            String script,
+            Integer delayMs,
+            List<ApiProcessorExtractItemInput> extractors
+    ) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record ApiRequestConfigInput(
             @NotBlank(message = "HTTP method cannot be blank") String method,
             @NotBlank(message = "Path cannot be blank") String path,
@@ -86,7 +113,9 @@ public final class ApiAutomationModels {
             List<String> tags,
             @Valid @NotNull(message = "Request config cannot be blank") ApiRequestConfigInput requestConfig,
             List<ApiAssertionInput> assertions,
-            List<ApiExtractorInput> extractors
+            List<ApiExtractorInput> extractors,
+            List<ApiProcessorInput> preProcessors,
+            List<ApiProcessorInput> postProcessors
     ) {
     }
 
@@ -119,6 +148,8 @@ public final class ApiAutomationModels {
             ApiRequestConfigInput requestConfig,
             List<ApiAssertionInput> assertions,
             List<ApiExtractorInput> extractors,
+            List<ApiProcessorInput> preProcessors,
+            List<ApiProcessorInput> postProcessors,
             String lastRunResult,
             LocalDateTime lastRunAt,
             LocalDateTime createdAt,
@@ -248,6 +279,8 @@ public final class ApiAutomationModels {
             @Valid @NotNull(message = "Request config cannot be blank") ApiRequestConfigInput requestConfig,
             List<ApiAssertionInput> assertions,
             List<ApiExtractorInput> extractors,
+            List<ApiProcessorInput> preProcessors,
+            List<ApiProcessorInput> postProcessors,
             Long environmentId,
             Long variableSetId
     ) {
@@ -285,6 +318,18 @@ public final class ApiAutomationModels {
     ) {
     }
 
+    public record ApiProcessorResult(
+            String stage,
+            String processorType,
+            String name,
+            boolean success,
+            Long durationMs,
+            String message,
+            List<String> logs,
+            Map<String, String> outputVariables
+    ) {
+    }
+
     public record ApiRunStepResultResponse(
             Long id,
             Long reportId,
@@ -297,6 +342,7 @@ public final class ApiAutomationModels {
             ApiResponseSnapshot response,
             List<ApiAssertionResult> assertionResults,
             List<ApiExtractionResult> extractionResults,
+            List<ApiProcessorResult> processorResults,
             String errorMessage,
             LocalDateTime createdAt
     ) {

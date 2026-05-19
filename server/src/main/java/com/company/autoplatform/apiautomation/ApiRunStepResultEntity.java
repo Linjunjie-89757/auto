@@ -43,6 +43,9 @@ public class ApiRunStepResultEntity extends BaseEntity {
     @TableField("extraction_results_json")
     private String extractionResultsJson;
 
+    @TableField("processor_results_json")
+    private String processorResultsJson;
+
     @TableField("error_message")
     private String errorMessage;
 }

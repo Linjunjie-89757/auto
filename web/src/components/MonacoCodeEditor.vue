@@ -7,7 +7,7 @@
         class="ms-monaco-editor__format"
         @click="formatDocument"
       >
-        Format
+        格式化
       </button>
     </div>
     <div ref="containerRef" class="ms-monaco-editor__body" :style="{ height }"></div>

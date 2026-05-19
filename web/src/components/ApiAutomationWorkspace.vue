@@ -10,14 +10,19 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
 import { useWorkspace } from '../composables/useWorkspace'
 import { useWorkspaceAccess } from '../composables/useWorkspaceAccess'
+import ApiProcessorEditor from './ApiProcessorEditor.vue'
 import MonacoCodeEditor from './MonacoCodeEditor.vue'
 import type {
   ApiAssertionConfig,
+  ApiAuthConfig,
+  ApiAuthCredential,
   ApiDefinitionDetail,
   ApiDefinitionItem,
   ApiEnvironmentItem,
   ApiExtractorConfig,
   ApiKeyValue,
+  ApiProcessorConfig,
+  ApiProcessorExtractorConfig,
   ApiRunPayload,
   ApiRunStepResult,
   ApiScenarioDetail,
@@ -46,6 +51,11 @@ type RequestEditorTab = {
 const requestMethodOptions = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'TRACE'] as const
 const queryParamTypeOptions = ['string', 'integer', 'number', 'boolean'] as const
 const bodyParamTypeOptions = ['string', 'integer', 'number', 'boolean'] as const
+const requestAuthTypeOptions = [
+  { label: 'No Auth', value: 'NONE' },
+  { label: 'Basic Auth', value: 'BASIC' },
+  { label: 'Digest Auth', value: 'DIGEST' },
+] as const
 
 type DefinitionDirectoryTreeNode = {
   key: string
@@ -75,14 +85,16 @@ const bugDialogVisible = ref(false)
 const definitionSaveDialogVisible = ref(false)
 const batchAddDrawerVisible = ref(false)
 const activeTab = ref<'definitions' | 'scenarios' | 'execution' | 'reports' | 'settings'>('definitions')
-const activeRequestTab = ref<'params' | 'headers' | 'body' | 'auth' | 'tests' | 'extract' | 'settings'>('params')
-const responsePreviewTab = ref<'body' | 'headers' | 'assertions' | 'extractions' | 'history'>('body')
+const activeRequestTab = ref<'params' | 'headers' | 'body' | 'auth' | 'pre' | 'post' | 'tests' | 'settings'>('params')
+const responsePreviewTab = ref<'body' | 'headers' | 'processors' | 'assertions' | 'extractions' | 'history'>('body')
 const batchAddMode = ref<BatchAddMode>('query')
 const batchAddInput = ref('')
 const draggingParamGroup = ref<SortableParamGroup | null>(null)
 const draggingParamIndex = ref<number | null>(null)
 const dragOverParamGroup = ref<SortableParamGroup | null>(null)
 const dragOverParamIndex = ref<number | null>(null)
+const activePreProcessorId = ref<string | null>(null)
+const activePostProcessorId = ref<string | null>(null)
 
 const definitions = ref<ApiDefinitionItem[]>([])
 const scenarios = ref<ApiScenarioItem[]>([])
@@ -157,14 +169,21 @@ const definitionForm = reactive<ApiDefinitionDetail>({
       plainText: '',
     },
     authConfig: {
-      type: 'INHERIT',
-      token: '',
-      username: '',
-      password: '',
+      authType: 'NONE',
+      basicAuth: {
+        userName: '',
+        password: '',
+      },
+      digestAuth: {
+        userName: '',
+        password: '',
+      },
     },
   },
   assertions: [],
   extractors: [],
+  preProcessors: [],
+  postProcessors: [],
 })
 
 const scenarioForm = reactive<ApiScenarioDetail>({
@@ -195,10 +214,15 @@ const environmentForm = reactive<ApiEnvironmentItem>({
   baseUrl: '',
   headers: [],
   authConfig: {
-    type: 'NONE',
-    token: '',
-    username: '',
-    password: '',
+    authType: 'NONE',
+    basicAuth: {
+      userName: '',
+      password: '',
+    },
+    digestAuth: {
+      userName: '',
+      password: '',
+    },
   },
   timeoutMs: 10000,
   status: 1,
@@ -616,6 +640,7 @@ const currentResponseBody = computed(() => currentResponseStep.value?.response?.
 const currentResponseHeaders = computed(() => currentResponseStep.value?.response?.headers ?? {})
 const currentAssertionResults = computed(() => currentResponseStep.value?.assertionResults ?? [])
 const currentExtractionResults = computed(() => currentResponseStep.value?.extractionResults ?? [])
+const currentProcessorResults = computed(() => currentResponseStep.value?.processorResults ?? [])
 const currentDebugError = computed(() => currentResponseStep.value?.errorMessage || reportDetail.value?.failureSummary || '')
 const currentAssertionSummary = computed(() => {
   const total = currentAssertionResults.value.length
@@ -625,6 +650,11 @@ const currentAssertionSummary = computed(() => {
 const currentExtractionSummary = computed(() => {
   const total = currentExtractionResults.value.length
   const passed = currentExtractionResults.value.filter(item => item.success).length
+  return { total, passed }
+})
+const currentProcessorSummary = computed(() => {
+  const total = currentProcessorResults.value.length
+  const passed = currentProcessorResults.value.filter(item => item.success).length
   return { total, passed }
 })
 const queryEnabledCount = computed(() =>
@@ -1011,6 +1041,35 @@ function bodyFormParamDefaults() {
   return { paramType: 'string', required: false, encode: false }
 }
 
+function emptyAuthCredential(): ApiAuthCredential {
+  return {
+    userName: '',
+    password: '',
+  }
+}
+
+function emptyAuthConfig(): ApiAuthConfig {
+  return {
+    authType: 'NONE',
+    basicAuth: emptyAuthCredential(),
+    digestAuth: emptyAuthCredential(),
+  }
+}
+
+function normalizeAuthConfig(authConfig?: Partial<ApiAuthConfig> | null): ApiAuthConfig {
+  return {
+    authType: authConfig?.authType === 'BASIC' || authConfig?.authType === 'DIGEST' ? authConfig.authType : 'NONE',
+    basicAuth: {
+      ...emptyAuthCredential(),
+      ...(authConfig?.basicAuth ?? {}),
+    },
+    digestAuth: {
+      ...emptyAuthCredential(),
+      ...(authConfig?.digestAuth ?? {}),
+    },
+  }
+}
+
 function prepareKeyValueRowsForPayload(items: ApiKeyValue[]) {
   return items
     .map(item => normalizeKeyValueRow(item))
@@ -1021,14 +1080,101 @@ function hydrateDefinitionKeyValueRows(detail: ApiDefinitionDetail) {
   syncKeyValueRows(detail.requestConfig.queryParams, queryParamDefaults())
   syncKeyValueRows(detail.requestConfig.headers, headerParamDefaults())
   syncKeyValueRows(detail.requestConfig.body.formItems, bodyFormParamDefaults())
+  detail.requestConfig.authConfig = normalizeAuthConfig(detail.requestConfig.authConfig)
+  detail.preProcessors = normalizeProcessorList(detail.preProcessors || [], 'pre')
+  detail.postProcessors = normalizePostProcessorList(detail)
+}
+
+function normalizeProcessorList(processors: ApiProcessorConfig[], stage: 'pre' | 'post') {
+  return processors.map((processor, index) => {
+    const baseId = processor.id || `${stage}-${processor.processorType.toLowerCase()}-${index}`
+    if (processor.processorType === 'SCRIPT') {
+      return {
+        ...emptyProcessor('SCRIPT', stage),
+        ...processor,
+        id: baseId,
+        enabled: processor.enabled !== false,
+        script: processor.script || '',
+      } satisfies ApiProcessorConfig
+    }
+    if (processor.processorType === 'TIME_WAITING') {
+      return {
+        ...emptyProcessor('TIME_WAITING', stage),
+        ...processor,
+        id: baseId,
+        enabled: processor.enabled !== false,
+        delayMs: processor.delayMs || 1000,
+      } satisfies ApiProcessorConfig
+    }
+    return {
+      ...emptyProcessor('EXTRACT', stage),
+      ...processor,
+      id: baseId,
+      enabled: processor.enabled !== false,
+      extractors: (processor.extractors || []).map(item => ({
+        ...emptyProcessorExtractor(),
+        ...item,
+        enabled: item.enabled !== false,
+      })),
+    } satisfies ApiProcessorConfig
+  })
+}
+
+function normalizePostProcessorList(detail: ApiDefinitionDetail) {
+  const processors = normalizeProcessorList(detail.postProcessors || [], 'post')
+  if (processors.length || !detail.extractors?.length) {
+    return processors
+  }
+  return [
+    ...processors,
+    {
+      ...emptyProcessor('EXTRACT', 'post'),
+      name: 'Extract',
+      extractors: detail.extractors.map(item => ({
+        ...emptyProcessorExtractor(),
+        name: item.name,
+        sourceType: (item.sourceType as ApiProcessorExtractorConfig['sourceType']) || 'BODY_JSONPATH',
+        expression: item.expression,
+      })),
+    },
+  ]
 }
 
 function emptyAssertion(): ApiAssertionConfig {
   return { type: 'STATUS_CODE', subject: '', operator: 'EQUALS', expectedValue: '200' }
 }
 
-function emptyExtractor(): ApiExtractorConfig {
-  return { name: '', sourceType: 'BODY_JSONPATH', expression: '$.data.id' }
+function emptyProcessorExtractor(): ApiProcessorExtractorConfig {
+  return { name: '', sourceType: 'BODY_JSONPATH', expression: '$.data.id', enabled: true }
+}
+
+function emptyProcessor(type: ApiProcessorConfig['processorType'], stage: 'pre' | 'post'): ApiProcessorConfig {
+  const id = `${stage}-${type.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  if (type === 'SCRIPT') {
+    return {
+      id,
+      processorType: 'SCRIPT',
+      name: stage === 'pre' ? 'Pre Script' : 'Post Script',
+      enabled: true,
+      script: '',
+    }
+  }
+  if (type === 'TIME_WAITING') {
+    return {
+      id,
+      processorType: 'TIME_WAITING',
+      name: 'Wait',
+      enabled: true,
+      delayMs: 1000,
+    }
+  }
+  return {
+    id,
+    processorType: 'EXTRACT',
+    name: 'Extract',
+    enabled: true,
+    extractors: [emptyProcessorExtractor()],
+  }
 }
 
 function emptyScenarioStep(): ApiScenarioStep {
@@ -1115,10 +1261,12 @@ function buildEmptyDefinitionDetail(): ApiDefinitionDetail {
       headers: [],
       cookies: [],
       body: { type: 'NONE', rawText: '', formItems: [], contentType: '', fileName: '', binaryBase64: '', jsonText: '', xmlText: '', plainText: '' },
-      authConfig: { type: 'INHERIT', token: '', username: '', password: '' },
+      authConfig: emptyAuthConfig(),
     },
     assertions: [],
     extractors: [],
+    preProcessors: [],
+    postProcessors: [],
   }
 }
 
@@ -1308,7 +1456,7 @@ function resetEnvironmentForm() {
     name: '',
     baseUrl: '',
     headers: [],
-    authConfig: { type: 'NONE', token: '', username: '', password: '' },
+    authConfig: emptyAuthConfig(),
     timeoutMs: 10000,
     status: 1,
   })
@@ -1723,10 +1871,6 @@ function addAssertion() {
   definitionForm.assertions.push(emptyAssertion())
 }
 
-function addExtractor() {
-  definitionForm.extractors.push(emptyExtractor())
-}
-
 function addScenarioStep() {
   scenarioForm.steps.push(emptyScenarioStep())
 }
@@ -1770,6 +1914,8 @@ async function persistDefinition(options?: { debugAfterSave?: boolean }) {
       },
       assertions: definitionForm.assertions,
       extractors: definitionForm.extractors,
+      preProcessors: definitionForm.preProcessors,
+      postProcessors: definitionForm.postProcessors,
     }
     const detail = isUpdate
       ? await platformApi.updateApiDefinition(workspaceCode.value, definitionForm.id, payload)
@@ -2015,6 +2161,7 @@ async function saveEnvironment() {
     ElMessage.success(environmentForm.id ? '环境已更新' : '环境已创建')
     await refreshData()
     Object.assign(environmentForm, JSON.parse(JSON.stringify(item)))
+    environmentForm.authConfig = normalizeAuthConfig(environmentForm.authConfig)
   }
   catch (error) {
     ElMessage.error((error as Error).message)
@@ -2148,6 +2295,7 @@ async function submitReportBug() {
 
 function selectEnvironment(item: ApiEnvironmentItem) {
   Object.assign(environmentForm, JSON.parse(JSON.stringify(item)))
+  environmentForm.authConfig = normalizeAuthConfig(environmentForm.authConfig)
   selectedEnvironmentId.value = item.id
   runOptions.environmentId = item.id
 }
@@ -2353,8 +2501,9 @@ function formatTimeLabel(value?: string | null) {
                   <span v-if="queryEnabledCount" class="ms-like-tab-badge">{{ queryEnabledCount }}</span>
                 </button>
                 <button :class="['ms-like-top-tab', { active: activeRequestTab === 'auth' }]" @click="activeRequestTab = 'auth'">Auth</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="activeRequestTab = 'tests'">&#21069;&#32622;</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'extract' }]" @click="activeRequestTab = 'extract'">&#21518;&#32622;</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'pre' }]" @click="activeRequestTab = 'pre'">前置处理</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'post' }]" @click="activeRequestTab = 'post'">后置处理</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="activeRequestTab = 'tests'">断言</button>
                 <button :class="['ms-like-top-tab', { active: activeRequestTab === 'settings' }]" @click="activeRequestTab = 'settings'">&#35774;&#32622;</button>
               </div>
 
@@ -2510,7 +2659,6 @@ function formatTimeLabel(value?: string | null) {
                       v-if="['RAW_JSON', 'RAW_XML', 'RAW_TEXT'].includes(definitionForm.requestConfig.body.type)"
                       v-model="activeBodyRawText"
                       :language="activeBodyLanguage"
-                      :show-format-button="false"
                       height="300px"
                     />
                     <div v-else-if="definitionForm.requestConfig.body.type === 'BINARY'" class="request-section ms-like-form-panel">
@@ -2612,31 +2760,23 @@ function formatTimeLabel(value?: string | null) {
                   </div>
                 </template>
 
-                <template v-else-if="activeRequestTab === 'extract'">
-                  <div class="request-section ms-like-table-surface">
-                    <div class="ms-like-table-header">
-                      <label class="ms-like-check-cell">
-                        <el-checkbox model-value />
-                        <span>&#21442;&#25968;&#21517;&#31216;</span>
-                      </label>
-                      <span>&#21442;&#25968;&#20540;</span>
-                      <span>&#25551;&#36848;</span>
-                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('extractor')">&#25209;&#37327;&#28155;&#21152;</button>
-                    </div>
-                    <div v-for="(item, index) in definitionForm.extractors" :key="`extract-${index}`" class="ms-like-table-row">
-                      <div class="ms-like-drag-cell">&#8942;</div>
-                      <div class="ms-like-checkbox-field">
-                        <el-checkbox model-value />
-                        <el-input v-model="item.name" placeholder="&#21442;&#25968;&#21517;&#31216;" />
-                      </div>
-                      <el-input v-model="item.expression" placeholder="JSONPath / Header" />
-                      <el-select v-model="item.sourceType">
-                        <el-option label="BODY_JSONPATH" value="BODY_JSONPATH" />
-                        <el-option label="HEADER" value="HEADER" />
-                      </el-select>
-                      <button type="button" class="ms-like-row-remove" @click="definitionForm.extractors.splice(index, 1)">&#21024;&#38500;</button>
-                    </div>
-                    <button type="button" class="ms-like-add-row" @click="addExtractor">+ &#28155;&#21152;&#19968;&#34892;</button>
+                <template v-else-if="activeRequestTab === 'pre'">
+                  <div class="request-section">
+                    <ApiProcessorEditor
+                      v-model="definitionForm.preProcessors"
+                      v-model:active-id="activePreProcessorId"
+                      stage="pre"
+                    />
+                  </div>
+                </template>
+
+                <template v-else-if="activeRequestTab === 'post'">
+                  <div class="request-section">
+                    <ApiProcessorEditor
+                      v-model="definitionForm.postProcessors"
+                      v-model:active-id="activePostProcessorId"
+                      stage="post"
+                    />
                   </div>
                 </template>
 
@@ -2673,31 +2813,63 @@ function formatTimeLabel(value?: string | null) {
                 </template>
 
                 <template v-else-if="activeRequestTab === 'auth'">
-                  <div class="request-section ms-like-form-panel">
-                    <div class="ms-like-form-row">
-                      <div class="ms-like-form-label">&#35748;&#35777;&#31867;&#22411;</div>
-                      <el-select v-model="definitionForm.requestConfig.authConfig.type" class="ms-like-form-control">
-                        <el-option label="INHERIT" value="INHERIT" />
-                        <el-option label="NONE" value="NONE" />
-                        <el-option label="BEARER" value="BEARER" />
-                        <el-option label="BASIC" value="BASIC" />
-                      </el-select>
-                    </div>
-                    <div v-if="definitionForm.requestConfig.authConfig.type === 'BEARER'" class="ms-like-form-row">
-                      <div class="ms-like-form-label">Token</div>
-                      <el-input v-model="definitionForm.requestConfig.authConfig.token" class="ms-like-form-control" placeholder="Bearer Token" />
-                    </div>
-                    <template v-else-if="definitionForm.requestConfig.authConfig.type === 'BASIC'">
-                      <div class="ms-like-form-row">
-                        <div class="ms-like-form-label">Username</div>
-                        <el-input v-model="definitionForm.requestConfig.authConfig.username" class="ms-like-form-control" placeholder="username" />
+                  <div class="request-section">
+                    <div class="ms-auth-panel">
+                      <div class="ms-auth-panel-title">&#35748;&#35777;&#26041;&#24335;</div>
+                      <el-radio-group v-model="definitionForm.requestConfig.authConfig.authType" class="ms-auth-radio-group">
+                        <el-radio-button
+                          v-for="option in requestAuthTypeOptions"
+                          :key="option.value"
+                          :label="option.value"
+                        >
+                          {{ option.label }}
+                        </el-radio-button>
+                      </el-radio-group>
+                      <div
+                        v-if="definitionForm.requestConfig.authConfig.authType === 'BASIC'"
+                        class="ms-auth-form"
+                      >
+                        <div class="ms-auth-form-item">
+                          <label class="ms-auth-form-label">Username</label>
+                          <el-input
+                            v-model="definitionForm.requestConfig.authConfig.basicAuth.userName"
+                            placeholder="username"
+                            class="ms-auth-form-control"
+                          />
+                        </div>
+                        <div class="ms-auth-form-item">
+                          <label class="ms-auth-form-label">Password</label>
+                          <el-input
+                            v-model="definitionForm.requestConfig.authConfig.basicAuth.password"
+                            placeholder="password"
+                            class="ms-auth-form-control"
+                            show-password
+                          />
+                        </div>
                       </div>
-                      <div class="ms-like-form-row">
-                        <div class="ms-like-form-label">Password</div>
-                        <el-input v-model="definitionForm.requestConfig.authConfig.password" class="ms-like-form-control" placeholder="password" show-password />
+                      <div
+                        v-else-if="definitionForm.requestConfig.authConfig.authType === 'DIGEST'"
+                        class="ms-auth-form"
+                      >
+                        <div class="ms-auth-form-item">
+                          <label class="ms-auth-form-label">Username</label>
+                          <el-input
+                            v-model="definitionForm.requestConfig.authConfig.digestAuth.userName"
+                            placeholder="username"
+                            class="ms-auth-form-control"
+                          />
+                        </div>
+                        <div class="ms-auth-form-item">
+                          <label class="ms-auth-form-label">Password</label>
+                          <el-input
+                            v-model="definitionForm.requestConfig.authConfig.digestAuth.password"
+                            placeholder="password"
+                            class="ms-auth-form-control"
+                            show-password
+                          />
+                        </div>
                       </div>
-                    </template>
-                    <div v-else class="empty-hint">&#35748;&#35777;&#23558;&#32487;&#25215;&#29615;&#22659;&#37197;&#32622;&#65292;&#25110;&#25353; NONE &#21457;&#36865;&#21311;&#21517;&#35831;&#27714;&#12290;</div>
+                    </div>
                   </div>
                 </template>
 
@@ -2775,9 +2947,10 @@ function formatTimeLabel(value?: string | null) {
               <div class="ms-like-response-tabs">
                 <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'body' }]" @click="responsePreviewTab = 'body'">Body</button>
                 <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'headers' }]" @click="responsePreviewTab = 'headers'">Headers</button>
-                <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'assertions' }]" @click="responsePreviewTab = 'assertions'">Assertions</button>
-                <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'extractions' }]" @click="responsePreviewTab = 'extractions'">Extract</button>
-                <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'history' }]" @click="responsePreviewTab = 'history'">History</button>
+                <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'processors' }]" @click="responsePreviewTab = 'processors'">处理器</button>
+                <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'assertions' }]" @click="responsePreviewTab = 'assertions'">断言</button>
+                <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'extractions' }]" @click="responsePreviewTab = 'extractions'">提取</button>
+                <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'history' }]" @click="responsePreviewTab = 'history'">历史</button>
               </div>
 
               <div class="ms-like-response-body">
@@ -2797,6 +2970,20 @@ function formatTimeLabel(value?: string | null) {
                   :show-format-button="false"
                   height="360px"
                 />
+                <div v-else-if="responsePreviewTab === 'processors'" class="result-list">
+                  <div class="result-summary">通过 {{ currentProcessorSummary.passed }} / {{ currentProcessorSummary.total }}</div>
+                  <div v-for="(item, index) in currentProcessorResults" :key="`processor-preview-${index}`" class="result-item processor-result-item">
+                    <el-tag size="small" :type="item.success ? 'success' : 'danger'">{{ item.success ? 'PASS' : 'FAIL' }}</el-tag>
+                    <div class="processor-result-copy">
+                        <div class="result-title">{{ item.stage === 'PRE' ? '前置' : '后置' }} / {{ item.name }}</div>
+                      <div class="result-meta">{{ item.processorType }} · {{ item.durationMs }} ms · {{ item.message }}</div>
+                      <div v-if="Object.keys(item.outputVariables || {}).length" class="processor-variable-list">
+                        <span v-for="(value, key) in item.outputVariables" :key="`${item.name}-${key}`" class="processor-variable-pill">{{ key }}={{ value }}</span>
+                      </div>
+                      <pre v-if="item.logs?.length" class="processor-log-preview">{{ item.logs.join('\n') }}</pre>
+                    </div>
+                  </div>
+                </div>
                 <div v-else-if="responsePreviewTab === 'assertions'" class="result-list">
                   <div class="result-summary">通过 {{ currentAssertionSummary.passed }} / {{ currentAssertionSummary.total }}</div>
                   <div v-for="(item, index) in currentAssertionResults" :key="`assertion-preview-${index}`" class="result-item">
@@ -3009,20 +3196,42 @@ function formatTimeLabel(value?: string | null) {
                 <el-button text @click="environmentForm.headers.splice(index, 1)">删除</el-button>
               </div>
               <div class="form-grid">
-                <el-select v-model="environmentForm.authConfig.type">
-                  <el-option label="NONE" value="NONE" />
-                  <el-option label="BEARER" value="BEARER" />
-                  <el-option label="BASIC" value="BASIC" />
-                </el-select>
+                <div class="ms-auth-panel ms-auth-panel--compact">
+                  <div class="ms-auth-panel-title">认证方式</div>
+                  <el-radio-group v-model="environmentForm.authConfig.authType" class="ms-auth-radio-group">
+                    <el-radio-button
+                      v-for="option in requestAuthTypeOptions"
+                      :key="`env-${option.value}`"
+                      :label="option.value"
+                    >
+                      {{ option.label }}
+                    </el-radio-button>
+                  </el-radio-group>
+                  <div v-if="environmentForm.authConfig.authType === 'BASIC'" class="ms-auth-form ms-auth-form--compact">
+                    <div class="ms-auth-form-item">
+                      <label class="ms-auth-form-label">Username</label>
+                      <el-input v-model="environmentForm.authConfig.basicAuth.userName" placeholder="username" class="ms-auth-form-control" />
+                    </div>
+                    <div class="ms-auth-form-item">
+                      <label class="ms-auth-form-label">Password</label>
+                      <el-input v-model="environmentForm.authConfig.basicAuth.password" placeholder="password" class="ms-auth-form-control" show-password />
+                    </div>
+                  </div>
+                  <div v-else-if="environmentForm.authConfig.authType === 'DIGEST'" class="ms-auth-form ms-auth-form--compact">
+                    <div class="ms-auth-form-item">
+                      <label class="ms-auth-form-label">Username</label>
+                      <el-input v-model="environmentForm.authConfig.digestAuth.userName" placeholder="username" class="ms-auth-form-control" />
+                    </div>
+                    <div class="ms-auth-form-item">
+                      <label class="ms-auth-form-label">Password</label>
+                      <el-input v-model="environmentForm.authConfig.digestAuth.password" placeholder="password" class="ms-auth-form-control" show-password />
+                    </div>
+                  </div>
+                </div>
                 <el-select v-model="environmentForm.status">
                   <el-option label="启用" :value="1" />
                   <el-option label="停用" :value="0" />
                 </el-select>
-              </div>
-              <el-input v-if="environmentForm.authConfig.type === 'BEARER'" v-model="environmentForm.authConfig.token" placeholder="Bearer Token" />
-              <div v-else-if="environmentForm.authConfig.type === 'BASIC'" class="form-grid">
-                <el-input v-model="environmentForm.authConfig.username" placeholder="username" />
-                <el-input v-model="environmentForm.authConfig.password" placeholder="password" show-password />
               </div>
               <div class="editor-actions left">
                 <el-button :loading="saving" :disabled="!canWriteEnvironment" @click="saveEnvironment">保存环境</el-button>
@@ -3195,6 +3404,12 @@ function formatTimeLabel(value?: string | null) {
               <div>
                 <div class="snapshot-title">变量提取</div>
                 <pre>{{ JSON.stringify(item.extractionResults, null, 2) }}</pre>
+              </div>
+            </div>
+            <div class="snapshot-grid">
+              <div>
+                <div class="snapshot-title">处理器结果</div>
+                <pre>{{ JSON.stringify(item.processorResults, null, 2) }}</pre>
               </div>
             </div>
           </div>
@@ -4341,6 +4556,53 @@ function formatTimeLabel(value?: string | null) {
   gap: 0;
 }
 
+.ms-auth-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 8px;
+  background: var(--el-bg-color);
+}
+
+.ms-auth-panel--compact {
+  min-width: 0;
+}
+
+.ms-auth-panel-title {
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.ms-auth-radio-group {
+  align-self: flex-start;
+}
+
+.ms-auth-form {
+  display: grid;
+  gap: 16px;
+}
+
+.ms-auth-form--compact {
+  gap: 12px;
+}
+
+.ms-auth-form-item {
+  display: grid;
+  gap: 8px;
+}
+
+.ms-auth-form-label {
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+}
+
+.ms-auth-form-control {
+  width: min(100%, 450px);
+}
+
 .empty-hint {
   padding: 14px;
   border: 1px dashed var(--el-border-color);
@@ -4403,6 +4665,40 @@ function formatTimeLabel(value?: string | null) {
   border-radius: 8px;
   background: var(--el-fill-color-lighter);
   padding: 10px 12px;
+}
+
+.processor-result-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.processor-variable-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.processor-variable-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 999px;
+  background: var(--el-fill-color-blank);
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.processor-log-preview {
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: #111827;
+  color: #e5e7eb;
+  font-size: 12px;
+  overflow: auto;
 }
 
 .execution-list {

@@ -446,6 +446,12 @@ export interface ApiRequestBodyConfig {
   type: string
   rawText?: string | null
   formItems: ApiKeyValue[]
+  contentType?: string | null
+  fileName?: string | null
+  binaryBase64?: string | null
+  jsonText?: string | null
+  xmlText?: string | null
+  plainText?: string | null
 }
 
 export interface ApiAssertionConfig {

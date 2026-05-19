@@ -54,6 +54,8 @@ type DefinitionDirectoryTreeNode = {
   children: DefinitionDirectoryTreeNode[]
 }
 
+type BatchAddMode = 'query' | 'cookie' | 'header' | 'body-form' | 'assertion' | 'extractor'
+
 const DEFINITION_TREE_ROOT_KEY = 'definition-root'
 const DEFINITION_TREE_UNASSIGNED_KEY = 'definition-unassigned'
 
@@ -65,9 +67,12 @@ const saving = ref(false)
 const reportDrawerVisible = ref(false)
 const bugDialogVisible = ref(false)
 const definitionSaveDialogVisible = ref(false)
+const batchAddDrawerVisible = ref(false)
 const activeTab = ref<'definitions' | 'scenarios' | 'execution' | 'reports' | 'settings'>('definitions')
-const activeRequestTab = ref<'params' | 'headers' | 'body' | 'auth' | 'tests' | 'extract' | 'settings' | 'rest'>('params')
+const activeRequestTab = ref<'params' | 'headers' | 'body' | 'auth' | 'tests' | 'extract' | 'settings'>('params')
 const responsePreviewTab = ref<'body' | 'headers' | 'assertions' | 'extractions' | 'history'>('body')
+const batchAddMode = ref<BatchAddMode>('query')
+const batchAddInput = ref('')
 
 const definitions = ref<ApiDefinitionItem[]>([])
 const scenarios = ref<ApiScenarioItem[]>([])
@@ -134,6 +139,12 @@ const definitionForm = reactive<ApiDefinitionDetail>({
       type: 'NONE',
       rawText: '',
       formItems: [],
+      contentType: '',
+      fileName: '',
+      binaryBase64: '',
+      jsonText: '',
+      xmlText: '',
+      plainText: '',
     },
     authConfig: {
       type: 'INHERIT',
@@ -606,17 +617,121 @@ const currentExtractionSummary = computed(() => {
   return { total, passed }
 })
 const queryEnabledCount = computed(() => definitionForm.requestConfig.queryParams.filter(item => item.enabled !== false).length)
-const headerEnabledCount = computed(() => definitionForm.requestConfig.headers.filter(item => item.enabled !== false).length)
+
+function tableSelectionState(items: ApiKeyValue[]) {
+  const total = items.length
+  const enabled = items.filter(item => item.enabled !== false).length
+  return {
+    checked: total > 0 && enabled === total,
+    indeterminate: enabled > 0 && enabled < total,
+  }
+}
+
+function toggleTableSelection(items: ApiKeyValue[], enabled: boolean) {
+  items.forEach((item) => {
+    item.enabled = enabled
+  })
+}
 
 function isBodyMode(mode: string) {
   if (mode === 'json') return definitionForm.requestConfig.body.type === 'RAW_JSON'
+  if (mode === 'xml') return definitionForm.requestConfig.body.type === 'RAW_XML'
   if (mode === 'raw') return definitionForm.requestConfig.body.type === 'RAW_TEXT'
   return definitionForm.requestConfig.body.type === mode
 }
 
-function setBodyMode(mode: 'NONE' | 'FORM_DATA' | 'FORM_URLENCODED' | 'RAW_JSON' | 'RAW_TEXT') {
-  definitionForm.requestConfig.body.type = mode
+function getModeBodyText(type: string) {
+  if (type === 'RAW_JSON') return definitionForm.requestConfig.body.jsonText || ''
+  if (type === 'RAW_XML') return definitionForm.requestConfig.body.xmlText || ''
+  if (type === 'RAW_TEXT') return definitionForm.requestConfig.body.plainText || ''
+  return definitionForm.requestConfig.body.rawText || ''
 }
+
+function setModeBodyText(type: string, value: string) {
+  if (type === 'RAW_JSON') {
+    definitionForm.requestConfig.body.jsonText = value
+  }
+  else if (type === 'RAW_XML') {
+    definitionForm.requestConfig.body.xmlText = value
+  }
+  else if (type === 'RAW_TEXT') {
+    definitionForm.requestConfig.body.plainText = value
+  }
+  definitionForm.requestConfig.body.rawText = value
+}
+
+function syncActiveBodyText() {
+  setModeBodyText(definitionForm.requestConfig.body.type, getModeBodyText(definitionForm.requestConfig.body.type))
+}
+
+function setBodyMode(mode: 'NONE' | 'FORM_DATA' | 'FORM_URLENCODED' | 'RAW_JSON' | 'RAW_XML' | 'RAW_TEXT' | 'BINARY') {
+  definitionForm.requestConfig.body.type = mode
+  if (mode === 'RAW_JSON') {
+    definitionForm.requestConfig.body.contentType = 'application/json'
+  }
+  if (mode === 'RAW_XML') {
+    definitionForm.requestConfig.body.contentType = 'application/xml'
+  }
+  if (mode === 'RAW_TEXT') {
+    definitionForm.requestConfig.body.contentType = 'text/plain'
+  }
+  if (mode === 'BINARY') {
+    definitionForm.requestConfig.body.contentType = 'application/octet-stream'
+  }
+  syncActiveBodyText()
+}
+
+const activeBodyRawText = computed({
+  get: () => getModeBodyText(definitionForm.requestConfig.body.type),
+  set: (value: string) => setModeBodyText(definitionForm.requestConfig.body.type, value),
+})
+
+async function pickBinaryBodyFile() {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '*/*'
+  input.onchange = async () => {
+    const file = input.files?.[0]
+    if (!file) {
+      return
+    }
+    const arrayBuffer = await file.arrayBuffer()
+    const bytes = new Uint8Array(arrayBuffer)
+    let binary = ''
+    const chunkSize = 0x8000
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+      const chunk = bytes.subarray(index, index + chunkSize)
+      binary += String.fromCharCode(...chunk)
+    }
+    definitionForm.requestConfig.body.type = 'BINARY'
+    definitionForm.requestConfig.body.fileName = file.name
+    definitionForm.requestConfig.body.contentType = file.type || 'application/octet-stream'
+    definitionForm.requestConfig.body.binaryBase64 = btoa(binary)
+  }
+  input.click()
+}
+
+function clearBinaryBodyFile() {
+  definitionForm.requestConfig.body.fileName = ''
+  definitionForm.requestConfig.body.binaryBase64 = ''
+  definitionForm.requestConfig.body.contentType = 'application/octet-stream'
+}
+
+const binaryBodySizeLabel = computed(() => {
+  const base64 = definitionForm.requestConfig.body.binaryBase64 || ''
+  if (!base64) {
+    return ''
+  }
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
+  const bytes = Math.max(0, Math.floor(base64.length * 3 / 4) - padding)
+  if (bytes < 1024) {
+    return `${bytes} B`
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+})
 
 watch(() => workspaceCode.value, () => {
   void bootstrap()
@@ -702,6 +817,51 @@ function emptyVariable(): ApiVariableItem {
   return { name: '', value: '', sensitive: false }
 }
 
+const batchAddTitle = computed(() => {
+  switch (batchAddMode.value) {
+    case 'query':
+      return '批量添加 Query 参数'
+    case 'cookie':
+      return '批量添加 Cookie 参数'
+    case 'header':
+      return '批量添加请求头'
+    case 'body-form':
+      return '批量添加 Body 参数'
+    case 'assertion':
+      return '批量添加断言'
+    case 'extractor':
+      return '批量添加提取参数'
+  }
+})
+
+const batchAddPlaceholder = computed(() => {
+  switch (batchAddMode.value) {
+    case 'assertion':
+      return '每行一条，支持 TAB 或连续空格分列'
+    case 'extractor':
+      return '每行一条，格式：变量名<TAB>来源<TAB>表达式'
+    default:
+      return '每行一条，格式：名称<TAB>值 或 名称:值；空行自动忽略，同名以最后一条为准'
+  }
+})
+
+const batchAddExamples = computed(() => {
+  switch (batchAddMode.value) {
+    case 'query':
+      return ['page\t1', 'pageSize\t20', 'keyword:test']
+    case 'cookie':
+      return ['SESSION\tabc123', 'token:{{authToken}}']
+    case 'header':
+      return ['Content-Type\tapplication/json', 'Authorization\tBearer {{token}}']
+    case 'body-form':
+      return ['username\tadmin', 'password\t123456']
+    case 'assertion':
+      return ['STATUS_CODE\t200', 'HEADER_EQUALS\tContent-Type\tapplication/json', 'BODY_JSONPATH_EQUALS\t$.code\t0']
+    case 'extractor':
+      return ['token\tHEADER\tAuthorization', 'userId\tBODY_JSONPATH\t$.data.id']
+  }
+})
+
 function cloneDefinitionDetail(detail: ApiDefinitionDetail): ApiDefinitionDetail {
   return JSON.parse(JSON.stringify(detail)) as ApiDefinitionDetail
 }
@@ -732,7 +892,7 @@ function buildEmptyDefinitionDetail(): ApiDefinitionDetail {
       queryParams: [],
       headers: [],
       cookies: [],
-      body: { type: 'NONE', rawText: '', formItems: [] },
+      body: { type: 'NONE', rawText: '', formItems: [], contentType: '', fileName: '', binaryBase64: '', jsonText: '', xmlText: '', plainText: '' },
       authConfig: { type: 'INHERIT', token: '', username: '', password: '' },
     },
     assertions: [],
@@ -742,6 +902,15 @@ function buildEmptyDefinitionDetail(): ApiDefinitionDetail {
 
 function makeRequestEditorTab(detail?: ApiDefinitionDetail) {
   const draft = cloneDefinitionDetail(detail ?? buildEmptyDefinitionDetail())
+  if (draft.requestConfig.body.type === 'RAW_JSON') {
+    draft.requestConfig.body.jsonText = draft.requestConfig.body.rawText || ''
+  }
+  else if (draft.requestConfig.body.type === 'RAW_XML') {
+    draft.requestConfig.body.xmlText = draft.requestConfig.body.rawText || ''
+  }
+  else if (draft.requestConfig.body.type === 'RAW_TEXT') {
+    draft.requestConfig.body.plainText = draft.requestConfig.body.rawText || ''
+  }
   const savedFingerprint = fingerprintDefinitionDetail(draft)
   const key = `request-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   return {
@@ -1011,6 +1180,204 @@ function assignScenario(detail: ApiScenarioDetail) {
 
 function addDefinitionRow(target: ApiKeyValue[]) {
   target.push(emptyKeyValue())
+}
+
+function openBatchAddDrawer(mode: BatchAddMode) {
+  batchAddMode.value = mode
+  batchAddInput.value = ''
+  batchAddDrawerVisible.value = true
+}
+
+function splitBatchColumns(line: string) {
+  if (line.includes('\t')) {
+    return line.split('\t').map(item => item.trim())
+  }
+  if (line.includes('：')) {
+    const index = line.indexOf('：')
+    return [line.slice(0, index).trim(), line.slice(index + 1).trim()]
+  }
+  if (line.includes(':')) {
+    const index = line.indexOf(':')
+    return [line.slice(0, index).trim(), line.slice(index + 1).trim()]
+  }
+  if (line.includes('=')) {
+    const index = line.indexOf('=')
+    return [line.slice(0, index).trim(), line.slice(index + 1).trim()]
+  }
+  return line.split(/\s{2,}/).map(item => item.trim())
+}
+
+function splitBatchLine(line: string) {
+  const columns = splitBatchColumns(line).filter(Boolean)
+  return columns.length ? columns : [line.trim()]
+}
+
+function normalizeBooleanLike(value: string) {
+  const normalized = value.trim().toLowerCase()
+  if (['true', '1', 'yes', 'y', 'on', '启用', '开启'].includes(normalized)) {
+    return true
+  }
+  if (['false', '0', 'no', 'n', 'off', '禁用', '关闭'].includes(normalized)) {
+    return false
+  }
+  return null
+}
+
+function dedupeByKey<T>(items: T[], readKey: (item: T) => string) {
+  const latestIndex = new Map<string, number>()
+  items.forEach((item, index) => {
+    const key = readKey(item).trim()
+    if (key) {
+      latestIndex.set(key, index)
+    }
+  })
+  return items.filter((item, index) => latestIndex.get(readKey(item).trim()) === index)
+}
+
+function isNonNull<T>(value: T | null): value is T {
+  return value !== null
+}
+
+function parseBatchKeyValueInput() {
+  const rows = batchAddInput.value
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const columns = splitBatchLine(line).filter(Boolean)
+      if (!columns.length) {
+        return null
+      }
+      let enabled = true
+      let offset = 0
+      const firstBoolean = normalizeBooleanLike(columns[0])
+      if (firstBoolean !== null && columns.length >= 2) {
+        enabled = firstBoolean
+        offset = 1
+      }
+      const key = columns[offset] || ''
+      const value = columns[offset + 1] || ''
+      return { key, value, enabled }
+    })
+    .filter(isNonNull)
+    .filter(item => !!item.key)
+  return dedupeByKey(rows, item => item.key)
+}
+
+function normalizeAssertionType(value: string) {
+  const key = value.trim().toUpperCase()
+  const aliases: Record<string, ApiAssertionConfig['type']> = {
+    STATUS: 'STATUS_CODE',
+    STATUS_CODE: 'STATUS_CODE',
+    HEADER_EQUALS: 'HEADER_EQUALS',
+    HEADER_CONTAINS: 'HEADER_CONTAINS',
+    BODY_JSONPATH_EQUALS: 'BODY_JSONPATH_EQUALS',
+    BODY_JSONPATH_CONTAINS: 'BODY_JSONPATH_CONTAINS',
+    RESPONSE_TIME_LE: 'RESPONSE_TIME_LE',
+  }
+  return aliases[key] ?? null
+}
+
+function parseBatchAssertions() {
+  const rows = batchAddInput.value
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const parts = splitBatchColumns(line).filter(Boolean)
+      const type = normalizeAssertionType(parts[0] || '')
+      if (!type) {
+        return null
+      }
+      if (type === 'STATUS_CODE' || type === 'RESPONSE_TIME_LE') {
+        return {
+          type,
+          subject: '',
+          operator: 'EQUALS',
+          expectedValue: parts[1] || '',
+        } satisfies ApiAssertionConfig
+      }
+      return {
+        type,
+        subject: parts[1] || '',
+        operator: 'EQUALS',
+        expectedValue: parts.slice(2).join('\t'),
+      } satisfies ApiAssertionConfig
+    })
+    .filter((item): item is ApiAssertionConfig => !!item && !!item.expectedValue)
+  return dedupeByKey(rows, item => `${item.type}|${item.subject}`)
+}
+
+function normalizeExtractorType(value: string) {
+  const key = value.trim().toUpperCase()
+  if (key === 'HEADER' || key === 'BODY_JSONPATH') {
+    return key as ApiExtractorConfig['sourceType']
+  }
+  return null
+}
+
+function parseBatchExtractors() {
+  const rows = batchAddInput.value
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const parts = splitBatchColumns(line).filter(Boolean)
+      const name = parts[0] || ''
+      const maybeSourceType = normalizeExtractorType(parts[1] || '')
+      const sourceType = maybeSourceType ?? 'BODY_JSONPATH'
+      const expression = maybeSourceType
+        ? parts.slice(2).join('\t')
+        : parts.slice(1).join('\t')
+      if (!name || !expression) {
+        return null
+      }
+      return { name, sourceType, expression } satisfies ApiExtractorConfig
+    })
+    .filter((item): item is ApiExtractorConfig => !!item)
+  return dedupeByKey(rows, item => item.name)
+}
+
+function confirmBatchAdd() {
+  let count = 0
+  if (batchAddMode.value === 'query') {
+    const rows = parseBatchKeyValueInput()
+    definitionForm.requestConfig.queryParams.push(...rows)
+    count = rows.length
+  }
+  else if (batchAddMode.value === 'cookie') {
+    const rows = parseBatchKeyValueInput()
+    definitionForm.requestConfig.cookies.push(...rows)
+    count = rows.length
+  }
+  else if (batchAddMode.value === 'header') {
+    const rows = parseBatchKeyValueInput()
+    definitionForm.requestConfig.headers.push(...rows)
+    count = rows.length
+  }
+  else if (batchAddMode.value === 'body-form') {
+    const rows = parseBatchKeyValueInput()
+    definitionForm.requestConfig.body.formItems.push(...rows)
+    count = rows.length
+  }
+  else if (batchAddMode.value === 'assertion') {
+    const rows = parseBatchAssertions()
+    definitionForm.assertions.push(...rows)
+    count = rows.length
+  }
+  else if (batchAddMode.value === 'extractor') {
+    const rows = parseBatchExtractors()
+    definitionForm.extractors.push(...rows)
+    count = rows.length
+  }
+
+  if (!count) {
+    ElMessage.warning('未解析出可添加的数据')
+    return
+  }
+  batchAddDrawerVisible.value = false
+  batchAddInput.value = ''
+  ElMessage.success(`已批量添加 ${count} 条`)
 }
 
 function handleDefinitionTreeSelect(data: DefinitionDirectoryTreeNode | null) {
@@ -1702,7 +2069,7 @@ function formatTimeLabel(value?: string | null) {
 
             <div class="ms-like-editor-shell">
               <div v-if="isAllScope && !definitionForm.workspaceCode" class="scope-hint">
-                当前处于 ALL 视角，请先在顶部选择目标空间后再保存或调试。
+                &#24403;&#21069;&#22788;&#20110; ALL &#35270;&#35282;&#65292;&#35831;&#20808;&#22312;&#39030;&#37096;&#36873;&#25321;&#30446;&#26631;&#31354;&#38388;&#21518;&#20877;&#20445;&#23384;&#25110;&#35843;&#35797;&#12290;
               </div>
 
               <div class="ms-like-request-row">
@@ -1713,35 +2080,34 @@ function formatTimeLabel(value?: string | null) {
                   <el-option label="DELETE" value="DELETE" />
                   <el-option label="PATCH" value="PATCH" />
                 </el-select>
-                <el-input v-model="definitionForm.requestConfig.path" class="request-url-input" placeholder="请输入包含 http/https 的完整 URL 或接口路径" />
+                <el-input v-model="definitionForm.requestConfig.path" class="request-url-input" placeholder="&#35831;&#36755;&#20837;&#21253;&#21547; http/https &#30340;&#23436;&#25972; URL &#25110;&#25509;&#21475;&#36335;&#24452;" />
                 <el-button @click="promptImportCurl">Curl</el-button>
                 <el-button type="primary" :disabled="!definitionForm.id || !canWriteDefinition" :loading="saving" @click="debugDefinition">
-                  服务端执行
+                  &#26381;&#21153;&#31471;&#25191;&#34892;
                 </el-button>
                 <el-dropdown split-button :disabled="!canWriteDefinition" :loading="saving" @click="saveDefinition">
-                  保存
+                  &#20445;&#23384;
                   <template #dropdown>
                     <el-dropdown-menu>
-                      <el-dropdown-item @click="saveAndDebugDefinition">保存并执行</el-dropdown-item>
-                      <el-dropdown-item @click="duplicateDefinition">复制接口</el-dropdown-item>
-                      <el-dropdown-item :disabled="!definitionForm.id" @click="removeDefinition">删除接口</el-dropdown-item>
+                      <el-dropdown-item @click="saveAndDebugDefinition">&#20445;&#23384;&#24182;&#25191;&#34892;</el-dropdown-item>
+                      <el-dropdown-item @click="duplicateDefinition">&#22797;&#21046;&#25509;&#21475;</el-dropdown-item>
+                      <el-dropdown-item :disabled="!definitionForm.id" @click="removeDefinition">&#21024;&#38500;&#25509;&#21475;</el-dropdown-item>
                     </el-dropdown-menu>
                   </template>
                 </el-dropdown>
               </div>
 
               <div class="ms-like-top-tabs">
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'headers' }]" @click="activeRequestTab = 'headers'">请求头</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'body' }]" @click="activeRequestTab = 'body'">请求体</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'headers' }]" @click="activeRequestTab = 'headers'">&#35831;&#27714;&#22836;</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'body' }]" @click="activeRequestTab = 'body'">&#35831;&#27714;&#20307;</button>
                 <button :class="['ms-like-top-tab', { active: activeRequestTab === 'params' }]" @click="activeRequestTab = 'params'">
-                  Query
+                  Params
                   <span v-if="queryEnabledCount" class="ms-like-tab-badge">{{ queryEnabledCount }}</span>
                 </button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'rest' }]" @click="activeRequestTab = 'rest'">REST</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="activeRequestTab = 'tests'">前置</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'extract' }]" @click="activeRequestTab = 'extract'">后置</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'auth' }]" @click="activeRequestTab = 'auth'">认证</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'settings' }]" @click="activeRequestTab = 'settings'">设置</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'auth' }]" @click="activeRequestTab = 'auth'">Auth</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="activeRequestTab = 'tests'">&#21069;&#32622;</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'extract' }]" @click="activeRequestTab = 'extract'">&#21518;&#32622;</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'settings' }]" @click="activeRequestTab = 'settings'">&#35774;&#32622;</button>
               </div>
 
               <div class="ms-like-request-body">
@@ -1749,24 +2115,28 @@ function formatTimeLabel(value?: string | null) {
                   <div class="request-section ms-like-table-surface">
                     <div class="ms-like-table-header">
                       <label class="ms-like-check-cell">
-                        <el-checkbox :model-value="queryEnabledCount > 0" />
-                        <span>参数名称</span>
+                        <el-checkbox
+                          :model-value="tableSelectionState(definitionForm.requestConfig.queryParams).checked"
+                          :indeterminate="tableSelectionState(definitionForm.requestConfig.queryParams).indeterminate"
+                          @change="toggleTableSelection(definitionForm.requestConfig.queryParams, !!$event)"
+                        />
+                        <span>Query &#21442;&#25968;</span>
                       </label>
-                      <span>参数值</span>
-                      <span>描述</span>
-                      <button type="button" class="ms-like-link-button" @click="addDefinitionRow(definitionForm.requestConfig.queryParams)">批量添加</button>
+                      <span>&#21442;&#25968;&#20540;</span>
+                      <span>&#25551;&#36848;</span>
+                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('query')">&#25209;&#37327;&#28155;&#21152;</button>
                     </div>
                     <div v-for="(row, index) in definitionForm.requestConfig.queryParams" :key="`query-${index}`" class="ms-like-table-row">
-                      <div class="ms-like-drag-cell">⋮</div>
+                      <div class="ms-like-drag-cell">&#8942;</div>
                       <div class="ms-like-checkbox-field">
                         <el-checkbox v-model="row.enabled" />
-                        <el-input v-model="row.key" placeholder="参数名称" />
+                        <el-input v-model="row.key" placeholder="&#21442;&#25968;&#21517;&#31216;" />
                       </div>
-                      <el-input v-model="row.value" placeholder="参数值 / {{variable}}" />
-                      <el-input placeholder="描述" />
-                      <button type="button" class="ms-like-row-remove" @click="definitionForm.requestConfig.queryParams.splice(index, 1)">删除</button>
+                      <el-input v-model="row.value" placeholder="&#21442;&#25968;&#20540; / {{variable}}" />
+                      <el-input placeholder="&#25551;&#36848;" />
+                      <button type="button" class="ms-like-row-remove" @click="definitionForm.requestConfig.queryParams.splice(index, 1)">&#21024;&#38500;</button>
                     </div>
-                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.queryParams)">+ 添加一行</button>
+                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.queryParams)">+ &#28155;&#21152;&#19968;&#34892;</button>
                   </div>
                 </template>
 
@@ -1774,24 +2144,28 @@ function formatTimeLabel(value?: string | null) {
                   <div class="request-section ms-like-table-surface">
                     <div class="ms-like-table-header">
                       <label class="ms-like-check-cell">
-                        <el-checkbox :model-value="headerEnabledCount > 0" />
-                        <span>参数名称</span>
+                        <el-checkbox
+                          :model-value="tableSelectionState(definitionForm.requestConfig.headers).checked"
+                          :indeterminate="tableSelectionState(definitionForm.requestConfig.headers).indeterminate"
+                          @change="toggleTableSelection(definitionForm.requestConfig.headers, !!$event)"
+                        />
+                        <span>&#21442;&#25968;&#21517;&#31216;</span>
                       </label>
-                      <span>参数值</span>
-                      <span>描述</span>
-                      <button type="button" class="ms-like-link-button" @click="addDefinitionRow(definitionForm.requestConfig.headers)">批量添加</button>
+                      <span>&#21442;&#25968;&#20540;</span>
+                      <span>&#25551;&#36848;</span>
+                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('header')">&#25209;&#37327;&#28155;&#21152;</button>
                     </div>
                     <div v-for="(row, index) in definitionForm.requestConfig.headers" :key="`header-${index}`" class="ms-like-table-row">
-                      <div class="ms-like-drag-cell">⋮</div>
+                      <div class="ms-like-drag-cell">&#8942;</div>
                       <div class="ms-like-checkbox-field">
                         <el-checkbox v-model="row.enabled" />
-                        <el-input v-model="row.key" placeholder="参数名称" />
+                        <el-input v-model="row.key" placeholder="&#21442;&#25968;&#21517;&#31216;" />
                       </div>
-                      <el-input v-model="row.value" placeholder="参数值 / {{variable}}" />
-                      <el-input placeholder="描述" />
-                      <button type="button" class="ms-like-row-remove" @click="definitionForm.requestConfig.headers.splice(index, 1)">删除</button>
+                      <el-input v-model="row.value" placeholder="&#21442;&#25968;&#20540; / {{variable}}" />
+                      <el-input placeholder="&#25551;&#36848;" />
+                      <button type="button" class="ms-like-row-remove" @click="definitionForm.requestConfig.headers.splice(index, 1)">&#21024;&#38500;</button>
                     </div>
-                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.headers)">+ 添加一行</button>
+                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.headers)">+ &#28155;&#21152;&#19968;&#34892;</button>
                   </div>
                 </template>
 
@@ -1802,69 +2176,71 @@ function formatTimeLabel(value?: string | null) {
                       <button :class="['ms-like-body-chip', { active: isBodyMode('FORM_DATA') }]" @click="setBodyMode('FORM_DATA')">form-data</button>
                       <button :class="['ms-like-body-chip', { active: isBodyMode('FORM_URLENCODED') }]" @click="setBodyMode('FORM_URLENCODED')">x-www-form-urlencoded</button>
                       <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_JSON') }]" @click="setBodyMode('RAW_JSON')">json</button>
-                      <button class="ms-like-body-chip ghost" type="button">xml</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_XML') }]" @click="setBodyMode('RAW_XML')">xml</button>
                       <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_TEXT') }]" @click="setBodyMode('RAW_TEXT')">raw</button>
-                      <button class="ms-like-body-chip ghost" type="button">binary</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('BINARY') }]" @click="setBodyMode('BINARY')">binary</button>
                     </div>
                     <el-input
-                      v-if="['RAW_JSON', 'RAW_TEXT'].includes(definitionForm.requestConfig.body.type)"
-                      v-model="definitionForm.requestConfig.body.rawText"
+                      v-if="['RAW_JSON', 'RAW_XML', 'RAW_TEXT'].includes(definitionForm.requestConfig.body.type)"
+                      v-model="activeBodyRawText"
                       type="textarea"
                       :rows="16"
                       class="code-textarea ms-like-code-editor"
-                      placeholder="支持 {{variable}} 占位符"
+                      placeholder="&#25903;&#25345; {{variable}} &#21344;&#20301;&#31526;"
                     />
+                    <div v-else-if="definitionForm.requestConfig.body.type === 'BINARY'" class="request-section ms-like-form-panel">
+                      <div class="ms-like-form-row">
+                        <div class="ms-like-form-label">File</div>
+                        <div class="ms-like-form-control ms-like-binary-actions">
+                          <el-button @click="pickBinaryBodyFile">
+                            {{ definitionForm.requestConfig.body.fileName ? '&#37325;&#26032;&#36873;&#25321;' : '&#36873;&#25321;&#25991;&#20214;' }}
+                          </el-button>
+                          <el-button :disabled="!definitionForm.requestConfig.body.binaryBase64" @click="clearBinaryBodyFile">&#28165;&#31354;</el-button>
+                        </div>
+                      </div>
+                      <div class="ms-like-form-row">
+                        <div class="ms-like-form-label">&#24050;&#36873;&#25991;&#20214;</div>
+                        <div class="empty-hint">
+                          <template v-if="definitionForm.requestConfig.body.fileName">
+                            <span class="binary-file-name">{{ definitionForm.requestConfig.body.fileName }}</span>
+                            <span v-if="binaryBodySizeLabel" class="binary-file-size">{{ binaryBodySizeLabel }}</span>
+                          </template>
+                          <template v-else>
+                            &#23578;&#26410;&#36873;&#25321;&#20108;&#36827;&#21046;&#25991;&#20214;
+                          </template>
+                        </div>
+                      </div>
+                    </div>
                     <div
                       v-else-if="['FORM_URLENCODED', 'FORM_DATA'].includes(definitionForm.requestConfig.body.type)"
                       class="body-form-grid ms-like-table-surface"
                     >
                       <div class="ms-like-table-header">
                         <label class="ms-like-check-cell">
-                          <el-checkbox model-value />
-                          <span>参数名称</span>
+                          <el-checkbox
+                            :model-value="tableSelectionState(definitionForm.requestConfig.body.formItems).checked"
+                            :indeterminate="tableSelectionState(definitionForm.requestConfig.body.formItems).indeterminate"
+                            @change="toggleTableSelection(definitionForm.requestConfig.body.formItems, !!$event)"
+                          />
+                          <span>&#21442;&#25968;&#21517;&#31216;</span>
                         </label>
-                        <span>参数值</span>
-                        <span>描述</span>
-                        <button type="button" class="ms-like-link-button" @click="definitionForm.requestConfig.body.formItems.push(emptyKeyValue())">批量添加</button>
+                        <span>&#21442;&#25968;&#20540;</span>
+                        <span>&#25551;&#36848;</span>
+                        <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('body-form')">&#25209;&#37327;&#28155;&#21152;</button>
                       </div>
                       <div v-for="(row, index) in definitionForm.requestConfig.body.formItems" :key="`body-${index}`" class="ms-like-table-row">
-                        <div class="ms-like-drag-cell">⋮</div>
+                        <div class="ms-like-drag-cell">&#8942;</div>
                         <div class="ms-like-checkbox-field">
                           <el-checkbox v-model="row.enabled" />
-                          <el-input v-model="row.key" placeholder="参数名称" />
+                          <el-input v-model="row.key" placeholder="&#21442;&#25968;&#21517;&#31216;" />
                         </div>
-                        <el-input v-model="row.value" placeholder="参数值" />
-                        <el-input placeholder="描述" />
-                        <button type="button" class="ms-like-row-remove" @click="definitionForm.requestConfig.body.formItems.splice(index, 1)">删除</button>
+                        <el-input v-model="row.value" placeholder="&#21442;&#25968;&#20540;" />
+                        <el-input placeholder="&#25551;&#36848;" />
+                        <button type="button" class="ms-like-row-remove" @click="definitionForm.requestConfig.body.formItems.splice(index, 1)">&#21024;&#38500;</button>
                       </div>
-                      <button type="button" class="ms-like-add-row" @click="definitionForm.requestConfig.body.formItems.push(emptyKeyValue())">+ 添加一行</button>
+                      <button type="button" class="ms-like-add-row" @click="definitionForm.requestConfig.body.formItems.push(emptyKeyValue())">+ &#28155;&#21152;&#19968;&#34892;</button>
                     </div>
-                    <div v-else class="ms-like-empty-body">请求没有 Body</div>
-                  </div>
-                </template>
-
-                <template v-else-if="activeRequestTab === 'rest'">
-                  <div class="request-section ms-like-table-surface">
-                    <div class="ms-like-table-header">
-                      <label class="ms-like-check-cell">
-                        <el-checkbox model-value />
-                        <span>参数名称</span>
-                      </label>
-                      <span>参数值</span>
-                      <span>描述</span>
-                      <button type="button" class="ms-like-link-button" @click="addDefinitionRow(definitionForm.requestConfig.cookies)">批量添加</button>
-                    </div>
-                    <div v-for="(row, index) in definitionForm.requestConfig.cookies" :key="`cookie-${index}`" class="ms-like-table-row">
-                      <div class="ms-like-drag-cell">⋮</div>
-                      <div class="ms-like-checkbox-field">
-                        <el-checkbox v-model="row.enabled" />
-                        <el-input v-model="row.key" placeholder="参数名称" />
-                      </div>
-                      <el-input v-model="row.value" placeholder="参数值" />
-                      <el-input placeholder="描述" />
-                      <button type="button" class="ms-like-row-remove" @click="definitionForm.requestConfig.cookies.splice(index, 1)">删除</button>
-                    </div>
-                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.cookies)">+ 添加一行</button>
+                    <div v-else class="ms-like-empty-body">&#35831;&#27714;&#27809;&#26377; Body</div>
                   </div>
                 </template>
 
@@ -1873,26 +2249,26 @@ function formatTimeLabel(value?: string | null) {
                     <div class="ms-like-table-header">
                       <label class="ms-like-check-cell">
                         <el-checkbox model-value />
-                        <span>参数名称</span>
+                        <span>&#21442;&#25968;&#21517;&#31216;</span>
                       </label>
-                      <span>参数值</span>
-                      <span>描述</span>
-                      <button type="button" class="ms-like-link-button" @click="addExtractor">批量添加</button>
+                      <span>&#21442;&#25968;&#20540;</span>
+                      <span>&#25551;&#36848;</span>
+                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('extractor')">&#25209;&#37327;&#28155;&#21152;</button>
                     </div>
                     <div v-for="(item, index) in definitionForm.extractors" :key="`extract-${index}`" class="ms-like-table-row">
-                      <div class="ms-like-drag-cell">⋮</div>
+                      <div class="ms-like-drag-cell">&#8942;</div>
                       <div class="ms-like-checkbox-field">
                         <el-checkbox model-value />
-                        <el-input v-model="item.name" placeholder="参数名称" />
+                        <el-input v-model="item.name" placeholder="&#21442;&#25968;&#21517;&#31216;" />
                       </div>
                       <el-input v-model="item.expression" placeholder="JSONPath / Header" />
                       <el-select v-model="item.sourceType">
                         <el-option label="BODY_JSONPATH" value="BODY_JSONPATH" />
                         <el-option label="HEADER" value="HEADER" />
                       </el-select>
-                      <button type="button" class="ms-like-row-remove" @click="definitionForm.extractors.splice(index, 1)">删除</button>
+                      <button type="button" class="ms-like-row-remove" @click="definitionForm.extractors.splice(index, 1)">&#21024;&#38500;</button>
                     </div>
-                    <button type="button" class="ms-like-add-row" @click="addExtractor">+ 添加一行</button>
+                    <button type="button" class="ms-like-add-row" @click="addExtractor">+ &#28155;&#21152;&#19968;&#34892;</button>
                   </div>
                 </template>
 
@@ -1901,14 +2277,14 @@ function formatTimeLabel(value?: string | null) {
                     <div class="ms-like-table-header">
                       <label class="ms-like-check-cell">
                         <el-checkbox model-value />
-                        <span>参数名称</span>
+                        <span>&#21442;&#25968;&#21517;&#31216;</span>
                       </label>
-                      <span>参数值</span>
-                      <span>描述</span>
-                      <button type="button" class="ms-like-link-button" @click="addAssertion">批量添加</button>
+                      <span>&#21442;&#25968;&#20540;</span>
+                      <span>&#25551;&#36848;</span>
+                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('assertion')">&#25209;&#37327;&#28155;&#21152;</button>
                     </div>
                     <div v-for="(item, index) in definitionForm.assertions" :key="`assert-${index}`" class="ms-like-table-row">
-                      <div class="ms-like-drag-cell">⋮</div>
+                      <div class="ms-like-drag-cell">&#8942;</div>
                       <div class="ms-like-checkbox-field">
                         <el-checkbox model-value />
                         <el-select v-model="item.type">
@@ -1920,18 +2296,18 @@ function formatTimeLabel(value?: string | null) {
                           <el-option label="RESPONSE_TIME_LE" value="RESPONSE_TIME_LE" />
                         </el-select>
                       </div>
-                      <el-input v-model="item.subject" placeholder="subject / 表达式" />
-                      <el-input v-model="item.expectedValue" placeholder="期望值" />
-                      <button type="button" class="ms-like-row-remove" @click="definitionForm.assertions.splice(index, 1)">删除</button>
+                      <el-input v-model="item.subject" placeholder="subject / &#34920;&#36798;&#24335;" />
+                      <el-input v-model="item.expectedValue" placeholder="&#26399;&#26395;&#20540;" />
+                      <button type="button" class="ms-like-row-remove" @click="definitionForm.assertions.splice(index, 1)">&#21024;&#38500;</button>
                     </div>
-                    <button type="button" class="ms-like-add-row" @click="addAssertion">+ 添加一行</button>
+                    <button type="button" class="ms-like-add-row" @click="addAssertion">+ &#28155;&#21152;&#19968;&#34892;</button>
                   </div>
                 </template>
 
                 <template v-else-if="activeRequestTab === 'auth'">
                   <div class="request-section ms-like-form-panel">
                     <div class="ms-like-form-row">
-                      <div class="ms-like-form-label">认证类型</div>
+                      <div class="ms-like-form-label">&#35748;&#35777;&#31867;&#22411;</div>
                       <el-select v-model="definitionForm.requestConfig.authConfig.type" class="ms-like-form-control">
                         <el-option label="INHERIT" value="INHERIT" />
                         <el-option label="NONE" value="NONE" />
@@ -1953,41 +2329,41 @@ function formatTimeLabel(value?: string | null) {
                         <el-input v-model="definitionForm.requestConfig.authConfig.password" class="ms-like-form-control" placeholder="password" show-password />
                       </div>
                     </template>
-                    <div v-else class="empty-hint">认证将继承环境配置，或按 NONE 发送匿名请求。</div>
+                    <div v-else class="empty-hint">&#35748;&#35777;&#23558;&#32487;&#25215;&#29615;&#22659;&#37197;&#32622;&#65292;&#25110;&#25353; NONE &#21457;&#36865;&#21311;&#21517;&#35831;&#27714;&#12290;</div>
                   </div>
                 </template>
 
                 <template v-else>
                   <div class="request-section ms-like-form-panel">
                     <div class="ms-like-form-row">
-                      <div class="ms-like-form-label">接口名称</div>
-                      <el-input v-model="definitionForm.name" class="ms-like-form-control" placeholder="接口名称" />
+                      <div class="ms-like-form-label">&#25509;&#21475;&#21517;&#31216;</div>
+                      <el-input v-model="definitionForm.name" class="ms-like-form-control" placeholder="&#25509;&#21475;&#21517;&#31216;" />
                     </div>
                     <div class="ms-like-form-row">
-                      <div class="ms-like-form-label">模块 / 目录</div>
-                      <el-input v-model="definitionForm.directoryName" class="ms-like-form-control" placeholder="模块 / 目录" />
+                      <div class="ms-like-form-label">&#27169;&#22359; / &#30446;&#24405;</div>
+                      <el-input v-model="definitionForm.directoryName" class="ms-like-form-control" placeholder="&#27169;&#22359; / &#30446;&#24405;" />
                     </div>
                     <div class="ms-like-form-row">
-                      <div class="ms-like-form-label">标签</div>
+                      <div class="ms-like-form-label">&#26631;&#31614;</div>
                       <el-input
                         :model-value="readTagInput(definitionForm.tags)"
                         class="ms-like-form-control"
-                        placeholder="标签，逗号分隔"
+                        placeholder="&#26631;&#31614;&#65292;&#36887;&#21495;&#20998;&#38548;"
                         @update:model-value="(value: string | number) => updateTagInput(definitionForm, String(value))"
                       />
                     </div>
                     <div class="ms-like-form-row">
-                      <div class="ms-like-form-label">超时时间</div>
+                      <div class="ms-like-form-label">&#36229;&#26102;&#26102;&#38388;</div>
                       <el-input-number v-model="definitionForm.requestConfig.timeoutMs" :min="1000" :step="1000" class="ms-like-form-control full-width" />
                     </div>
                     <div class="ms-like-form-row align-start">
-                      <div class="ms-like-form-label">描述</div>
-                      <el-input v-model="definitionForm.description" class="ms-like-form-control" type="textarea" :rows="4" placeholder="接口描述、调用约束或备注" />
+                      <div class="ms-like-form-label">&#25551;&#36848;</div>
+                      <el-input v-model="definitionForm.description" class="ms-like-form-control" type="textarea" :rows="4" placeholder="&#25509;&#21475;&#25551;&#36848;&#12289;&#35843;&#29992;&#32422;&#26463;&#25110;&#22791;&#27880;" />
                     </div>
                     <div class="ms-like-settings-hint">
-                      <span>写入空间 {{ currentDefinitionWorkspaceLabel }}</span>
-                      <span>调试上下文 {{ currentEnvironmentName }} / {{ currentVariableSetName }}</span>
-                      <span>最后运行 {{ formatTimeLabel(definitionForm.lastRunAt) }}</span>
+                      <span>&#20889;&#20837;&#31354;&#38388; {{ currentDefinitionWorkspaceLabel }}</span>
+                      <span>&#35843;&#35797;&#19978;&#19979;&#25991; {{ currentEnvironmentName }} / {{ currentVariableSetName }}</span>
+                      <span>&#26368;&#21518;&#36816;&#34892; {{ formatTimeLabel(definitionForm.lastRunAt) }}</span>
                     </div>
                   </div>
                 </template>
@@ -2294,6 +2670,29 @@ function formatTimeLabel(value?: string | null) {
         </div>
       </el-tab-pane>
     </el-tabs>
+
+    <el-drawer v-model="batchAddDrawerVisible" :title="batchAddTitle" size="560px" destroy-on-close>
+      <div class="batch-drawer">
+        <div class="batch-drawer-hint">
+          <div class="batch-drawer-label">格式示例</div>
+          <div v-for="item in batchAddExamples" :key="item" class="batch-drawer-example">{{ item }}</div>
+          <div class="batch-drawer-note">空行会自动忽略；同名重复时以最后一条为准。</div>
+        </div>
+        <el-input
+          v-model="batchAddInput"
+          type="textarea"
+          :rows="18"
+          class="batch-drawer-textarea"
+          :placeholder="batchAddPlaceholder"
+        />
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="batchAddDrawerVisible = false">取消</el-button>
+          <el-button type="primary" @click="confirmBatchAdd">确认添加</el-button>
+        </div>
+      </template>
+    </el-drawer>
 
     <el-dialog v-model="definitionSaveDialogVisible" title="保存" width="520px" destroy-on-close>
       <el-form label-position="top">
@@ -2918,10 +3317,10 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-table-header {
-  min-height: 32px;
+  min-height: 30px;
   border-bottom: 1px solid #ebeef5;
   color: #606266;
-  font-size: 13px;
+  font-size: 12px;
   padding-right: 10px;
 }
 
@@ -2938,9 +3337,9 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-table-row {
-  min-height: 32px;
+  min-height: 30px;
   border-bottom: 1px solid #f2f3f5;
-  padding: 4px 10px 4px 0;
+  padding: 2px 10px 2px 0;
 }
 
 .ms-like-table-row:last-of-type {
@@ -2962,6 +3361,39 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-table-row :deep(.el-input),
 .ms-like-table-row :deep(.el-select) {
   width: 100%;
+}
+
+.ms-like-checkbox-field :deep(.el-input__wrapper),
+.ms-like-table-row :deep(.el-input__wrapper),
+.ms-like-table-row :deep(.el-select__wrapper) {
+  box-shadow: inset 0 0 0 1px transparent;
+  background: transparent;
+  border-radius: 4px;
+  min-height: 26px;
+  padding: 0 8px;
+  transition: box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.ms-like-checkbox-field :deep(.el-input__inner),
+.ms-like-table-row :deep(.el-input__inner),
+.ms-like-table-row :deep(.el-select__placeholder),
+.ms-like-table-row :deep(.el-select__selected-item) {
+  font-size: 12px;
+}
+
+.ms-like-checkbox-field :deep(.el-input__wrapper:hover),
+.ms-like-table-row :deep(.el-input__wrapper:hover),
+.ms-like-table-row :deep(.el-select__wrapper:hover) {
+  box-shadow: inset 0 0 0 1px #d0d5dd;
+  background: #fff;
+}
+
+.ms-like-checkbox-field :deep(.el-input.is-focus .el-input__wrapper),
+.ms-like-table-row :deep(.el-input.is-focus .el-input__wrapper),
+.ms-like-table-row :deep(.el-select.is-focus .el-select__wrapper),
+.ms-like-table-row :deep(.el-select__wrapper.is-focused) {
+  box-shadow: inset 0 0 0 1px #7c3aed;
+  background: #fff;
 }
 
 .ms-like-link-button,
@@ -3015,6 +3447,24 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-form-control {
   width: 100%;
+}
+
+.ms-like-binary-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.binary-file-name {
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+}
+
+.binary-file-size {
+  margin-left: 10px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 
 .ms-like-settings-hint {
@@ -3299,6 +3749,38 @@ function formatTimeLabel(value?: string | null) {
 .snapshot-title {
   font-weight: 600;
   margin-bottom: 6px;
+}
+
+.batch-drawer {
+  display: grid;
+  gap: 16px;
+}
+
+.batch-drawer-hint {
+  padding: 12px 14px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 8px;
+  background: var(--el-fill-color-light);
+}
+
+.batch-drawer-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 8px;
+}
+
+.batch-drawer-example {
+  font-family: var(--el-font-family-monospace, Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--el-text-color-regular);
+}
+
+.batch-drawer-note {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 pre {

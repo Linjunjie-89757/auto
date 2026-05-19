@@ -35,7 +35,10 @@ public final class ApiAutomationModels {
     public record ApiRequestBodyInput(
             String type,
             String rawText,
-            List<ApiKeyValueInput> formItems
+            List<ApiKeyValueInput> formItems,
+            String contentType,
+            String fileName,
+            String binaryBase64
     ) {
     }
 

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "check:encoding": "node ./scripts/check-encoding.mjs",
     "build": "vue-tsc -b && node ./scripts/vite-build.mjs",
     "preview": "vite preview",
     "test:e2e": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-playwright.ps1 test",

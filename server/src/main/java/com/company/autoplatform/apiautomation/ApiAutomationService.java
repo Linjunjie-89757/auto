@@ -32,6 +32,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -454,7 +455,7 @@ public class ApiAutomationService {
                 readTags(entity.getTagsJson()),
                 ApiAutomationJsonSupport.read(entity.getRequestJson(), ApiRequestConfigInput.class,
                         new ApiRequestConfigInput(entity.getHttpMethod(), entity.getPath(), 10000, List.of(), List.of(), List.of(),
-                                new ApiRequestBodyInput("NONE", null, List.of()), normalizeAuth(null))),
+                                 new ApiRequestBodyInput("NONE", null, List.of(), null, null, null), normalizeAuth(null))),
                 readAssertions(entity.getAssertionsJson()),
                 readExtractors(entity.getExtractorsJson()),
                 entity.getLastRunResult(),
@@ -625,7 +626,7 @@ public class ApiAutomationService {
     ) {
         ApiRequestConfigInput config = ApiAutomationJsonSupport.read(definition.getRequestJson(), ApiRequestConfigInput.class,
                 new ApiRequestConfigInput(definition.getHttpMethod(), definition.getPath(), 10000, List.of(), List.of(), List.of(),
-                        new ApiRequestBodyInput("NONE", null, List.of()), normalizeAuth(null)));
+                        new ApiRequestBodyInput("NONE", null, List.of(), null, null, null), normalizeAuth(null)));
         List<ApiAssertionInput> assertions = readAssertions(definition.getAssertionsJson());
         List<ApiExtractorInput> extractors = readExtractors(definition.getExtractorsJson());
 
@@ -722,12 +723,19 @@ public class ApiAutomationService {
         applyAuth(headers, normalizeAuth(config.authConfig()), environment.authConfig(), variables);
 
         String body = null;
-        ApiRequestBodyInput bodyConfig = config.body() == null ? new ApiRequestBodyInput("NONE", null, List.of()) : config.body();
-        if ("RAW_JSON".equalsIgnoreCase(bodyConfig.type()) || "RAW_TEXT".equalsIgnoreCase(bodyConfig.type())) {
+        ApiRequestBodyInput bodyConfig = config.body() == null ? new ApiRequestBodyInput("NONE", null, List.of(), null, null, null) : config.body();
+        if ("RAW_JSON".equalsIgnoreCase(bodyConfig.type())
+                || "RAW_TEXT".equalsIgnoreCase(bodyConfig.type())
+                || "RAW_XML".equalsIgnoreCase(bodyConfig.type())) {
             body = replaceVariables(Optional.ofNullable(bodyConfig.rawText()).orElse(""), variables);
         } else if ("FORM_URLENCODED".equalsIgnoreCase(bodyConfig.type())) {
             body = buildQueryString(toEnabledMap(defaultList(bodyConfig.formItems()), variables));
             headers.putIfAbsent("Content-Type", "application/x-www-form-urlencoded");
+        } else if ("BINARY".equalsIgnoreCase(bodyConfig.type())) {
+            String fileName = Optional.ofNullable(bodyConfig.fileName()).filter(name -> !name.isBlank()).orElse("binary-body");
+            String contentType = Optional.ofNullable(bodyConfig.contentType()).filter(value -> !value.isBlank()).orElse("application/octet-stream");
+            String base64 = Optional.ofNullable(bodyConfig.binaryBase64()).orElse("");
+            body = "[binary] " + fileName + " (" + contentType + ", " + base64.length() + " base64 chars)";
         }
 
         if (!cookies.isEmpty()) {
@@ -750,8 +758,28 @@ public class ApiAutomationService {
         } else if (request.body() != null) {
             if ("RAW_JSON".equalsIgnoreCase(request.bodyConfig().type())) {
                 builder.header("Content-Type", "application/json");
+            } else if ("RAW_XML".equalsIgnoreCase(request.bodyConfig().type())) {
+                builder.header("Content-Type", Optional.ofNullable(request.bodyConfig().contentType())
+                        .filter(value -> !value.isBlank())
+                        .orElse("application/xml; charset=UTF-8"));
             } else if ("RAW_TEXT".equalsIgnoreCase(request.bodyConfig().type())) {
                 builder.header("Content-Type", "text/plain; charset=UTF-8");
+            } else if ("BINARY".equalsIgnoreCase(request.bodyConfig().type())) {
+                String base64 = Optional.ofNullable(request.bodyConfig().binaryBase64()).orElse("");
+                if (base64.isBlank()) {
+                    throw new BadRequestException("Binary body file cannot be empty");
+                }
+                byte[] content;
+                try {
+                    content = Base64.getDecoder().decode(base64);
+                } catch (IllegalArgumentException exception) {
+                    throw new BadRequestException("Binary body content is not valid base64");
+                }
+                builder.header("Content-Type", Optional.ofNullable(request.bodyConfig().contentType())
+                        .filter(value -> !value.isBlank())
+                        .orElse("application/octet-stream"));
+                publisher = HttpRequest.BodyPublishers.ofByteArray(content);
+                return builder.method(request.method(), publisher).build();
             }
             publisher = HttpRequest.BodyPublishers.ofString(request.body(), StandardCharsets.UTF_8);
         }

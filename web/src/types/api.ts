@@ -434,6 +434,11 @@ export interface ApiKeyValue {
   value: string
   description?: string
   enabled?: boolean
+  paramType?: string
+  required?: boolean
+  encode?: boolean
+  minLength?: number | null
+  maxLength?: number | null
 }
 
 export interface ApiAuthConfig {

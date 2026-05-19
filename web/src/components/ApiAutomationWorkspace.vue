@@ -44,6 +44,8 @@ type RequestEditorTab = {
 }
 
 const requestMethodOptions = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'TRACE'] as const
+const queryParamTypeOptions = ['string', 'integer', 'number', 'boolean'] as const
+const bodyParamTypeOptions = ['string', 'integer', 'number', 'boolean'] as const
 
 type DefinitionDirectoryTreeNode = {
   key: string
@@ -625,11 +627,18 @@ const currentExtractionSummary = computed(() => {
   const passed = currentExtractionResults.value.filter(item => item.success).length
   return { total, passed }
 })
-const queryEnabledCount = computed(() => definitionForm.requestConfig.queryParams.filter(item => item.enabled !== false).length)
+const queryEnabledCount = computed(() =>
+  definitionForm.requestConfig.queryParams.filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false).length,
+)
+
+function selectableKeyValueRows(items: ApiKeyValue[]) {
+  return items
+}
 
 function tableSelectionState(items: ApiKeyValue[]) {
-  const total = items.length
-  const enabled = items.filter(item => item.enabled !== false).length
+  const selectableRows = selectableKeyValueRows(items)
+  const total = selectableRows.length
+  const enabled = selectableRows.filter(item => item.enabled !== false).length
   return {
     checked: total > 0 && enabled === total,
     indeterminate: enabled > 0 && enabled < total,
@@ -637,10 +646,25 @@ function tableSelectionState(items: ApiKeyValue[]) {
 }
 
 function toggleTableSelection(items: ApiKeyValue[], enabled: boolean) {
-  items.forEach((item) => {
+  selectableKeyValueRows(items).forEach((item) => {
     item.enabled = enabled
   })
 }
+
+const queryTableSelectionModel = computed({
+  get: () => tableSelectionState(definitionForm.requestConfig.queryParams).checked,
+  set: (enabled: boolean) => toggleTableSelection(definitionForm.requestConfig.queryParams, enabled),
+})
+
+const headerTableSelectionModel = computed({
+  get: () => tableSelectionState(definitionForm.requestConfig.headers).checked,
+  set: (enabled: boolean) => toggleTableSelection(definitionForm.requestConfig.headers, enabled),
+})
+
+const bodyFormTableSelectionModel = computed({
+  get: () => tableSelectionState(definitionForm.requestConfig.body.formItems).checked,
+  set: (enabled: boolean) => toggleTableSelection(definitionForm.requestConfig.body.formItems, enabled),
+})
 
 function isBodyMode(mode: string) {
   if (mode === 'json') return definitionForm.requestConfig.body.type === 'RAW_JSON'
@@ -921,8 +945,86 @@ onMounted(() => {
   void bootstrap()
 })
 
-function emptyKeyValue(): ApiKeyValue {
-  return { key: '', value: '', enabled: true }
+function emptyKeyValue(overrides: Partial<ApiKeyValue> = {}): ApiKeyValue {
+  return {
+    key: '',
+    value: '',
+    description: '',
+    enabled: true,
+    paramType: 'string',
+    required: false,
+    encode: false,
+    minLength: null,
+    maxLength: null,
+    ...overrides,
+  }
+}
+
+function isKeyValueRowEmpty(row: ApiKeyValue | null | undefined) {
+  if (!row) {
+    return true
+  }
+  return !row.key?.trim()
+    && !row.value?.trim()
+    && !row.description?.trim()
+}
+
+function normalizeKeyValueRow(row: ApiKeyValue | null | undefined, defaults?: Partial<ApiKeyValue>) {
+  return emptyKeyValue({
+    ...(row ?? {}),
+    ...defaults,
+  })
+}
+
+function ensureTrailingKeyValueRow(target: ApiKeyValue[], defaults?: Partial<ApiKeyValue>) {
+  if (!target.length || !isKeyValueRowEmpty(target[target.length - 1])) {
+    target.push(emptyKeyValue(defaults))
+  }
+}
+
+function syncKeyValueRows(target: ApiKeyValue[], defaults?: Partial<ApiKeyValue>) {
+  const normalized = target
+    .map(item => normalizeKeyValueRow(item, defaults))
+    .filter((item, index, arr) => !isKeyValueRowEmpty(item) || index === arr.length - 1)
+  target.splice(0, target.length, ...normalized)
+  ensureTrailingKeyValueRow(target, defaults)
+}
+
+function removeKeyValueRow(target: ApiKeyValue[], index: number, defaults?: Partial<ApiKeyValue>) {
+  target.splice(index, 1)
+  syncKeyValueRows(target, defaults)
+}
+
+function handleKeyValueRowInput(target: ApiKeyValue[], defaults?: Partial<ApiKeyValue>) {
+  ensureTrailingKeyValueRow(target, defaults)
+}
+
+function queryParamDefaults() {
+  return { paramType: 'string', required: false, encode: false }
+}
+
+function headerParamDefaults() {
+  return { paramType: '', required: false, encode: false }
+}
+
+function bodyFormParamDefaults() {
+  return { paramType: 'string', required: false, encode: false }
+}
+
+function isLengthInputDisabled(row: ApiKeyValue) {
+  return !row.key?.trim() && !row.value?.trim()
+}
+
+function prepareKeyValueRowsForPayload(items: ApiKeyValue[]) {
+  return items
+    .map(item => normalizeKeyValueRow(item))
+    .filter(item => !isKeyValueRowEmpty(item))
+}
+
+function hydrateDefinitionKeyValueRows(detail: ApiDefinitionDetail) {
+  syncKeyValueRows(detail.requestConfig.queryParams, queryParamDefaults())
+  syncKeyValueRows(detail.requestConfig.headers, headerParamDefaults())
+  syncKeyValueRows(detail.requestConfig.body.formItems, bodyFormParamDefaults())
 }
 
 function emptyAssertion(): ApiAssertionConfig {
@@ -1026,6 +1128,7 @@ function buildEmptyDefinitionDetail(): ApiDefinitionDetail {
 
 function makeRequestEditorTab(detail?: ApiDefinitionDetail) {
   const draft = cloneDefinitionDetail(detail ?? buildEmptyDefinitionDetail())
+  hydrateDefinitionKeyValueRows(draft)
   if (draft.requestConfig.body.type === 'RAW_JSON') {
     draft.requestConfig.body.jsonText = draft.requestConfig.body.rawText || ''
   }
@@ -1063,17 +1166,19 @@ function syncActiveRequestEditorTab() {
 
 function applyDefinitionToEditor(detail: ApiDefinitionDetail, options?: { markSaved?: boolean }) {
   requestEditorSyncing.value = true
-  Object.assign(definitionForm, cloneDefinitionDetail(detail))
+  const cloned = cloneDefinitionDetail(detail)
+  hydrateDefinitionKeyValueRows(cloned)
+  Object.assign(definitionForm, cloned)
   selectedDefinitionId.value = detail.id || null
   syncDefinitionTreeSelection(detail)
   const current = activeRequestEditorTab.value
   if (current) {
-    current.draft = cloneDefinitionDetail(detail)
+    current.draft = cloneDefinitionDetail(cloned)
     current.definitionId = detail.id || null
     current.title = detail.name || '\u65b0\u5efa\u8bf7\u6c42'
     current.method = detail.requestConfig.method || detail.method || 'GET'
     if (options?.markSaved) {
-      current.savedFingerprint = fingerprintDefinitionDetail(detail)
+      current.savedFingerprint = fingerprintDefinitionDetail(cloned)
       current.isDirty = false
     }
   }
@@ -1303,7 +1408,12 @@ function assignScenario(detail: ApiScenarioDetail) {
 }
 
 function addDefinitionRow(target: ApiKeyValue[]) {
-  target.push(emptyKeyValue())
+  const defaults = target === definitionForm.requestConfig.queryParams
+    ? queryParamDefaults()
+    : target === definitionForm.requestConfig.headers
+      ? headerParamDefaults()
+      : bodyFormParamDefaults()
+  target.push(emptyKeyValue(defaults))
 }
 
 function openBatchAddDrawer(mode: BatchAddMode) {
@@ -1466,7 +1576,8 @@ function confirmBatchAdd() {
   let count = 0
   if (batchAddMode.value === 'query') {
     const rows = parseBatchKeyValueInput()
-    definitionForm.requestConfig.queryParams.push(...rows)
+    definitionForm.requestConfig.queryParams.push(...rows.map(row => normalizeKeyValueRow(row, queryParamDefaults())))
+    syncKeyValueRows(definitionForm.requestConfig.queryParams, queryParamDefaults())
     count = rows.length
   }
   else if (batchAddMode.value === 'cookie') {
@@ -1476,12 +1587,14 @@ function confirmBatchAdd() {
   }
   else if (batchAddMode.value === 'header') {
     const rows = parseBatchKeyValueInput()
-    definitionForm.requestConfig.headers.push(...rows)
+    definitionForm.requestConfig.headers.push(...rows.map(row => normalizeKeyValueRow(row, headerParamDefaults())))
+    syncKeyValueRows(definitionForm.requestConfig.headers, headerParamDefaults())
     count = rows.length
   }
   else if (batchAddMode.value === 'body-form') {
     const rows = parseBatchKeyValueInput()
-    definitionForm.requestConfig.body.formItems.push(...rows)
+    definitionForm.requestConfig.body.formItems.push(...rows.map(row => normalizeKeyValueRow(row, bodyFormParamDefaults())))
+    syncKeyValueRows(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())
     count = rows.length
   }
   else if (batchAddMode.value === 'assertion') {
@@ -1650,7 +1763,15 @@ async function persistDefinition(options?: { debugAfterSave?: boolean }) {
       directoryName: (definitionForm.directoryName || selectedDefinitionModulePath.value || '').trim() || null,
       description: definitionForm.description,
       tags: definitionForm.tags,
-      requestConfig: definitionForm.requestConfig,
+      requestConfig: {
+        ...definitionForm.requestConfig,
+        queryParams: prepareKeyValueRowsForPayload(definitionForm.requestConfig.queryParams),
+        headers: prepareKeyValueRowsForPayload(definitionForm.requestConfig.headers),
+        body: {
+          ...definitionForm.requestConfig.body,
+          formItems: prepareKeyValueRowsForPayload(definitionForm.requestConfig.body.formItems),
+        },
+      },
       assertions: definitionForm.assertions,
       extractors: definitionForm.extractors,
     }
@@ -2243,24 +2364,26 @@ function formatTimeLabel(value?: string | null) {
 
               <div class="ms-like-request-body">
                 <template v-if="activeRequestTab === 'params'">
-                  <div class="request-section ms-like-table-surface">
-                    <div class="ms-like-table-header">
+                  <div class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--query">
+                    <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--query">
                       <label class="ms-like-check-cell">
                         <el-checkbox
-                          :model-value="tableSelectionState(definitionForm.requestConfig.queryParams).checked"
+                          v-model="queryTableSelectionModel"
                           :indeterminate="tableSelectionState(definitionForm.requestConfig.queryParams).indeterminate"
-                          @change="toggleTableSelection(definitionForm.requestConfig.queryParams, !!$event)"
                         />
-                        <span>Query &#21442;&#25968;</span>
+                        <span>Query 参数</span>
                       </label>
-                      <span>&#21442;&#25968;&#20540;</span>
-                      <span>&#25551;&#36848;</span>
-                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('query')">&#25209;&#37327;&#28155;&#21152;</button>
+                      <span>类型</span>
+                      <span>参数值</span>
+                      <span>长度范围</span>
+                      <span>编码</span>
+                      <span>描述</span>
+                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('query')">批量添加</button>
                     </div>
                     <div
                       v-for="(row, index) in definitionForm.requestConfig.queryParams"
                       :key="`query-${index}`"
-                      :class="['ms-like-table-row', { 'is-dragging': isParamRowDragging('query', index), 'is-drag-over': isParamRowDragOver('query', index) }]"
+                      :class="['ms-like-table-row', 'ms-like-param-table-grid', 'ms-like-param-table-grid--query', { 'is-dragging': isParamRowDragging('query', index), 'is-drag-over': isParamRowDragOver('query', index) }]"
                       @dragover="handleParamDragOver('query', index, $event)"
                       @drop="handleParamDrop('query', index, $event)"
                     >
@@ -2278,35 +2401,77 @@ function formatTimeLabel(value?: string | null) {
                       </div>
                       <div class="ms-like-checkbox-field">
                         <el-checkbox v-model="row.enabled" />
-                        <el-input v-model="row.key" placeholder="&#21442;&#25968;&#21517;&#31216;" />
+                        <button
+                          type="button"
+                          :class="['ms-like-required-button', { active: row.required }]"
+                          @click="row.required = !row.required"
+                        >
+                          *
+                        </button>
+                        <el-input
+                          v-model="row.key"
+                          placeholder="参数名称"
+                          @input="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
+                        />
                       </div>
-                      <el-input v-model="row.value" placeholder="&#21442;&#25968;&#20540; / {{variable}}" />
-                      <el-input placeholder="&#25551;&#36848;" />
-                      <button type="button" class="ms-like-row-remove" @click="definitionForm.requestConfig.queryParams.splice(index, 1)">&#21024;&#38500;</button>
+                      <el-select v-model="row.paramType" @change="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())">
+                        <el-option v-for="option in queryParamTypeOptions" :key="option" :label="option" :value="option" />
+                      </el-select>
+                      <el-input
+                        v-model="row.value"
+                        placeholder="参数值 / {{variable}}"
+                        @input="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
+                      />
+                      <div class="ms-like-length-range">
+                        <el-input-number
+                          v-model="row.minLength"
+                          :min="0"
+                          :disabled="isLengthInputDisabled(row)"
+                          controls-position="right"
+                          placeholder="最小"
+                        />
+                        <span class="ms-like-length-separator">-</span>
+                        <el-input-number
+                          v-model="row.maxLength"
+                          :min="0"
+                          :disabled="isLengthInputDisabled(row)"
+                          controls-position="right"
+                          placeholder="最大"
+                        />
+                      </div>
+                      <div class="ms-like-switch-cell">
+                        <el-switch v-model="row.encode" size="small" />
+                      </div>
+                      <el-input
+                        v-model="row.description"
+                        placeholder="描述"
+                        @input="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
+                      />
+                      <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(definitionForm.requestConfig.queryParams, index, queryParamDefaults())">删除</button>
                     </div>
-                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.queryParams)">+ &#28155;&#21152;&#19968;&#34892;</button>
+                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.queryParams)">+ 添加一行</button>
                   </div>
                 </template>
 
                 <template v-else-if="activeRequestTab === 'headers'">
-                  <div class="request-section ms-like-table-surface">
-                    <div class="ms-like-table-header">
-                      <label class="ms-like-check-cell">
+                  <div class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--header">
+                    <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--header">
+                      <div class="ms-like-drag-cell"></div>
+                      <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
                         <el-checkbox
-                          :model-value="tableSelectionState(definitionForm.requestConfig.headers).checked"
+                          v-model="headerTableSelectionModel"
                           :indeterminate="tableSelectionState(definitionForm.requestConfig.headers).indeterminate"
-                          @change="toggleTableSelection(definitionForm.requestConfig.headers, !!$event)"
                         />
-                        <span>&#21442;&#25968;&#21517;&#31216;</span>
-                      </label>
-                      <span>&#21442;&#25968;&#20540;</span>
-                      <span>&#25551;&#36848;</span>
-                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('header')">&#25209;&#37327;&#28155;&#21152;</button>
+                      </div>
+                      <span class="ms-like-header-input-title">参数名称</span>
+                      <span>参数值</span>
+                      <span>描述</span>
+                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('header')">批量添加</button>
                     </div>
                     <div
                       v-for="(row, index) in definitionForm.requestConfig.headers"
                       :key="`header-${index}`"
-                      :class="['ms-like-table-row', { 'is-dragging': isParamRowDragging('header', index), 'is-drag-over': isParamRowDragOver('header', index) }]"
+                      :class="['ms-like-table-row', 'ms-like-param-table-grid', 'ms-like-param-table-grid--header', { 'is-dragging': isParamRowDragging('header', index), 'is-drag-over': isParamRowDragOver('header', index) }]"
                       @dragover="handleParamDragOver('header', index, $event)"
                       @drop="handleParamDrop('header', index, $event)"
                     >
@@ -2318,19 +2483,33 @@ function formatTimeLabel(value?: string | null) {
                           aria-label="拖拽排序"
                           @dragstart="handleParamDragStart('header', index, $event)"
                           @dragend="handleParamDragEnd"
-                        >
+                      >
                           <span v-for="dotIndex in 6" :key="`header-dot-${index}-${dotIndex}`" class="ms-like-drag-dot"></span>
                         </button>
                       </div>
-                      <div class="ms-like-checkbox-field">
+                      <div class="ms-like-checkbox-cell">
                         <el-checkbox v-model="row.enabled" />
-                        <el-input v-model="row.key" placeholder="&#21442;&#25968;&#21517;&#31216;" />
                       </div>
-                      <el-input v-model="row.value" placeholder="&#21442;&#25968;&#20540; / {{variable}}" />
-                      <el-input placeholder="&#25551;&#36848;" />
-                      <button type="button" class="ms-like-row-remove" @click="definitionForm.requestConfig.headers.splice(index, 1)">&#21024;&#38500;</button>
+                      <div class="ms-like-header-input-cell">
+                        <el-input
+                          v-model="row.key"
+                          placeholder=""
+                          @input="handleKeyValueRowInput(definitionForm.requestConfig.headers, headerParamDefaults())"
+                        />
+                      </div>
+                      <el-input
+                        v-model="row.value"
+                        placeholder=""
+                        @input="handleKeyValueRowInput(definitionForm.requestConfig.headers, headerParamDefaults())"
+                      />
+                      <el-input
+                        v-model="row.description"
+                        placeholder=""
+                        @input="handleKeyValueRowInput(definitionForm.requestConfig.headers, headerParamDefaults())"
+                      />
+                      <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(definitionForm.requestConfig.headers, index, headerParamDefaults())">删除</button>
                     </div>
-                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.headers)">+ &#28155;&#21152;&#19968;&#34892;</button>
+                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.headers)">+ 添加一行</button>
                   </div>
                 </template>
 
@@ -2377,25 +2556,25 @@ function formatTimeLabel(value?: string | null) {
                     </div>
                     <div
                       v-else-if="['FORM_URLENCODED', 'FORM_DATA'].includes(definitionForm.requestConfig.body.type)"
-                      class="body-form-grid ms-like-table-surface"
+                      class="body-form-grid ms-like-table-surface ms-like-param-table ms-like-param-table--body-form"
                     >
-                      <div class="ms-like-table-header">
+                      <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--body-form">
                         <label class="ms-like-check-cell">
                           <el-checkbox
-                            :model-value="tableSelectionState(definitionForm.requestConfig.body.formItems).checked"
+                            v-model="bodyFormTableSelectionModel"
                             :indeterminate="tableSelectionState(definitionForm.requestConfig.body.formItems).indeterminate"
-                            @change="toggleTableSelection(definitionForm.requestConfig.body.formItems, !!$event)"
                           />
-                          <span>&#21442;&#25968;&#21517;&#31216;</span>
+                          <span>参数名称</span>
                         </label>
-                        <span>&#21442;&#25968;&#20540;</span>
-                        <span>&#25551;&#36848;</span>
-                        <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('body-form')">&#25209;&#37327;&#28155;&#21152;</button>
+                        <span>类型</span>
+                        <span>参数值</span>
+                        <span>描述</span>
+                        <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('body-form')">批量添加</button>
                       </div>
                       <div
                         v-for="(row, index) in definitionForm.requestConfig.body.formItems"
                         :key="`body-${index}`"
-                        :class="['ms-like-table-row', { 'is-dragging': isParamRowDragging('body-form', index), 'is-drag-over': isParamRowDragOver('body-form', index) }]"
+                        :class="['ms-like-table-row', 'ms-like-param-table-grid', 'ms-like-param-table-grid--body-form', { 'is-dragging': isParamRowDragging('body-form', index), 'is-drag-over': isParamRowDragOver('body-form', index) }]"
                         @dragover="handleParamDragOver('body-form', index, $event)"
                         @drop="handleParamDrop('body-form', index, $event)"
                       >
@@ -2413,13 +2592,35 @@ function formatTimeLabel(value?: string | null) {
                         </div>
                         <div class="ms-like-checkbox-field">
                           <el-checkbox v-model="row.enabled" />
-                          <el-input v-model="row.key" placeholder="&#21442;&#25968;&#21517;&#31216;" />
+                          <button
+                            type="button"
+                            :class="['ms-like-required-button', { active: row.required }]"
+                            @click="row.required = !row.required"
+                          >
+                            *
+                          </button>
+                          <el-input
+                            v-model="row.key"
+                            placeholder="参数名称"
+                            @input="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())"
+                          />
                         </div>
-                        <el-input v-model="row.value" placeholder="&#21442;&#25968;&#20540;" />
-                        <el-input placeholder="&#25551;&#36848;" />
-                        <button type="button" class="ms-like-row-remove" @click="definitionForm.requestConfig.body.formItems.splice(index, 1)">&#21024;&#38500;</button>
+                        <el-select v-model="row.paramType" @change="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())">
+                          <el-option v-for="option in bodyParamTypeOptions" :key="option" :label="option" :value="option" />
+                        </el-select>
+                        <el-input
+                          v-model="row.value"
+                          placeholder="参数值"
+                          @input="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())"
+                        />
+                        <el-input
+                          v-model="row.description"
+                          placeholder="描述"
+                          @input="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())"
+                        />
+                        <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(definitionForm.requestConfig.body.formItems, index, bodyFormParamDefaults())">删除</button>
                       </div>
-                      <button type="button" class="ms-like-add-row" @click="definitionForm.requestConfig.body.formItems.push(emptyKeyValue())">+ &#28155;&#21152;&#19968;&#34892;</button>
+                      <button type="button" class="ms-like-add-row" @click="definitionForm.requestConfig.body.formItems.push(emptyKeyValue(bodyFormParamDefaults()))">+ 添加一行</button>
                     </div>
                     <div v-else class="ms-like-empty-body">&#35831;&#27714;&#27809;&#26377; Body</div>
                   </div>
@@ -3639,10 +3840,22 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-table-header,
-.ms-like-table-row {
+.ms-like-table-row,
+.ms-like-param-table-grid {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1.25fr) minmax(0, 1.2fr) minmax(0, 1fr) 88px;
   align-items: center;
+}
+
+.ms-like-param-table-grid--query {
+  grid-template-columns: 32px minmax(220px, 1.5fr) 112px minmax(180px, 1.1fr) 180px 88px minmax(180px, 1fr) 68px;
+}
+
+.ms-like-param-table-grid--header {
+  grid-template-columns: 32px 28px minmax(240px, 1.4fr) minmax(220px, 1.1fr) minmax(180px, 1fr) 70px;
+}
+
+.ms-like-param-table-grid--body-form {
+  grid-template-columns: 32px minmax(220px, 1.45fr) 112px minmax(200px, 1.15fr) minmax(180px, 1fr) 68px;
 }
 
 .ms-like-table-header {
@@ -3653,6 +3866,13 @@ function formatTimeLabel(value?: string | null) {
   padding-right: 10px;
 }
 
+.ms-like-param-table--header .ms-like-table-header {
+  color: #7d7d7f;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
 .ms-like-check-cell,
 .ms-like-checkbox-field {
   display: flex;
@@ -3660,9 +3880,43 @@ function formatTimeLabel(value?: string | null) {
   gap: 8px;
 }
 
+.ms-like-header-name-cell,
+.ms-like-checkbox-cell {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.ms-like-checkbox-cell {
+  justify-content: center;
+}
+
+.ms-like-checkbox-cell--header {
+  justify-content: flex-start;
+  padding-left: 6px;
+}
+
 .ms-like-check-cell {
   grid-column: 1 / 3;
   padding-left: 6px;
+}
+
+.ms-like-header-input-title {
+  display: inline-flex;
+  align-items: center;
+  padding-left: 0;
+}
+
+.ms-like-param-table--header .ms-like-header-input-title,
+.ms-like-param-table--header .ms-like-table-header > span {
+  color: #7d7d7f;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.ms-like-header-input-cell {
+  min-width: 0;
 }
 
 .ms-like-table-row {
@@ -3730,15 +3984,39 @@ function formatTimeLabel(value?: string | null) {
   min-width: 0;
 }
 
+.ms-like-header-input-cell :deep(.el-input) {
+  width: 100%;
+}
+
+.ms-like-required-button {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #98a2b3;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+}
+
+.ms-like-required-button.active {
+  color: #f04438;
+  background: #fff1f3;
+}
+
 .ms-like-checkbox-field :deep(.el-input),
 .ms-like-table-row :deep(.el-input),
-.ms-like-table-row :deep(.el-select) {
+.ms-like-table-row :deep(.el-select),
+.ms-like-length-range :deep(.el-input-number) {
   width: 100%;
 }
 
 .ms-like-checkbox-field :deep(.el-input__wrapper),
 .ms-like-table-row :deep(.el-input__wrapper),
-.ms-like-table-row :deep(.el-select__wrapper) {
+.ms-like-table-row :deep(.el-select__wrapper),
+.ms-like-length-range :deep(.el-input-number .el-input__wrapper) {
   box-shadow: inset 0 0 0 1px transparent;
   background: transparent;
   border-radius: 4px;
@@ -3750,13 +4028,15 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-checkbox-field :deep(.el-input__inner),
 .ms-like-table-row :deep(.el-input__inner),
 .ms-like-table-row :deep(.el-select__placeholder),
-.ms-like-table-row :deep(.el-select__selected-item) {
+.ms-like-table-row :deep(.el-select__selected-item),
+.ms-like-length-range :deep(.el-input__inner) {
   font-size: 12px;
 }
 
 .ms-like-checkbox-field :deep(.el-input__wrapper:hover),
 .ms-like-table-row :deep(.el-input__wrapper:hover),
-.ms-like-table-row :deep(.el-select__wrapper:hover) {
+.ms-like-table-row :deep(.el-select__wrapper:hover),
+.ms-like-length-range :deep(.el-input-number .el-input__wrapper:hover) {
   box-shadow: inset 0 0 0 1px #d0d5dd;
   background: #fff;
 }
@@ -3764,9 +4044,28 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-checkbox-field :deep(.el-input.is-focus .el-input__wrapper),
 .ms-like-table-row :deep(.el-input.is-focus .el-input__wrapper),
 .ms-like-table-row :deep(.el-select.is-focus .el-select__wrapper),
-.ms-like-table-row :deep(.el-select__wrapper.is-focused) {
+.ms-like-table-row :deep(.el-select__wrapper.is-focused),
+.ms-like-length-range :deep(.el-input-number.is-focus .el-input__wrapper) {
   box-shadow: inset 0 0 0 1px #7c3aed;
   background: #fff;
+}
+
+.ms-like-length-range {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.ms-like-length-separator,
+.ms-like-switch-cell {
+  color: #667085;
+  font-size: 12px;
+}
+
+.ms-like-switch-cell {
+  display: flex;
+  justify-content: center;
 }
 
 .ms-like-link-button,
@@ -3781,8 +4080,14 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-row-remove {
-  justify-self: end;
+  justify-self: center;
   color: #c75450;
+}
+
+.ms-like-param-table--header .ms-like-link-button,
+.ms-like-param-table--header .ms-like-row-remove {
+  justify-self: center;
+  text-align: center;
 }
 
 .ms-like-add-row {
@@ -4173,9 +4478,16 @@ pre {
 }
 
 @media (max-width: 1480px) {
-  .ms-like-table-header,
-  .ms-like-table-row {
-      grid-template-columns: 28px minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.9fr) 72px;
+  .ms-like-param-table-grid--query {
+      grid-template-columns: 28px minmax(210px, 1.35fr) 100px minmax(160px, 1fr) 160px 78px minmax(160px, 0.95fr) 64px;
+  }
+
+  .ms-like-param-table-grid--header {
+      grid-template-columns: 28px 26px minmax(210px, 1.35fr) minmax(180px, 1fr) minmax(150px, 0.9fr) 64px;
+  }
+
+  .ms-like-param-table-grid--body-form {
+      grid-template-columns: 28px minmax(200px, 1.3fr) 100px minmax(180px, 1fr) minmax(150px, 0.9fr) 64px;
   }
 }
 
@@ -4200,8 +4512,9 @@ pre {
     grid-template-columns: 1fr;
   }
 
-  .ms-like-table-header,
-  .ms-like-table-row {
+  .ms-like-param-table-grid--query,
+  .ms-like-param-table-grid--header,
+  .ms-like-param-table-grid--body-form {
     grid-template-columns: 28px minmax(0, 1fr);
     gap: 8px;
   }
@@ -4213,6 +4526,11 @@ pre {
   .ms-like-table-header > span,
   .ms-like-table-header > .ms-like-link-button,
   .ms-like-table-row > :not(.ms-like-drag-cell):not(.ms-like-checkbox-field) {
+    grid-column: 2 / -1;
+  }
+
+  .ms-like-table-row > .ms-like-switch-cell,
+  .ms-like-table-row > .ms-like-length-range {
     grid-column: 2 / -1;
   }
 

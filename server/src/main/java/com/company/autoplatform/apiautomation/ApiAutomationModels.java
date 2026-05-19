@@ -18,7 +18,13 @@ public final class ApiAutomationModels {
     public record ApiKeyValueInput(
             String key,
             String value,
-            Boolean enabled
+            String description,
+            Boolean enabled,
+            String paramType,
+            Boolean required,
+            Boolean encode,
+            Integer minLength,
+            Integer maxLength
     ) {
     }
 

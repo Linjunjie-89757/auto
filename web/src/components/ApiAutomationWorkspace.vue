@@ -1011,10 +1011,6 @@ function bodyFormParamDefaults() {
   return { paramType: 'string', required: false, encode: false }
 }
 
-function isLengthInputDisabled(row: ApiKeyValue) {
-  return !row.key?.trim() && !row.value?.trim()
-}
-
 function prepareKeyValueRowsForPayload(items: ApiKeyValue[]) {
   return items
     .map(item => normalizeKeyValueRow(item))
@@ -2376,7 +2372,6 @@ function formatTimeLabel(value?: string | null) {
                       <span class="ms-like-header-input-title">Query 参数</span>
                       <span>类型</span>
                       <span>参数值</span>
-                      <span>长度范围</span>
                       <span>编码</span>
                       <span>描述</span>
                       <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('query')">批量添加</button>
@@ -2425,23 +2420,6 @@ function formatTimeLabel(value?: string | null) {
                         placeholder="参数值 / {{variable}}"
                         @input="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
                       />
-                      <div class="ms-like-length-range">
-                        <el-input-number
-                          v-model="row.minLength"
-                          :min="0"
-                          :disabled="isLengthInputDisabled(row)"
-                          controls-position="right"
-                          placeholder="最小"
-                        />
-                        <span class="ms-like-length-separator">-</span>
-                        <el-input-number
-                          v-model="row.maxLength"
-                          :min="0"
-                          :disabled="isLengthInputDisabled(row)"
-                          controls-position="right"
-                          placeholder="最大"
-                        />
-                      </div>
                       <div class="ms-like-switch-cell">
                         <el-switch v-model="row.encode" size="small" />
                       </div>
@@ -3871,7 +3849,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-param-table-grid--query {
-  grid-template-columns: 24px 32px minmax(220px, 1.2fr) 130px minmax(220px, 1.15fr) 200px 80px minmax(180px, 1fr) 80px;
+  grid-template-columns: 24px 32px minmax(220px, 1.25fr) 130px minmax(260px, 1.2fr) 80px minmax(220px, 1fr) 80px;
 }
 
 .ms-like-param-table-grid--header {
@@ -4049,16 +4027,14 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-checkbox-field :deep(.el-input),
 .ms-like-name-field :deep(.el-input),
 .ms-like-table-row :deep(.el-input),
-.ms-like-table-row :deep(.el-select),
-.ms-like-length-range :deep(.el-input-number) {
+.ms-like-table-row :deep(.el-select) {
   width: 100%;
 }
 
 .ms-like-checkbox-field :deep(.el-input__wrapper),
 .ms-like-name-field :deep(.el-input__wrapper),
 .ms-like-table-row :deep(.el-input__wrapper),
-.ms-like-table-row :deep(.el-select__wrapper),
-.ms-like-length-range :deep(.el-input-number .el-input__wrapper) {
+.ms-like-table-row :deep(.el-select__wrapper) {
   box-shadow: inset 0 0 0 1px transparent;
   background: transparent;
   border-radius: 4px;
@@ -4075,16 +4051,14 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-name-field :deep(.el-input__inner),
 .ms-like-table-row :deep(.el-input__inner),
 .ms-like-table-row :deep(.el-select__placeholder),
-.ms-like-table-row :deep(.el-select__selected-item),
-.ms-like-length-range :deep(.el-input__inner) {
+.ms-like-table-row :deep(.el-select__selected-item) {
   font-size: 12px;
 }
 
 .ms-like-checkbox-field :deep(.el-input__wrapper:hover),
 .ms-like-name-field :deep(.el-input__wrapper:hover),
 .ms-like-table-row :deep(.el-input__wrapper:hover),
-.ms-like-table-row :deep(.el-select__wrapper:hover),
-.ms-like-length-range :deep(.el-input-number .el-input__wrapper:hover) {
+.ms-like-table-row :deep(.el-select__wrapper:hover) {
   box-shadow: inset 0 0 0 1px #d0d5dd;
   background: #fff;
 }
@@ -4093,20 +4067,11 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-name-field :deep(.el-input.is-focus .el-input__wrapper),
 .ms-like-table-row :deep(.el-input.is-focus .el-input__wrapper),
 .ms-like-table-row :deep(.el-select.is-focus .el-select__wrapper),
-.ms-like-table-row :deep(.el-select__wrapper.is-focused),
-.ms-like-length-range :deep(.el-input-number.is-focus .el-input__wrapper) {
+.ms-like-table-row :deep(.el-select__wrapper.is-focused) {
   box-shadow: inset 0 0 0 1px #7c3aed;
   background: #fff;
 }
 
-.ms-like-length-range {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr);
-  align-items: center;
-  gap: 6px;
-}
-
-.ms-like-length-separator,
 .ms-like-switch-cell {
   color: #667085;
   font-size: 12px;
@@ -4528,7 +4493,7 @@ pre {
 
 @media (max-width: 1480px) {
   .ms-like-param-table-grid--query {
-      grid-template-columns: 24px 28px minmax(190px, 1.15fr) 112px minmax(180px, 1fr) 176px 72px minmax(150px, 0.9fr) 64px;
+      grid-template-columns: 24px 28px minmax(190px, 1.15fr) 112px minmax(220px, 1fr) 72px minmax(170px, 0.95fr) 64px;
   }
 
   .ms-like-param-table-grid--header {
@@ -4586,8 +4551,7 @@ pre {
     grid-column: 2 / -1;
   }
 
-  .ms-like-table-row > .ms-like-switch-cell,
-  .ms-like-table-row > .ms-like-length-range {
+  .ms-like-table-row > .ms-like-switch-cell {
     grid-column: 2 / -1;
   }
 

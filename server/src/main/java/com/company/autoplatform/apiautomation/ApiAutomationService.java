@@ -764,9 +764,8 @@ public class ApiAutomationService {
                 ? path
                 : joinBaseUrl(environment.baseUrl(), path);
 
-        Map<String, String> queryParams = toEnabledMap(defaultList(config.queryParams()), variables);
-        if (!queryParams.isEmpty()) {
-            String query = buildQueryString(queryParams);
+        String query = buildQueryString(defaultList(config.queryParams()), variables);
+        if (!query.isEmpty()) {
             url = url.contains("?") ? url + "&" + query : url + "?" + query;
         }
 
@@ -993,6 +992,23 @@ public class ApiAutomationService {
             result.put(item.key(), replaceVariables(Optional.ofNullable(item.value()).orElse(""), variables));
         }
         return result;
+    }
+
+    private String buildQueryString(List<ApiKeyValueInput> items, Map<String, String> variables) {
+        List<String> parts = new ArrayList<>();
+        for (ApiKeyValueInput item : items) {
+            if (item == null || item.key() == null || item.key().isBlank() || Boolean.FALSE.equals(item.enabled())) {
+                continue;
+            }
+            String key = replaceVariables(item.key(), variables);
+            String value = replaceVariables(Optional.ofNullable(item.value()).orElse(""), variables);
+            if (Boolean.TRUE.equals(item.encode())) {
+                key = URLEncoder.encode(key, StandardCharsets.UTF_8);
+                value = URLEncoder.encode(value, StandardCharsets.UTF_8);
+            }
+            parts.add(key + "=" + value);
+        }
+        return String.join("&", parts);
     }
 
     private String replaceVariables(String text, Map<String, String> variables) {

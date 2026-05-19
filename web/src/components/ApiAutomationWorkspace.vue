@@ -58,6 +58,7 @@ type DefinitionDirectoryTreeNode = {
 }
 
 type BatchAddMode = 'query' | 'cookie' | 'header' | 'body-form' | 'assertion' | 'extractor'
+type SortableParamGroup = 'query' | 'header' | 'body-form'
 
 const DEFINITION_TREE_ROOT_KEY = 'definition-root'
 const DEFINITION_TREE_UNASSIGNED_KEY = 'definition-unassigned'
@@ -76,6 +77,10 @@ const activeRequestTab = ref<'params' | 'headers' | 'body' | 'auth' | 'tests' | 
 const responsePreviewTab = ref<'body' | 'headers' | 'assertions' | 'extractions' | 'history'>('body')
 const batchAddMode = ref<BatchAddMode>('query')
 const batchAddInput = ref('')
+const draggingParamGroup = ref<SortableParamGroup | null>(null)
+const draggingParamIndex = ref<number | null>(null)
+const dragOverParamGroup = ref<SortableParamGroup | null>(null)
+const dragOverParamIndex = ref<number | null>(null)
 
 const definitions = ref<ApiDefinitionItem[]>([])
 const scenarios = ref<ApiScenarioItem[]>([])
@@ -683,6 +688,76 @@ function setBodyMode(mode: 'NONE' | 'FORM_DATA' | 'FORM_URLENCODED' | 'RAW_JSON'
     definitionForm.requestConfig.body.contentType = 'application/octet-stream'
   }
   syncActiveBodyText()
+}
+
+function getSortableParamList(group: SortableParamGroup) {
+  switch (group) {
+    case 'query':
+      return definitionForm.requestConfig.queryParams
+    case 'header':
+      return definitionForm.requestConfig.headers
+    case 'body-form':
+      return definitionForm.requestConfig.body.formItems
+  }
+}
+
+function clearParamDragState() {
+  draggingParamGroup.value = null
+  draggingParamIndex.value = null
+  dragOverParamGroup.value = null
+  dragOverParamIndex.value = null
+}
+
+function handleParamDragStart(group: SortableParamGroup, index: number, event: DragEvent) {
+  draggingParamGroup.value = group
+  draggingParamIndex.value = index
+  dragOverParamGroup.value = group
+  dragOverParamIndex.value = index
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', `${group}:${index}`)
+  }
+}
+
+function handleParamDragOver(group: SortableParamGroup, index: number, event: DragEvent) {
+  if (draggingParamGroup.value !== group) {
+    return
+  }
+  event.preventDefault()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'move'
+  }
+  dragOverParamGroup.value = group
+  dragOverParamIndex.value = index
+}
+
+function handleParamDrop(group: SortableParamGroup, index: number, event: DragEvent) {
+  event.preventDefault()
+  if (draggingParamGroup.value !== group || draggingParamIndex.value === null) {
+    clearParamDragState()
+    return
+  }
+  const fromIndex = draggingParamIndex.value
+  const targetList = getSortableParamList(group)
+  if (fromIndex === index || fromIndex < 0 || fromIndex >= targetList.length || index < 0 || index >= targetList.length) {
+    clearParamDragState()
+    return
+  }
+  const [moved] = targetList.splice(fromIndex, 1)
+  targetList.splice(index, 0, moved)
+  clearParamDragState()
+}
+
+function handleParamDragEnd() {
+  clearParamDragState()
+}
+
+function isParamRowDragging(group: SortableParamGroup, index: number) {
+  return draggingParamGroup.value === group && draggingParamIndex.value === index
+}
+
+function isParamRowDragOver(group: SortableParamGroup, index: number) {
+  return dragOverParamGroup.value === group && dragOverParamIndex.value === index && !isParamRowDragging(group, index)
 }
 
 function requestMethodClass(method: string) {
@@ -2182,8 +2257,25 @@ function formatTimeLabel(value?: string | null) {
                       <span>&#25551;&#36848;</span>
                       <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('query')">&#25209;&#37327;&#28155;&#21152;</button>
                     </div>
-                    <div v-for="(row, index) in definitionForm.requestConfig.queryParams" :key="`query-${index}`" class="ms-like-table-row">
-                      <div class="ms-like-drag-cell">&#8942;</div>
+                    <div
+                      v-for="(row, index) in definitionForm.requestConfig.queryParams"
+                      :key="`query-${index}`"
+                      :class="['ms-like-table-row', { 'is-dragging': isParamRowDragging('query', index), 'is-drag-over': isParamRowDragOver('query', index) }]"
+                      @dragover="handleParamDragOver('query', index, $event)"
+                      @drop="handleParamDrop('query', index, $event)"
+                    >
+                      <div class="ms-like-drag-cell">
+                        <button
+                          type="button"
+                          class="ms-like-drag-handle"
+                          draggable="true"
+                          aria-label="拖拽排序"
+                          @dragstart="handleParamDragStart('query', index, $event)"
+                          @dragend="handleParamDragEnd"
+                        >
+                          <span v-for="dotIndex in 6" :key="`query-dot-${index}-${dotIndex}`" class="ms-like-drag-dot"></span>
+                        </button>
+                      </div>
                       <div class="ms-like-checkbox-field">
                         <el-checkbox v-model="row.enabled" />
                         <el-input v-model="row.key" placeholder="&#21442;&#25968;&#21517;&#31216;" />
@@ -2211,8 +2303,25 @@ function formatTimeLabel(value?: string | null) {
                       <span>&#25551;&#36848;</span>
                       <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('header')">&#25209;&#37327;&#28155;&#21152;</button>
                     </div>
-                    <div v-for="(row, index) in definitionForm.requestConfig.headers" :key="`header-${index}`" class="ms-like-table-row">
-                      <div class="ms-like-drag-cell">&#8942;</div>
+                    <div
+                      v-for="(row, index) in definitionForm.requestConfig.headers"
+                      :key="`header-${index}`"
+                      :class="['ms-like-table-row', { 'is-dragging': isParamRowDragging('header', index), 'is-drag-over': isParamRowDragOver('header', index) }]"
+                      @dragover="handleParamDragOver('header', index, $event)"
+                      @drop="handleParamDrop('header', index, $event)"
+                    >
+                      <div class="ms-like-drag-cell">
+                        <button
+                          type="button"
+                          class="ms-like-drag-handle"
+                          draggable="true"
+                          aria-label="拖拽排序"
+                          @dragstart="handleParamDragStart('header', index, $event)"
+                          @dragend="handleParamDragEnd"
+                        >
+                          <span v-for="dotIndex in 6" :key="`header-dot-${index}-${dotIndex}`" class="ms-like-drag-dot"></span>
+                        </button>
+                      </div>
                       <div class="ms-like-checkbox-field">
                         <el-checkbox v-model="row.enabled" />
                         <el-input v-model="row.key" placeholder="&#21442;&#25968;&#21517;&#31216;" />
@@ -2283,8 +2392,25 @@ function formatTimeLabel(value?: string | null) {
                         <span>&#25551;&#36848;</span>
                         <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('body-form')">&#25209;&#37327;&#28155;&#21152;</button>
                       </div>
-                      <div v-for="(row, index) in definitionForm.requestConfig.body.formItems" :key="`body-${index}`" class="ms-like-table-row">
-                        <div class="ms-like-drag-cell">&#8942;</div>
+                      <div
+                        v-for="(row, index) in definitionForm.requestConfig.body.formItems"
+                        :key="`body-${index}`"
+                        :class="['ms-like-table-row', { 'is-dragging': isParamRowDragging('body-form', index), 'is-drag-over': isParamRowDragOver('body-form', index) }]"
+                        @dragover="handleParamDragOver('body-form', index, $event)"
+                        @drop="handleParamDrop('body-form', index, $event)"
+                      >
+                        <div class="ms-like-drag-cell">
+                          <button
+                            type="button"
+                            class="ms-like-drag-handle"
+                            draggable="true"
+                            aria-label="拖拽排序"
+                            @dragstart="handleParamDragStart('body-form', index, $event)"
+                            @dragend="handleParamDragEnd"
+                          >
+                            <span v-for="dotIndex in 6" :key="`body-dot-${index}-${dotIndex}`" class="ms-like-drag-dot"></span>
+                          </button>
+                        </div>
                         <div class="ms-like-checkbox-field">
                           <el-checkbox v-model="row.enabled" />
                           <el-input v-model="row.key" placeholder="&#21442;&#25968;&#21517;&#31216;" />
@@ -3446,7 +3572,7 @@ function formatTimeLabel(value?: string | null) {
   min-height: 0;
   overflow: auto;
   background: #fff;
-  padding: 8px 0 0;
+  padding: 0;
 }
 
 .ms-like-body-type-row {
@@ -3506,10 +3632,16 @@ function formatTimeLabel(value?: string | null) {
   background: #fff;
 }
 
+.request-section.ms-like-table-surface,
+.request-section.ms-like-form-panel,
+.request-section.body-form-grid {
+  gap: 0;
+}
+
 .ms-like-table-header,
 .ms-like-table-row {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1.25fr) minmax(0, 1.2fr) minmax(0, 1fr) 88px;
+  grid-template-columns: 30px minmax(0, 1.25fr) minmax(0, 1.2fr) minmax(0, 1fr) 88px;
   align-items: center;
 }
 
@@ -3530,24 +3662,68 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-check-cell {
   grid-column: 1 / 3;
-  padding-left: 10px;
+  padding-left: 6px;
 }
 
 .ms-like-table-row {
-  min-height: 30px;
+  min-height: 28px;
   border-bottom: 1px solid #f2f3f5;
-  padding: 2px 10px 2px 0;
+  padding: 1px 10px 1px 0;
+  transition: background-color 0.15s ease;
 }
 
 .ms-like-table-row:last-of-type {
   border-bottom: 0;
 }
 
+.ms-like-table-row:hover {
+  background: #fafbfc;
+}
+
+.ms-like-table-row.is-dragging {
+  opacity: 0.6;
+}
+
+.ms-like-table-row.is-drag-over {
+  background: #f5f3ff;
+}
+
 .ms-like-drag-cell {
-  color: #c0c4cc;
-  text-align: center;
-  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   user-select: none;
+}
+
+.ms-like-drag-handle {
+  display: grid;
+  grid-template-columns: repeat(2, 3px);
+  grid-template-rows: repeat(3, 3px);
+  gap: 2px;
+  width: 14px;
+  height: 19px;
+  align-content: center;
+  justify-content: center;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: grab;
+}
+
+.ms-like-drag-handle:active {
+  cursor: grabbing;
+}
+
+.ms-like-drag-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: #c0c4cc;
+}
+
+.ms-like-table-row:hover .ms-like-drag-dot,
+.ms-like-table-row.is-drag-over .ms-like-drag-dot {
+  background: #9ca3af;
 }
 
 .ms-like-checkbox-field {
@@ -3566,8 +3742,8 @@ function formatTimeLabel(value?: string | null) {
   box-shadow: inset 0 0 0 1px transparent;
   background: transparent;
   border-radius: 4px;
-  min-height: 26px;
-  padding: 0 8px;
+  min-height: 24px;
+  padding: 0 6px;
   transition: box-shadow 0.15s ease, background-color 0.15s ease;
 }
 
@@ -3606,6 +3782,7 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-row-remove {
   justify-self: end;
+  color: #c75450;
 }
 
 .ms-like-add-row {
@@ -3838,7 +4015,7 @@ function formatTimeLabel(value?: string | null) {
 .body-form-grid {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
 }
 
 .empty-hint {
@@ -3998,7 +4175,7 @@ pre {
 @media (max-width: 1480px) {
   .ms-like-table-header,
   .ms-like-table-row {
-    grid-template-columns: 36px minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.9fr) 72px;
+      grid-template-columns: 28px minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.9fr) 72px;
   }
 }
 

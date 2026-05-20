@@ -9,6 +9,9 @@ test-results/
 server/target/
 server/data/ai-assets/
 server/data/*.db
+server/data/*.mv.db
+server/data/smoke/
+data/auto-platform-smoke-generated-*.mv.db
 web/node_modules/
 web/dist/
 web/test-results/

@@ -1,11 +1,21 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import MonacoCodeEditor from './MonacoCodeEditor.vue'
-import type { ApiExtractProcessorConfig, ApiProcessorConfig, ApiProcessorExtractorConfig } from '../types/api'
+import type {
+  ApiExtractProcessorConfig,
+  ApiProcessorConfig,
+  ApiProcessorExtractorConfig,
+  ApiResponseSnapshot,
+  ApiSqlProcessorConfig,
+  DbConnectionItem,
+} from '../types/api'
 
 const props = defineProps<{
   modelValue: ApiProcessorConfig[]
   stage: 'pre' | 'post'
+  dbConnections?: DbConnectionItem[]
+  latestResponse?: ApiResponseSnapshot | null
 }>()
 
 const emit = defineEmits<{
@@ -22,18 +32,22 @@ const activeProcessorId = defineModel<string | null>('activeId', { default: null
 const processorOptions = computed(() => props.stage === 'pre'
   ? [
       { label: '脚本', value: 'SCRIPT' },
+      { label: 'SQL', value: 'SQL' },
       { label: '等待', value: 'TIME_WAITING' },
     ]
   : [
       { label: '脚本', value: 'SCRIPT' },
+      { label: 'SQL', value: 'SQL' },
       { label: '提取', value: 'EXTRACT' },
       { label: '等待', value: 'TIME_WAITING' },
     ])
 
 const activeProcessor = computed(() => processors.value.find(item => item.id === activeProcessorId.value) ?? null)
+const enabledDbConnections = computed(() => (props.dbConnections ?? []).filter(item => item.status === 1))
 
 const processorTypeLabelMap: Record<ApiProcessorConfig['processorType'], string> = {
   SCRIPT: '脚本处理器',
+  SQL: 'SQL 处理器',
   TIME_WAITING: '等待处理器',
   EXTRACT: '提取处理器',
 }
@@ -64,7 +78,23 @@ function createProcessor(type: ApiProcessorConfig['processorType']): ApiProcesso
       processorType: 'SCRIPT',
       name: props.stage === 'pre' ? '前置脚本' : '后置脚本',
       enabled: true,
+      scriptLanguage: 'JAVASCRIPT',
       script: '',
+    }
+  }
+  if (type === 'SQL') {
+    return {
+      id,
+      processorType: 'SQL',
+      name: 'SQL',
+      enabled: true,
+      script: '',
+      dataSourceId: null,
+      dataSourceName: '',
+      queryTimeout: 30000,
+      variableNames: '',
+      extractParams: [],
+      resultVariable: '',
     }
   }
   if (type === 'TIME_WAITING') {
@@ -91,18 +121,13 @@ function processorTypeLabel(type: ApiProcessorConfig['processorType']) {
 
 function displayProcessorName(processor: ApiProcessorConfig) {
   const name = (processor.name || '').trim()
-  if (processor.processorType === 'SCRIPT') {
-    if (name === 'Pre Script' || name === '前置脚本') {
-      return '前置脚本'
-    }
-    if (name === 'Post Script' || name === '后置脚本') {
-      return '后置脚本'
-    }
+  if (processor.processorType === 'SCRIPT' && (name === 'Pre Script' || name === 'Post Script')) {
+    return props.stage === 'pre' ? '前置脚本' : '后置脚本'
   }
-  if (processor.processorType === 'TIME_WAITING' && (name === 'Wait' || name === '等待')) {
+  if (processor.processorType === 'TIME_WAITING' && name === 'Wait') {
     return '等待'
   }
-  if (processor.processorType === 'EXTRACT' && (name === 'Extract' || name === '提取')) {
+  if (processor.processorType === 'EXTRACT' && name === 'Extract') {
     return '提取'
   }
   return name || processorTypeLabel(processor.processorType)
@@ -111,8 +136,15 @@ function displayProcessorName(processor: ApiProcessorConfig) {
 function emptyExtractor(): ApiProcessorExtractorConfig {
   return {
     name: '',
-    sourceType: 'BODY_JSONPATH',
-    expression: '',
+    variableName: '',
+    variableType: 'TEMPORARY',
+    extractType: 'JSON_PATH',
+    extractScope: 'BODY',
+    expression: '$.data.id',
+    expressionMatchingRule: 'EXPRESSION',
+    resultMatchingRule: 'RANDOM',
+    resultMatchingRuleNum: 1,
+    responseFormat: 'JSON',
     enabled: true,
   }
 }
@@ -132,8 +164,7 @@ function duplicateProcessor(id: string) {
   if (index < 0) {
     return
   }
-  const target = processors.value[index]
-  const copy = cloneProcessorConfig(target)
+  const copy = cloneProcessorConfig(processors.value[index])
   copy.id = `${copy.id}-copy-${Math.random().toString(36).slice(2, 8)}`
   copy.name = `${copy.name || '处理器'} 副本`
   const next = [...processors.value]
@@ -162,8 +193,20 @@ function moveProcessor(id: string, delta: number) {
   updateProcessors(next)
 }
 
+function addSqlExtractParam(processor: ApiSqlProcessorConfig) {
+  processor.extractParams = [...(processor.extractParams ?? []), { key: '', value: '', enabled: true }]
+}
+
+function removeSqlExtractParam(processor: ApiSqlProcessorConfig, index: number) {
+  processor.extractParams = (processor.extractParams ?? []).filter((_, currentIndex) => currentIndex !== index)
+}
+
 function addExtractorRow(processor: ApiExtractProcessorConfig) {
   processor.extractors.push(emptyExtractor())
+}
+
+function duplicateExtractorRow(processor: ApiExtractProcessorConfig, index: number) {
+  processor.extractors.splice(index + 1, 0, JSON.parse(JSON.stringify(processor.extractors[index])) as ApiProcessorExtractorConfig)
 }
 
 function removeExtractorRow(processor: ApiExtractProcessorConfig, index: number) {
@@ -171,6 +214,97 @@ function removeExtractorRow(processor: ApiExtractProcessorConfig, index: number)
   if (!processor.extractors.length) {
     processor.extractors.push(emptyExtractor())
   }
+}
+
+function clearScript(processor: { script: string }) {
+  processor.script = ''
+}
+
+function formatScript(processor: { script: string }) {
+  processor.script = processor.script.trim()
+}
+
+function syncDataSourceName(processor: ApiSqlProcessorConfig) {
+  const dataSource = enabledDbConnections.value.find(item => item.id === processor.dataSourceId)
+  processor.dataSourceName = dataSource?.connectionName ?? ''
+}
+
+function testExtractor(extractor: ApiProcessorExtractorConfig) {
+  const response = props.latestResponse
+  if (!response) {
+    ElMessage.warning('请先执行一次接口，再测试提取表达式')
+    return
+  }
+  try {
+    const values = extractPreviewValues(extractor, response)
+    if (!values.length) {
+      ElMessage.warning('未匹配到结果')
+      return
+    }
+    ElMessage.success(values.length === 1 ? `匹配结果：${values[0]}` : `匹配 ${values.length} 条：${values.slice(0, 3).join(', ')}`)
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+}
+
+function extractPreviewValues(extractor: ApiProcessorExtractorConfig, response: ApiResponseSnapshot) {
+  const scope = extractor.extractScope || legacyScope(extractor.sourceType)
+  const type = extractor.extractType || legacyType(extractor.sourceType)
+  const expression = extractor.expression || ''
+  const source = scope === 'RESPONSE_HEADERS'
+    ? JSON.stringify(response.headers ?? {})
+    : scope === 'RESPONSE_CODE'
+      ? String(response.statusCode ?? '')
+      : response.body ?? ''
+  if (type === 'REGEX') {
+    return [...source.matchAll(new RegExp(expression, 'gs'))].map(match => extractor.expressionMatchingRule === 'GROUP' && match[1] ? match[1] : match[0])
+  }
+  if (type === 'X_PATH') {
+    const doc = new DOMParser().parseFromString(source, extractor.responseFormat === 'HTML' ? 'text/html' : 'text/xml')
+    const result = doc.evaluate(expression, doc, null, XPathResult.ANY_TYPE, null)
+    const values: string[] = []
+    let node = result.iterateNext()
+    while (node) {
+      values.push(node.textContent ?? '')
+      node = result.iterateNext()
+    }
+    return values.length ? values : [String(doc.evaluate(expression, doc, null, XPathResult.STRING_TYPE, null).stringValue)]
+  }
+  return [readSimpleJsonPath(JSON.parse(source || '{}'), expression)]
+}
+
+function readSimpleJsonPath(value: unknown, expression: string) {
+  let current: any = value
+  let normalized = expression.trim().replace(/^\$\.?/, '')
+  if (!normalized) {
+    return JSON.stringify(current)
+  }
+  for (const segment of normalized.split('.')) {
+    const match = segment.match(/^([\w-]+)(?:\[(\d+)])?$/)
+    if (!match) {
+      return ''
+    }
+    current = current?.[match[1]]
+    if (match[2] !== undefined) {
+      current = current?.[Number(match[2])]
+    }
+  }
+  return typeof current === 'string' ? current : JSON.stringify(current ?? '')
+}
+
+function legacyScope(sourceType?: string) {
+  if (sourceType === 'HEADER') {
+    return 'RESPONSE_HEADERS'
+  }
+  if (sourceType === 'STATUS_CODE') {
+    return 'RESPONSE_CODE'
+  }
+  return 'BODY'
+}
+
+function legacyType(sourceType?: string) {
+  return sourceType === 'BODY_JSONPATH' || !sourceType ? 'JSON_PATH' : 'REGEX'
 }
 </script>
 
@@ -200,7 +334,7 @@ function removeExtractorRow(processor: ApiExtractProcessorConfig, index: number)
         >
           <div class="processor-list-item-main">
             <el-switch v-model="item.enabled" size="small" @click.stop />
-              <div class="processor-list-copy">
+            <div class="processor-list-copy">
               <div class="processor-list-title">{{ displayProcessorName(item) }}</div>
               <div class="processor-list-meta">{{ processorTypeLabel(item.processorType) }}</div>
             </div>
@@ -211,14 +345,14 @@ function removeExtractorRow(processor: ApiExtractProcessorConfig, index: number)
           </div>
         </button>
       </div>
-      <div v-else class="processor-empty">暂无处理器。</div>
+      <div v-else class="processor-empty">暂无处理器</div>
     </aside>
 
-    <section class="processor-detail">
+    <section class="processor-detail" :data-testid="`processor-detail-${props.stage}`">
       <template v-if="activeProcessor">
         <div class="processor-detail-header">
-          <div class="processor-detail-fields">
-            <el-input v-model="activeProcessor.name" placeholder="处理器名称" />
+          <div class="processor-detail-fields" :data-testid="`processor-name-${props.stage}`">
+            <el-input v-model="activeProcessor.name" placeholder="处理器名称" :data-testid="`processor-name-${props.stage}`" />
             <el-tag size="small" effect="plain">{{ processorTypeLabel(activeProcessor.processorType) }}</el-tag>
           </div>
           <div class="processor-detail-actions">
@@ -228,51 +362,137 @@ function removeExtractorRow(processor: ApiExtractProcessorConfig, index: number)
         </div>
 
         <template v-if="activeProcessor.processorType === 'SCRIPT'">
-          <MonacoCodeEditor
-            v-model="activeProcessor.script"
-            language="text"
-            height="360px"
-          />
+          <div class="editor-actions">
+            <el-tag size="small">JavaScript</el-tag>
+            <el-button size="small" @click="clearScript(activeProcessor)">清空</el-button>
+            <el-button size="small" @click="formatScript(activeProcessor)">格式化</el-button>
+          </div>
+          <MonacoCodeEditor v-model="activeProcessor.script" language="text" height="360px" />
+          <div class="processor-hint">可使用 setVar/getVar/removeVar/log/fail/request/response。</div>
+        </template>
+
+        <template v-else-if="activeProcessor.processorType === 'SQL'">
+          <div class="processor-form-grid">
+            <label :data-testid="`processor-sql-datasource-${props.stage}`">
+              <span>数据库连接</span>
+              <el-select v-model="activeProcessor.dataSourceId" filterable clearable placeholder="选择数据库连接" :data-testid="`processor-sql-datasource-${props.stage}`" @change="syncDataSourceName(activeProcessor)">
+                <el-option v-for="item in enabledDbConnections" :key="item.id" :label="item.connectionName" :value="item.id" />
+              </el-select>
+            </label>
+            <label :data-testid="`processor-sql-timeout-${props.stage}`">
+              <span>查询超时(ms)</span>
+              <el-input-number v-model="activeProcessor.queryTimeout" :min="1000" :step="1000" :data-testid="`processor-sql-timeout-${props.stage}`" />
+            </label>
+            <label :data-testid="`processor-sql-variable-names-${props.stage}`">
+              <span>按列存储变量</span>
+              <el-input v-model="activeProcessor.variableNames" placeholder="id,email" :data-testid="`processor-sql-variable-names-${props.stage}`" />
+            </label>
+            <label :data-testid="`processor-sql-result-variable-${props.stage}`">
+              <span>完整结果变量</span>
+              <el-input v-model="activeProcessor.resultVariable" placeholder="resultJson" :data-testid="`processor-sql-result-variable-${props.stage}`" />
+            </label>
+          </div>
+          <MonacoCodeEditor v-model="activeProcessor.script" language="text" height="260px" :data-testid="`processor-sql-script-${props.stage}`" />
+          <div class="extractor-table compact">
+            <div class="extractor-table-header two-cols">
+              <span>变量名</span>
+              <span>列名</span>
+              <span></span>
+            </div>
+            <div v-for="(param, index) in activeProcessor.extractParams || []" :key="`${activeProcessor.id}-sql-${index}`" class="extractor-table-row two-cols" :data-testid="`processor-sql-extract-row-${props.stage}-${index}`">
+              <el-input v-model="param.key" placeholder="变量名" :data-testid="`processor-sql-extract-key-${props.stage}-${index}`" />
+              <el-input v-model="param.value" placeholder="列名" :data-testid="`processor-sql-extract-value-${props.stage}-${index}`" />
+              <button type="button" class="ghost-action danger" @click="removeSqlExtractParam(activeProcessor, index)">删除</button>
+            </div>
+            <button type="button" class="add-row-button" @click="addSqlExtractParam(activeProcessor)">+ 添加提取参数</button>
+          </div>
         </template>
 
         <template v-else-if="activeProcessor.processorType === 'TIME_WAITING'">
           <div class="processor-form-row">
-            <span class="processor-form-label">等待时长（毫秒）</span>
-            <el-input-number v-model="activeProcessor.delayMs" :min="1" :step="100" />
+            <span class="processor-form-label">等待时长(ms)</span>
+            <el-input-number v-model="activeProcessor.delayMs" :min="1" :max="600000" :step="100" />
           </div>
         </template>
 
         <template v-else>
           <div class="extractor-table">
-            <div class="extractor-table-header">
-              <span>变量名</span>
-              <span>来源</span>
-              <span>表达式</span>
-              <span></span>
-            </div>
             <div
               v-for="(extractor, index) in activeProcessor.extractors"
               :key="`${activeProcessor.id}-${index}`"
-              class="extractor-table-row"
+              class="extractor-card"
+              :data-testid="`processor-extract-row-${props.stage}-${index}`"
             >
-              <label class="extractor-name-cell">
+              <div class="extractor-card-head">
                 <el-checkbox v-model="extractor.enabled" />
-                <el-input v-model="extractor.name" placeholder="变量名" />
-              </label>
-              <el-select v-model="extractor.sourceType">
-                <el-option label="BODY_JSONPATH" value="BODY_JSONPATH" />
-                <el-option label="HEADER" value="HEADER" />
-                <el-option label="STATUS_CODE" value="STATUS_CODE" />
-              </el-select>
-              <el-input v-model="extractor.expression" :placeholder="extractor.sourceType === 'STATUS_CODE' ? '可选' : '提取表达式'" />
-              <button type="button" class="ghost-action danger" @click="removeExtractorRow(activeProcessor, index)">删除</button>
+                <el-input v-model="extractor.variableName" placeholder="变量名" :data-testid="`processor-extract-variable-${props.stage}-${index}`" />
+                <el-select v-model="extractor.variableType" :data-testid="`processor-extract-variable-type-${props.stage}-${index}`">
+                  <el-option label="临时变量" value="TEMPORARY" />
+                  <el-option label="环境变量" value="ENVIRONMENT" />
+                </el-select>
+                <el-button text type="primary" @click="testExtractor(extractor)">测试</el-button>
+                <el-button text type="primary" @click="duplicateExtractorRow(activeProcessor, index)">复制</el-button>
+                <el-button text type="danger" @click="removeExtractorRow(activeProcessor, index)">删除</el-button>
+              </div>
+              <div class="processor-form-grid">
+                <label>
+                  <span>提取方式</span>
+                  <el-select v-model="extractor.extractType" :data-testid="`processor-extract-type-${props.stage}-${index}`">
+                    <el-option label="JSONPath" value="JSON_PATH" />
+                    <el-option label="XPath" value="X_PATH" />
+                    <el-option label="正则" value="REGEX" />
+                  </el-select>
+                </label>
+                <label>
+                  <span>提取范围</span>
+                  <el-select v-model="extractor.extractScope" :data-testid="`processor-extract-scope-${props.stage}-${index}`">
+                    <el-option label="响应体" value="BODY" />
+                    <el-option label="反转义响应体" value="UNESCAPED_BODY" />
+                    <el-option label="文档响应体" value="BODY_AS_DOCUMENT" />
+                    <el-option label="URL" value="URL" />
+                    <el-option label="请求头" value="REQUEST_HEADERS" />
+                    <el-option label="响应头" value="RESPONSE_HEADERS" />
+                    <el-option label="响应码" value="RESPONSE_CODE" />
+                    <el-option label="响应消息" value="RESPONSE_MESSAGE" />
+                  </el-select>
+                </label>
+                <label>
+                  <span>匹配规则</span>
+                  <el-select v-model="extractor.resultMatchingRule" :data-testid="`processor-extract-match-rule-${props.stage}-${index}`">
+                    <el-option label="随机" value="RANDOM" />
+                    <el-option label="指定" value="SPECIFIC" />
+                    <el-option label="全部" value="ALL" />
+                  </el-select>
+                </label>
+                <label>
+                  <span>指定序号</span>
+                  <el-input-number v-model="extractor.resultMatchingRuleNum" :min="1" :step="1" :data-testid="`processor-extract-match-num-${props.stage}-${index}`" />
+                </label>
+                <label>
+                  <span>正则分组</span>
+                  <el-select v-model="extractor.expressionMatchingRule" :data-testid="`processor-extract-regex-rule-${props.stage}-${index}`">
+                    <el-option label="完整匹配" value="EXPRESSION" />
+                    <el-option label="分组 1" value="GROUP" />
+                  </el-select>
+                </label>
+                <label>
+                  <span>响应格式</span>
+                  <el-select v-model="extractor.responseFormat" :data-testid="`processor-extract-response-format-${props.stage}-${index}`">
+                    <el-option label="JSON" value="JSON" />
+                    <el-option label="XML" value="XML" />
+                    <el-option label="HTML" value="HTML" />
+                  </el-select>
+                </label>
+              </div>
+              <el-input v-model="extractor.expression" placeholder="提取表达式" :data-testid="`processor-extract-expression-${props.stage}-${index}`" />
+              <el-input v-model="extractor.description" placeholder="描述" :data-testid="`processor-extract-description-${props.stage}-${index}`" />
             </div>
-            <button type="button" class="add-row-button" @click="addExtractorRow(activeProcessor)">+ 添加一行</button>
+            <button type="button" class="add-row-button" @click="addExtractorRow(activeProcessor)">+ 添加提取行</button>
           </div>
         </template>
       </template>
 
-      <div v-else class="processor-empty">请选择一个处理器进行编辑。</div>
+      <div v-else class="processor-empty">请选择一个处理器进行编辑</div>
     </section>
   </div>
 </template>
@@ -330,14 +550,19 @@ function removeExtractorRow(processor: ApiExtractProcessorConfig, index: number)
   background: color-mix(in srgb, var(--el-color-primary) 8%, white);
 }
 
-.processor-list-item-main {
+.processor-list-item-main,
+.processor-detail-header,
+.processor-detail-fields,
+.processor-form-row,
+.editor-actions,
+.extractor-card-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-width: 0;
 }
 
-.processor-list-copy {
+.processor-list-copy,
+.processor-detail-fields {
   min-width: 0;
 }
 
@@ -352,7 +577,10 @@ function removeExtractorRow(processor: ApiExtractProcessorConfig, index: number)
   color: var(--el-text-color-primary);
 }
 
-.processor-list-meta {
+.processor-list-meta,
+.processor-form-label,
+.processor-hint,
+.processor-form-grid span {
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
@@ -387,15 +615,6 @@ function removeExtractorRow(processor: ApiExtractProcessorConfig, index: number)
   padding: 12px;
 }
 
-.processor-detail-header,
-.processor-detail-fields,
-.processor-form-row,
-.extractor-name-cell {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
 .processor-detail-header {
   justify-content: space-between;
   flex-wrap: wrap;
@@ -410,27 +629,64 @@ function removeExtractorRow(processor: ApiExtractProcessorConfig, index: number)
   flex: 1;
 }
 
-.processor-form-label {
-  color: var(--el-text-color-secondary);
+.processor-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.processor-form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .extractor-table {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+}
+
+.extractor-table.compact {
+  gap: 8px;
 }
 
 .extractor-table-header,
 .extractor-table-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(140px, 180px) minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
+}
+
+.extractor-table-header.two-cols,
+.extractor-table-row.two-cols {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
 }
 
 .extractor-table-header {
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+
+.extractor-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+}
+
+.extractor-card-head {
+  flex-wrap: wrap;
+}
+
+.extractor-card-head :deep(.el-input) {
+  width: 180px;
+}
+
+.extractor-card-head :deep(.el-select) {
+  width: 140px;
 }
 
 .add-row-button {
@@ -451,7 +707,8 @@ function removeExtractorRow(processor: ApiExtractProcessorConfig, index: number)
 }
 
 @media (max-width: 1100px) {
-  .processor-editor {
+  .processor-editor,
+  .processor-form-grid {
     grid-template-columns: 1fr;
   }
 }

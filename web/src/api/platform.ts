@@ -30,6 +30,7 @@ import type {
   CreateCaseDirectoryPayload,
   CreateCasePayload,
   CreateEnvPayload,
+  CreateDbConnectionPayload,
   CreateUserPayload,
   CreateBugPayload,
   UpdateBugPayload,
@@ -46,6 +47,8 @@ import type {
   CurrentUser,
   CreateAiGenerationTaskPayload,
   DashboardSummary,
+  DbConnectionItem,
+  DbConnectionTestResult,
   EnvConfigItem,
   GenerateAiCasesPayload,
   PageResponse,
@@ -60,6 +63,7 @@ import type {
   TaskItem,
   TaskTransitionPayload,
   TestAiCaseConfigResponse,
+  TestDbConnectionPayload,
   UpdateAiGenerationTaskPayload,
   MoveCaseDirectoryPayload,
   RenameCaseDirectoryPayload,
@@ -75,7 +79,7 @@ import type {
   WorkspaceItem,
 } from '../types/api'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080/api'
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
 export function resolveApiUrl(path: string) {
   if (!path) {
@@ -828,6 +832,43 @@ export const platformApi = {
       method: 'PUT',
       workspaceCode,
       body: JSON.stringify({ status }),
+    })
+  },
+  getSettingsDbConnections(workspaceCode: string) {
+    return request<PageResponse<DbConnectionItem>>('/settings/db-connections', { workspaceCode })
+  },
+  createSettingsDbConnection(workspaceCode: string, payload: CreateDbConnectionPayload) {
+    return request<DbConnectionItem>('/settings/db-connections', {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  updateSettingsDbConnection(workspaceCode: string, id: number, payload: CreateDbConnectionPayload) {
+    return request<DbConnectionItem>(`/settings/db-connections/${id}`, {
+      method: 'PUT',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  deleteSettingsDbConnection(workspaceCode: string, id: number) {
+    return request<void>(`/settings/db-connections/${id}`, {
+      method: 'DELETE',
+      workspaceCode,
+    })
+  },
+  updateSettingsDbConnectionStatus(workspaceCode: string, id: number, status: number) {
+    return request<DbConnectionItem>(`/settings/db-connections/${id}/status`, {
+      method: 'PUT',
+      workspaceCode,
+      body: JSON.stringify({ status }),
+    })
+  },
+  testSettingsDbConnection(workspaceCode: string, payload: TestDbConnectionPayload) {
+    return request<DbConnectionTestResult>('/settings/db-connections/test', {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
     })
   },
   getBugStats(workspaceCode: string) {

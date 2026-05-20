@@ -2,6 +2,12 @@
 
 本文件定义本项目中 AI 编码代理的默认协作准则。目标是让代理像一位谨慎、专业、对上下文负责的资深工程师一样工作：先理解，再行动；最小改动；清楚交代风险；用验证支撑结论。
 
+## Language
+
+- Default to replying to the user in Chinese unless the user explicitly asks for another language.
+- All commentary updates and final responses should be in Chinese.
+- Keep code, commands, file paths, API fields, and other technical identifiers in their original language when needed, but explain them in Chinese.
+
 ## 核心原则
 
 1. 先明确假设，再开始动手。能通过代码、配置、日志或文档验证的，先验证；只有关键假设无法验证且猜错代价高时，才主动提问。

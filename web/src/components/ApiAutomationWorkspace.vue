@@ -18,6 +18,7 @@ import type {
   ApiAuthCredential,
   ApiDefinitionDetail,
   ApiDefinitionItem,
+  DbConnectionItem,
   ApiEnvironmentItem,
   ApiExtractorConfig,
   ApiKeyValue,
@@ -100,6 +101,7 @@ const definitions = ref<ApiDefinitionItem[]>([])
 const scenarios = ref<ApiScenarioItem[]>([])
 const environments = ref<ApiEnvironmentItem[]>([])
 const variableSets = ref<ApiVariableSetItem[]>([])
+const dbConnections = ref<DbConnectionItem[]>([])
 const tasks = ref<TaskItem[]>([])
 const reports = ref<ReportItem[]>([])
 const users = ref<UserItem[]>([])
@@ -1106,6 +1108,17 @@ function normalizeProcessorList(processors: ApiProcessorConfig[], stage: 'pre' |
         delayMs: processor.delayMs || 1000,
       } satisfies ApiProcessorConfig
     }
+    if (processor.processorType === 'SQL') {
+      return {
+        ...emptyProcessor('SQL', stage),
+        ...processor,
+        id: baseId,
+        enabled: processor.enabled !== false,
+        script: processor.script || '',
+        queryTimeout: processor.queryTimeout || 30000,
+        extractParams: processor.extractParams || [],
+      } satisfies ApiProcessorConfig
+    }
     return {
       ...emptyProcessor('EXTRACT', stage),
       ...processor,
@@ -1145,7 +1158,19 @@ function emptyAssertion(): ApiAssertionConfig {
 }
 
 function emptyProcessorExtractor(): ApiProcessorExtractorConfig {
-  return { name: '', sourceType: 'BODY_JSONPATH', expression: '$.data.id', enabled: true }
+  return {
+    name: '',
+    variableName: '',
+    variableType: 'TEMPORARY',
+    extractType: 'JSON_PATH',
+    extractScope: 'BODY',
+    expression: '$.data.id',
+    expressionMatchingRule: 'EXPRESSION',
+    resultMatchingRule: 'RANDOM',
+    resultMatchingRuleNum: 1,
+    responseFormat: 'JSON',
+    enabled: true,
+  }
 }
 
 function emptyProcessor(type: ApiProcessorConfig['processorType'], stage: 'pre' | 'post'): ApiProcessorConfig {
@@ -1166,6 +1191,21 @@ function emptyProcessor(type: ApiProcessorConfig['processorType'], stage: 'pre' 
       name: 'Wait',
       enabled: true,
       delayMs: 1000,
+    }
+  }
+  if (type === 'SQL') {
+    return {
+      id,
+      processorType: 'SQL',
+      name: 'SQL',
+      enabled: true,
+      script: '',
+      dataSourceId: null,
+      dataSourceName: '',
+      queryTimeout: 30000,
+      variableNames: '',
+      extractParams: [],
+      resultVariable: '',
     }
   }
   return {
@@ -1487,6 +1527,7 @@ async function bootstrap() {
       scenarioPage,
       envPage,
       variablePage,
+      dbConnectionPage,
       taskPage,
       reportPage,
       userList,
@@ -1496,6 +1537,7 @@ async function bootstrap() {
       platformApi.getApiScenarios(workspaceCode.value),
       platformApi.getApiEnvironments(workspaceCode.value),
       platformApi.getApiVariableSets(workspaceCode.value),
+      platformApi.getSettingsDbConnections(workspaceCode.value),
       platformApi.getTasks(workspaceCode.value),
       platformApi.getReports(workspaceCode.value),
       platformApi.getUsers(),
@@ -1505,6 +1547,7 @@ async function bootstrap() {
     scenarios.value = scenarioPage.items
     environments.value = envPage.items
     variableSets.value = variablePage.items
+    dbConnections.value = dbConnectionPage.items
     tasks.value = taskPage.items
     reports.value = reportPage.items
     users.value = userList
@@ -2476,12 +2519,12 @@ function formatTimeLabel(value?: string | null) {
                     <span :class="['request-method-option', requestMethodClass(method)]">{{ method }}</span>
                   </el-option>
                 </el-select>
-                <el-input v-model="definitionForm.requestConfig.path" class="request-url-input" placeholder="&#35831;&#36755;&#20837;&#21253;&#21547; http/https &#30340;&#23436;&#25972; URL &#25110;&#25509;&#21475;&#36335;&#24452;" />
+                <el-input v-model="definitionForm.requestConfig.path" class="request-url-input" placeholder="&#35831;&#36755;&#20837;&#21253;&#21547; http/https &#30340;&#23436;&#25972; URL &#25110;&#25509;&#21475;&#36335;&#24452;" data-testid="definition-url-input" />
                 <el-button @click="promptImportCurl">Curl</el-button>
                 <el-button type="primary" :disabled="!definitionForm.id || !canWriteDefinition" :loading="saving" @click="debugDefinition">
                   &#26381;&#21153;&#31471;&#25191;&#34892;
                 </el-button>
-                <el-dropdown split-button :disabled="!canWriteDefinition" :loading="saving" @click="saveDefinition">
+                <el-dropdown split-button :disabled="!canWriteDefinition" :loading="saving" data-testid="definition-save-button" @click="saveDefinition">
                   &#20445;&#23384;
                   <template #dropdown>
                     <el-dropdown-menu>
@@ -2501,8 +2544,8 @@ function formatTimeLabel(value?: string | null) {
                   <span v-if="queryEnabledCount" class="ms-like-tab-badge">{{ queryEnabledCount }}</span>
                 </button>
                 <button :class="['ms-like-top-tab', { active: activeRequestTab === 'auth' }]" @click="activeRequestTab = 'auth'">Auth</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'pre' }]" @click="activeRequestTab = 'pre'">前置处理</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'post' }]" @click="activeRequestTab = 'post'">后置处理</button>
+                <button data-testid="request-tab-pre" :class="['ms-like-top-tab', { active: activeRequestTab === 'pre' }]" @click="activeRequestTab = 'pre'">前置处理</button>
+                <button data-testid="request-tab-post" :class="['ms-like-top-tab', { active: activeRequestTab === 'post' }]" @click="activeRequestTab = 'post'">后置处理</button>
                 <button :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="activeRequestTab = 'tests'">断言</button>
                 <button :class="['ms-like-top-tab', { active: activeRequestTab === 'settings' }]" @click="activeRequestTab = 'settings'">&#35774;&#32622;</button>
               </div>
@@ -2761,21 +2804,25 @@ function formatTimeLabel(value?: string | null) {
                 </template>
 
                 <template v-else-if="activeRequestTab === 'pre'">
-                  <div class="request-section">
+                  <div class="request-section" data-testid="pre-processors-section">
                     <ApiProcessorEditor
                       v-model="definitionForm.preProcessors"
                       v-model:active-id="activePreProcessorId"
                       stage="pre"
+                      :db-connections="dbConnections"
+                      :latest-response="currentResponseStep?.response ?? null"
                     />
                   </div>
                 </template>
 
                 <template v-else-if="activeRequestTab === 'post'">
-                  <div class="request-section">
+                  <div class="request-section" data-testid="post-processors-section">
                     <ApiProcessorEditor
                       v-model="definitionForm.postProcessors"
                       v-model:active-id="activePostProcessorId"
                       stage="post"
+                      :db-connections="dbConnections"
+                      :latest-response="currentResponseStep?.response ?? null"
                     />
                   </div>
                 </template>
@@ -2875,7 +2922,7 @@ function formatTimeLabel(value?: string | null) {
 
                 <template v-else>
                   <div class="request-section ms-like-form-panel">
-                    <div class="ms-like-form-row">
+                    <div class="ms-like-form-row" data-testid="definition-name-input">
                       <div class="ms-like-form-label">&#25509;&#21475;&#21517;&#31216;</div>
                       <el-input v-model="definitionForm.name" class="ms-like-form-control" placeholder="&#25509;&#21475;&#21517;&#31216;" />
                     </div>

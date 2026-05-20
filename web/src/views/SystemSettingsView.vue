@@ -9,10 +9,12 @@ import { useWorkspace } from '../composables/useWorkspace'
 import { useWorkspaceAccess } from '../composables/useWorkspaceAccess'
 import type {
   BatchWorkspaceMemberPayload,
+  CreateDbConnectionPayload,
   CreateEnvPayload,
   CreateParamPayload,
   CreateUserPayload,
   CreateWorkspacePayload,
+  DbConnectionItem,
   EnvConfigItem,
   ParamSetItem,
   UpdateUserPayload,
@@ -24,7 +26,7 @@ import type {
 const { workspaceCode, isAllScope } = useWorkspace()
 const { currentUser, isPlatformAdmin, isSuperAdmin } = useWorkspaceAccess()
 
-const activeTab = ref<'env' | 'param' | 'workspace' | 'member'>('env')
+const activeTab = ref<'env' | 'param' | 'dbConnection' | 'workspace' | 'member'>('env')
 const memberViewMode = ref<'user' | 'workspace'>('user')
 const memberWorkspaceCode = ref('')
 
@@ -34,18 +36,21 @@ const userLoading = ref(false)
 const memberLoading = ref(false)
 const envLoading = ref(false)
 const paramLoading = ref(false)
+const dbConnectionLoading = ref(false)
 
 const savingWorkspace = ref(false)
 const savingUser = ref(false)
 const savingMember = ref(false)
 const savingEnv = ref(false)
 const savingParam = ref(false)
+const savingDbConnection = ref(false)
 
 const workspaces = ref<WorkspaceItem[]>([])
 const users = ref<UserItem[]>([])
 const members = ref<WorkspaceMemberItem[]>([])
 const envs = ref<EnvConfigItem[]>([])
 const params = ref<ParamSetItem[]>([])
+const dbConnections = ref<DbConnectionItem[]>([])
 
 const workspaceFilters = reactive({
   keyword: '',
@@ -67,6 +72,11 @@ const envFilters = reactive({
 const paramFilters = reactive({
   keyword: '',
   paramType: '',
+  status: '',
+})
+const dbConnectionFilters = reactive({
+  keyword: '',
+  dbType: '',
   status: '',
 })
 
@@ -116,6 +126,15 @@ const paramFilterMemory = usePersistedFilters({
     status: '',
   },
 })
+const dbConnectionFilterMemory = usePersistedFilters({
+  storageKey: 'settings-db-connection-filters-v1',
+  filters: dbConnectionFilters,
+  defaults: {
+    keyword: '',
+    dbType: '',
+    status: '',
+  },
+})
 
 const workspaceDialogVisible = ref(false)
 const workspaceDialogMode = ref<'create' | 'edit'>('create')
@@ -126,6 +145,8 @@ const envDialogVisible = ref(false)
 const envDialogMode = ref<'create' | 'edit'>('create')
 const paramDialogVisible = ref(false)
 const paramDialogMode = ref<'create' | 'edit'>('create')
+const dbConnectionDialogVisible = ref(false)
+const dbConnectionDialogMode = ref<'create' | 'edit'>('create')
 
 const workspaceForm = reactive<CreateWorkspacePayload>({
   workspaceCode: '',
@@ -163,6 +184,21 @@ const paramForm = reactive<CreateParamPayload & { id: number | null; workspaceCo
   paramType: 'TOKEN',
   paramName: '',
   contentJson: '',
+  status: 1,
+})
+
+const dbConnectionForm = reactive<CreateDbConnectionPayload & { id: number | null; workspaceCode: string; status: number }>({
+  id: null,
+  workspaceCode: '',
+  connectionName: '',
+  dbType: 'MYSQL',
+  driverClassName: '',
+  jdbcUrl: '',
+  username: '',
+  password: '',
+  poolMax: 10,
+  timeoutMs: 5000,
+  description: '',
   status: 1,
 })
 
@@ -252,6 +288,20 @@ const filteredParams = computed(() => {
   })
 })
 
+const filteredDbConnections = computed(() => {
+  const keyword = dbConnectionFilters.keyword.trim().toLowerCase()
+  return dbConnections.value.filter((item) => {
+    const matchKeyword = !keyword
+      || item.connectionName.toLowerCase().includes(keyword)
+      || item.jdbcUrl.toLowerCase().includes(keyword)
+      || item.workspaceName.toLowerCase().includes(keyword)
+      || (item.username ?? '').toLowerCase().includes(keyword)
+    const matchType = !dbConnectionFilters.dbType || item.dbType === dbConnectionFilters.dbType
+    const matchStatus = !dbConnectionFilters.status || String(item.status) === dbConnectionFilters.status
+    return matchKeyword && matchType && matchStatus
+  })
+})
+
 function resetWorkspaceFilters() {
   workspaceFilterMemory.reset()
 }
@@ -272,6 +322,10 @@ function resetEnvFilters() {
 
 function resetParamFilters() {
   paramFilterMemory.reset()
+}
+
+function resetDbConnectionFilters() {
+  dbConnectionFilterMemory.reset()
 }
 
 function resolveWorkspaceName(code: string) {
@@ -341,6 +395,21 @@ function resetParamForm() {
   paramForm.status = 1
 }
 
+function resetDbConnectionForm() {
+  dbConnectionForm.id = null
+  dbConnectionForm.workspaceCode = isAllScope.value ? '' : workspaceCode.value
+  dbConnectionForm.connectionName = ''
+  dbConnectionForm.dbType = 'MYSQL'
+  dbConnectionForm.driverClassName = 'com.mysql.cj.jdbc.Driver'
+  dbConnectionForm.jdbcUrl = ''
+  dbConnectionForm.username = ''
+  dbConnectionForm.password = ''
+  dbConnectionForm.poolMax = 10
+  dbConnectionForm.timeoutMs = 5000
+  dbConnectionForm.description = ''
+  dbConnectionForm.status = 1
+}
+
 async function loadBaseData() {
   pageLoading.value = true
   workspaceLoading.value = true
@@ -390,13 +459,16 @@ async function loadMembers() {
 async function loadScopedSettings() {
   envLoading.value = true
   paramLoading.value = true
+  dbConnectionLoading.value = true
   try {
-    const [envPage, paramPage] = await Promise.all([
+    const [envPage, paramPage, dbConnectionPage] = await Promise.all([
       platformApi.getSettingsEnvs(workspaceCode.value),
       platformApi.getSettingsParams(workspaceCode.value),
+      platformApi.getSettingsDbConnections(workspaceCode.value),
     ])
     envs.value = envPage.items
     params.value = paramPage.items
+    dbConnections.value = dbConnectionPage.items
   }
   catch (error) {
     ElMessage.error((error as Error).message)
@@ -404,6 +476,7 @@ async function loadScopedSettings() {
   finally {
     envLoading.value = false
     paramLoading.value = false
+    dbConnectionLoading.value = false
   }
 }
 
@@ -819,6 +892,116 @@ async function toggleParamStatus(row: ParamSetItem) {
   }
 }
 
+function openDbConnectionCreate() {
+  resetDbConnectionForm()
+  dbConnectionDialogMode.value = 'create'
+  dbConnectionDialogVisible.value = true
+}
+
+function openDbConnectionEdit(row: DbConnectionItem) {
+  dbConnectionDialogMode.value = 'edit'
+  dbConnectionForm.id = row.id
+  dbConnectionForm.workspaceCode = row.workspaceCode
+  dbConnectionForm.connectionName = row.connectionName
+  dbConnectionForm.dbType = row.dbType
+  dbConnectionForm.driverClassName = row.driverClassName ?? ''
+  dbConnectionForm.jdbcUrl = row.jdbcUrl
+  dbConnectionForm.username = row.username ?? ''
+  dbConnectionForm.password = ''
+  dbConnectionForm.poolMax = row.poolMax
+  dbConnectionForm.timeoutMs = row.timeoutMs
+  dbConnectionForm.description = row.description ?? ''
+  dbConnectionForm.status = row.status
+  dbConnectionDialogVisible.value = true
+}
+
+function dbConnectionPayload() {
+  return {
+    workspaceCode: dbConnectionForm.workspaceCode,
+    connectionName: dbConnectionForm.connectionName.trim(),
+    dbType: dbConnectionForm.dbType,
+    driverClassName: dbConnectionForm.driverClassName?.trim() || null,
+    jdbcUrl: dbConnectionForm.jdbcUrl.trim(),
+    username: dbConnectionForm.username?.trim() || null,
+    password: dbConnectionForm.password || null,
+    poolMax: dbConnectionForm.poolMax,
+    timeoutMs: dbConnectionForm.timeoutMs,
+    description: dbConnectionForm.description?.trim() || null,
+    status: dbConnectionForm.status,
+  }
+}
+
+async function submitDbConnection() {
+  if (!dbConnectionForm.connectionName.trim() || !dbConnectionForm.jdbcUrl.trim()) {
+    ElMessage.error('请先填写连接名称和 JDBC URL')
+    return
+  }
+  if (isAllScope.value && !dbConnectionForm.workspaceCode) {
+    ElMessage.error('全部空间视角下必须选择目标空间')
+    return
+  }
+  savingDbConnection.value = true
+  try {
+    const payload = dbConnectionPayload()
+    if (dbConnectionDialogMode.value === 'create') {
+      await platformApi.createSettingsDbConnection(workspaceCode.value, payload)
+      ElMessage.success('数据库连接已创建')
+    } else if (dbConnectionForm.id !== null) {
+      await platformApi.updateSettingsDbConnection(workspaceCode.value, dbConnectionForm.id, payload)
+      ElMessage.success('数据库连接已更新')
+    }
+    dbConnectionDialogVisible.value = false
+    await loadScopedSettings()
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    savingDbConnection.value = false
+  }
+}
+
+async function testDbConnection(row?: DbConnectionItem) {
+  try {
+    const payload = row ? { id: row.id } : { id: dbConnectionForm.id, ...dbConnectionPayload() }
+    const result = await platformApi.testSettingsDbConnection(workspaceCode.value, payload)
+    ElMessage.success(result.message || '连接测试成功')
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+}
+
+async function confirmDeleteDbConnection(row: DbConnectionItem) {
+  try {
+    await ElMessageBox.confirm(`确认删除数据库连接“${row.connectionName}”吗？`, '删除数据库连接', { type: 'warning' })
+    await platformApi.deleteSettingsDbConnection(workspaceCode.value, row.id)
+    ElMessage.success('数据库连接已删除')
+    await loadScopedSettings()
+  }
+  catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error((error as Error).message)
+    }
+  }
+}
+
+async function toggleDbConnectionStatus(row: DbConnectionItem) {
+  const nextStatus = row.status === 1 ? 0 : 1
+  const actionText = nextStatus === 1 ? '启用' : '停用'
+  try {
+    await ElMessageBox.confirm(`确认${actionText}数据库连接“${row.connectionName}”吗？`, `${actionText}数据库连接`, { type: 'warning' })
+    await platformApi.updateSettingsDbConnectionStatus(workspaceCode.value, row.id, nextStatus)
+    ElMessage.success(`数据库连接已${actionText}`)
+    await loadScopedSettings()
+  }
+  catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error((error as Error).message)
+    }
+  }
+}
+
 watch(() => userForm.roleCode, (value) => {
   if (value === 'ADMIN') {
     userForm.workspaceCodes = []
@@ -833,6 +1016,7 @@ watch(memberWorkspaceCode, () => {
 watch(() => workspaceCode.value, () => {
   resetEnvForm()
   resetParamForm()
+  resetDbConnectionForm()
   void loadScopedSettings()
 })
 
@@ -842,6 +1026,7 @@ onMounted(async () => {
   memberFilterMemory.load()
   envFilterMemory.load()
   paramFilterMemory.load()
+  dbConnectionFilterMemory.load()
   memberWorkspaceCode.value = memberFilters.workspaceCode
   await loadBaseData()
   await Promise.all([loadMembers(), loadScopedSettings()])
@@ -960,6 +1145,62 @@ onMounted(async () => {
                 <el-button text type="primary" @click="openParamEdit(row)">编辑</el-button>
                 <el-button text type="warning" @click="toggleParamStatus(row)">{{ row.status === 1 ? '停用' : '启用' }}</el-button>
                 <el-button text type="danger" @click="confirmDeleteParam(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+
+        <el-tab-pane label="数据库连接" name="dbConnection" data-testid="db-connection-tab-pane">
+          <ListToolbar title="数据库连接">
+            <template #filters>
+              <el-input v-model="dbConnectionFilters.keyword" placeholder="搜索名称 / JDBC URL / 用户 / 空间" clearable class="toolbar-filter-input" />
+              <el-select v-model="dbConnectionFilters.dbType" placeholder="数据库类型" clearable class="toolbar-filter-select">
+                <el-option label="MYSQL" value="MYSQL" />
+                <el-option label="H2" value="H2" />
+              </el-select>
+              <el-select v-model="dbConnectionFilters.status" placeholder="状态" clearable class="toolbar-filter-select">
+                <el-option label="启用" value="1" />
+                <el-option label="停用" value="0" />
+              </el-select>
+              <el-button text @click="resetDbConnectionFilters()">
+                <el-icon><RefreshRight /></el-icon>
+                重置
+              </el-button>
+            </template>
+            <template #actions>
+              <el-button v-if="canManageSettings" type="primary" data-testid="db-connection-create" @click="openDbConnectionCreate">
+                <el-icon><Plus /></el-icon>
+                新增连接
+              </el-button>
+            </template>
+          </ListToolbar>
+
+          <el-table v-loading="dbConnectionLoading" :data="filteredDbConnections" size="large">
+            <el-table-column v-if="isAllScope" prop="workspaceName" label="所属空间" min-width="160" />
+            <el-table-column prop="connectionName" label="连接名称" min-width="180" />
+            <el-table-column prop="dbType" label="类型" width="100" />
+            <el-table-column prop="jdbcUrl" label="JDBC URL" min-width="320">
+              <template #default="{ row }">
+                <span class="cell-ellipsis">{{ row.jdbcUrl }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="username" label="用户" width="150" />
+            <el-table-column label="密码" width="90">
+              <template #default="{ row }">{{ row.passwordConfigured ? '已配置' : '-' }}</template>
+            </el-table-column>
+            <el-table-column label="状态" width="120">
+              <template #default="{ row }">
+                <span class="status-pill" :class="row.status === 1 ? 'status-success' : 'status-neutral'">
+                  {{ row.status === 1 ? '启用' : '停用' }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column v-if="canManageSettings" label="操作" width="300">
+              <template #default="{ row }">
+                <el-button text type="primary" @click="openDbConnectionEdit(row)">编辑</el-button>
+                <el-button text type="success" @click="testDbConnection(row)">测试</el-button>
+                <el-button text type="warning" @click="toggleDbConnectionStatus(row)">{{ row.status === 1 ? '停用' : '启用' }}</el-button>
+                <el-button text type="danger" @click="confirmDeleteDbConnection(row)">删除</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -1290,6 +1531,64 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="paramDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="savingParam" @click="submitParam">保存</el-button>
+      </template>
+    </el-dialog>
+    <el-dialog v-model="dbConnectionDialogVisible" :title="dbConnectionDialogMode === 'create' ? '新增数据库连接' : '编辑数据库连接'" width="720px" data-testid="db-connection-dialog">
+      <el-form label-width="120px">
+        <el-form-item v-if="isAllScope" label="目标空间" required data-testid="db-connection-workspace">
+          <el-select v-model="dbConnectionForm.workspaceCode" placeholder="请选择目标空间" data-testid="db-connection-workspace">
+            <el-option
+              v-for="item in writableWorkspaceOptions"
+              :key="item.code"
+              :label="item.name"
+              :value="item.code"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="连接名称" required data-testid="db-connection-name">
+          <el-input v-model="dbConnectionForm.connectionName" data-testid="db-connection-name" />
+        </el-form-item>
+        <el-form-item label="数据库类型" required data-testid="db-connection-type">
+          <el-select v-model="dbConnectionForm.dbType" data-testid="db-connection-type">
+            <el-option label="MYSQL" value="MYSQL" />
+            <el-option label="H2" value="H2" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="驱动类" data-testid="db-connection-driver">
+          <el-input v-model="dbConnectionForm.driverClassName" placeholder="com.mysql.cj.jdbc.Driver / org.h2.Driver" data-testid="db-connection-driver" />
+        </el-form-item>
+        <el-form-item label="JDBC URL" required data-testid="db-connection-url">
+          <el-input v-model="dbConnectionForm.jdbcUrl" placeholder="jdbc:mysql://127.0.0.1:3306/demo" data-testid="db-connection-url" />
+        </el-form-item>
+        <el-form-item label="用户名" data-testid="db-connection-username">
+          <el-input v-model="dbConnectionForm.username" data-testid="db-connection-username" />
+        </el-form-item>
+        <el-form-item label="密码" data-testid="db-connection-password">
+          <el-input v-model="dbConnectionForm.password" show-password :placeholder="dbConnectionDialogMode === 'edit' ? '留空表示沿用旧密码' : ''" data-testid="db-connection-password" />
+        </el-form-item>
+        <el-form-item label="查询超时" data-testid="db-connection-timeout">
+          <el-input-number v-model="dbConnectionForm.timeoutMs" :min="1000" :step="1000" data-testid="db-connection-timeout" />
+        </el-form-item>
+        <el-form-item label="连接池上限" data-testid="db-connection-pool">
+          <el-input-number v-model="dbConnectionForm.poolMax" :min="1" :step="1" data-testid="db-connection-pool" />
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-switch
+            v-model="dbConnectionForm.status"
+            :active-value="1"
+            :inactive-value="0"
+            active-text="启用"
+            inactive-text="停用"
+          />
+        </el-form-item>
+        <el-form-item label="描述" data-testid="db-connection-description">
+          <el-input v-model="dbConnectionForm.description" type="textarea" :rows="3" data-testid="db-connection-description" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dbConnectionDialogVisible = false">取消</el-button>
+        <el-button @click="testDbConnection()">测试连接</el-button>
+        <el-button type="primary" :loading="savingDbConnection" @click="submitDbConnection">保存</el-button>
       </template>
     </el-dialog>
   </section>

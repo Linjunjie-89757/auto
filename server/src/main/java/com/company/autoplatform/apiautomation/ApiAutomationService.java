@@ -10,6 +10,9 @@ import com.company.autoplatform.execution.TaskEntity;
 import com.company.autoplatform.execution.TaskMapper;
 import com.company.autoplatform.settings.EnvConfigEntity;
 import com.company.autoplatform.settings.EnvConfigMapper;
+import com.company.autoplatform.settings.DbConnectionCrypto;
+import com.company.autoplatform.settings.DbConnectionEntity;
+import com.company.autoplatform.settings.DbConnectionMapper;
 import com.company.autoplatform.settings.ParamSetEntity;
 import com.company.autoplatform.settings.ParamSetMapper;
 import com.company.autoplatform.workspace.WorkspaceEntity;
@@ -18,9 +21,17 @@ import com.company.autoplatform.workspace.WorkspaceService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jayway.jsonpath.JsonPath;
+import org.jsoup.Jsoup;
+import org.jsoup.helper.W3CDom;
 import org.springframework.stereotype.Service;
+import org.springframework.web.util.HtmlUtils;
+import org.w3c.dom.Document;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
 
 import java.io.IOException;
+import java.io.StringReader;
 import java.net.URI;
 import java.net.http.HttpHeaders;
 import java.net.URLEncoder;
@@ -31,6 +42,12 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -39,13 +56,18 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.UUID;
 import java.util.concurrent.Flow;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.xpath.XPathConstants;
+import javax.xml.xpath.XPathFactory;
 
 import static com.company.autoplatform.apiautomation.ApiAutomationModels.*;
 
@@ -63,6 +85,8 @@ public class ApiAutomationService {
     private final ApiRunStepResultMapper runStepResultMapper;
     private final EnvConfigMapper envConfigMapper;
     private final ParamSetMapper paramSetMapper;
+    private final DbConnectionMapper dbConnectionMapper;
+    private final DbConnectionCrypto dbConnectionCrypto;
     private final TaskMapper taskMapper;
     private final ReportMapper reportMapper;
     private final WorkspaceService workspaceService;
@@ -75,6 +99,8 @@ public class ApiAutomationService {
             ApiRunStepResultMapper runStepResultMapper,
             EnvConfigMapper envConfigMapper,
             ParamSetMapper paramSetMapper,
+            DbConnectionMapper dbConnectionMapper,
+            DbConnectionCrypto dbConnectionCrypto,
             TaskMapper taskMapper,
             ReportMapper reportMapper,
             WorkspaceService workspaceService,
@@ -85,6 +111,8 @@ public class ApiAutomationService {
         this.runStepResultMapper = runStepResultMapper;
         this.envConfigMapper = envConfigMapper;
         this.paramSetMapper = paramSetMapper;
+        this.dbConnectionMapper = dbConnectionMapper;
+        this.dbConnectionCrypto = dbConnectionCrypto;
         this.taskMapper = taskMapper;
         this.reportMapper = reportMapper;
         this.workspaceService = workspaceService;
@@ -474,6 +502,8 @@ public class ApiAutomationService {
     }
 
     private void fillEnvironmentEntity(EnvConfigEntity entity, WorkspaceEntity workspace, ApiEnvironmentRequest request) {
+        EnvironmentConfigPayload previousConfig = ApiAutomationJsonSupport.read(entity.getConfigJson(), EnvironmentConfigPayload.class,
+                new EnvironmentConfigPayload(List.of(), emptyAuthConfig(), 10000, List.of()));
         entity.setWorkspaceId(workspace.getId());
         entity.setEnvType(API_ENV_TYPE);
         entity.setEnvName(request.name().trim());
@@ -481,7 +511,8 @@ public class ApiAutomationService {
         entity.setConfigJson(ApiAutomationJsonSupport.toJson(new EnvironmentConfigPayload(
                 defaultList(request.headers()),
                 normalizeAuth(request.authConfig()),
-                request.timeoutMs() == null || request.timeoutMs() <= 0 ? 10000 : request.timeoutMs()
+                request.timeoutMs() == null || request.timeoutMs() <= 0 ? 10000 : request.timeoutMs(),
+                defaultList(previousConfig.variables())
         ), "Failed to serialize environment config"));
         entity.setStatus(request.status() == null ? 1 : normalizeStatus(request.status()));
     }
@@ -584,7 +615,7 @@ public class ApiAutomationService {
     private ApiEnvironmentItem toEnvironmentItem(EnvConfigEntity entity) {
         WorkspaceEntity workspace = workspaceService.requireWorkspaceById(entity.getWorkspaceId());
         EnvironmentConfigPayload config = ApiAutomationJsonSupport.read(entity.getConfigJson(), EnvironmentConfigPayload.class,
-                new EnvironmentConfigPayload(List.of(), emptyAuthConfig(), 10000));
+                new EnvironmentConfigPayload(List.of(), emptyAuthConfig(), 10000, List.of()));
         return new ApiEnvironmentItem(
                 entity.getId(),
                 workspace.getWorkspaceCode(),
@@ -632,6 +663,11 @@ public class ApiAutomationService {
     private ExecutionContext buildExecutionContext(Long workspaceId, Long environmentId, Long variableSetId) {
         ResolvedEnvironment environment = resolveEnvironment(workspaceId, environmentId);
         Map<String, String> variables = new LinkedHashMap<>();
+        for (ApiVariableItem variable : defaultList(environment.variables())) {
+            if (variable.name() != null) {
+                variables.put(variable.name(), variable.value() == null ? "" : variable.value());
+            }
+        }
         if (variableSetId != null) {
             ParamSetEntity variableSet = requireVariableSet(variableSetId);
             if (!variableSet.getWorkspaceId().equals(workspaceId)) {
@@ -648,19 +684,21 @@ public class ApiAutomationService {
 
     private ResolvedEnvironment resolveEnvironment(Long workspaceId, Long environmentId) {
         if (environmentId == null) {
-            return new ResolvedEnvironment("", List.of(), emptyAuthConfig(), 10000);
+            return new ResolvedEnvironment(null, "", List.of(), emptyAuthConfig(), 10000, List.of());
         }
         EnvConfigEntity environment = requireEnvironment(environmentId);
         if (!environment.getWorkspaceId().equals(workspaceId)) {
             throw new BadRequestException("Environment must belong to the same workspace");
         }
         EnvironmentConfigPayload config = ApiAutomationJsonSupport.read(environment.getConfigJson(), EnvironmentConfigPayload.class,
-                new EnvironmentConfigPayload(List.of(), emptyAuthConfig(), 10000));
+                new EnvironmentConfigPayload(List.of(), emptyAuthConfig(), 10000, List.of()));
         return new ResolvedEnvironment(
+                environment.getId(),
                 environment.getBaseUrl(),
                 defaultList(config.headers()),
                 normalizeAuth(config.authConfig()),
-                config.timeoutMs() == null ? 10000 : config.timeoutMs()
+                config.timeoutMs() == null ? 10000 : config.timeoutMs(),
+                defaultList(config.variables())
         );
     }
 
@@ -711,7 +749,7 @@ public class ApiAutomationService {
             List<ApiProcessorResult> processorResults = new ArrayList<>();
             List<ApiExtractionResult> extractionResults = new ArrayList<>();
 
-            executeProcessors("PRE", preProcessors, requestConfig, null, variables, processorResults, extractionResults);
+            executeProcessors("PRE", preProcessors, definition.getWorkspaceId(), requestConfig, null, null, environment, variables, processorResults, extractionResults);
 
             ApiRequestConfigInput resolvedConfig = toRequestConfig(requestConfig);
             ResolvedRequest request = resolveRequest(resolvedConfig, environment, variables);
@@ -725,7 +763,8 @@ public class ApiAutomationService {
                     response.body(),
                     response.headers().firstValue("content-type").orElse(null)
             );
-            executeProcessors("POST", postProcessors, requestConfig, responseSnapshot, variables, processorResults, extractionResults);
+            ApiRequestSnapshot requestSnapshot = new ApiRequestSnapshot(request.method(), request.url(), sentRequest.headers(), request.body());
+            executeProcessors("POST", postProcessors, definition.getWorkspaceId(), requestConfig, requestSnapshot, responseSnapshot, environment, variables, processorResults, extractionResults);
 
             List<ApiAssertionResult> assertionResults = evaluateAssertions(assertions, responseSnapshot, durationMs, variables);
             boolean success = assertionResults.stream().allMatch(ApiAssertionResult::success);
@@ -738,7 +777,7 @@ public class ApiAutomationService {
                     definition.getId(),
                     success,
                     durationMs,
-                    new ApiRequestSnapshot(request.method(), request.url(), sentRequest.headers(), request.body()),
+                    requestSnapshot,
                     responseSnapshot,
                     assertionResults,
                     extractionResults,
@@ -958,8 +997,11 @@ public class ApiAutomationService {
     private void executeProcessors(
             String stage,
             List<ApiProcessorInput> processors,
+            Long workspaceId,
             MutableRequestConfig requestConfig,
+            ApiRequestSnapshot requestSnapshot,
             ApiResponseSnapshot response,
+            ResolvedEnvironment environment,
             Map<String, String> variables,
             List<ApiProcessorResult> processorResults,
             List<ApiExtractionResult> extractionResults
@@ -984,15 +1026,16 @@ public class ApiAutomationService {
                         logs = scriptResult.logs();
                     }
                     case "TIME_WAITING" -> {
-                        int delayMs = processor.delayMs() == null || processor.delayMs() <= 0 ? 1000 : processor.delayMs();
+                        int delayMs = normalizeDelayMs(processor.delayMs());
                         sleep(delayMs);
                         message = "Waited " + delayMs + " ms";
                     }
+                    case "SQL" -> message = executeSqlProcessor(processor, workspaceId, variables);
                     case "EXTRACT" -> {
                         if (!"POST".equals(stage)) {
                             throw new BadRequestException("Extract processor is only supported in post-processors");
                         }
-                        message = applyProcessorExtractors(defaultList(processor.extractors()), response, variables, extractionResults);
+                        message = applyProcessorExtractors(defaultList(processor.extractors()), requestSnapshot, response, environment, variables, extractionResults);
                     }
                     default -> throw new BadRequestException("Unsupported processor type: " + type);
                 }
@@ -1064,9 +1107,150 @@ public class ApiAutomationService {
         }
     }
 
+    private String executeSqlProcessor(ApiProcessorInput processor, Long workspaceId, Map<String, String> variables) {
+        if (processor.dataSourceId() == null) {
+            throw new BadRequestException("SQL processor requires a database connection");
+        }
+        String sql = replaceVariables(Optional.ofNullable(processor.script()).orElse(""), variables);
+        if (sql.isBlank()) {
+            throw new BadRequestException("SQL processor content cannot be blank");
+        }
+        DbConnectionEntity connection = requireActiveDbConnection(processor.dataSourceId(), workspaceId);
+        String driverClassName = connection.getDriverClassName();
+        if (driverClassName != null && !driverClassName.isBlank()) {
+            try {
+                Class.forName(driverClassName.trim());
+            } catch (ClassNotFoundException exception) {
+                throw new BadRequestException("JDBC driver is not available: " + driverClassName);
+            }
+        }
+        String password = dbConnectionCrypto.decrypt(connection.getPasswordEncrypted());
+        try (Connection jdbcConnection = DriverManager.getConnection(
+                connection.getJdbcUrl(),
+                connection.getUsername() == null ? "" : connection.getUsername(),
+                password
+        );
+             Statement statement = jdbcConnection.createStatement()) {
+            int timeoutSeconds = Math.max(1, (processor.queryTimeout() == null ? 30000 : processor.queryTimeout()) / 1000);
+            statement.setQueryTimeout(timeoutSeconds);
+            boolean hasResultSet = statement.execute(sql);
+            if (hasResultSet) {
+                try (ResultSet resultSet = statement.getResultSet()) {
+                    List<Map<String, Object>> rows = readSqlRows(resultSet);
+                    writeSqlVariables(processor, rows, variables);
+                    return "SQL returned " + rows.size() + " row(s)";
+                }
+            }
+            int affectedRows = statement.getUpdateCount();
+            if (processor.resultVariable() != null && !processor.resultVariable().isBlank()) {
+                variables.put(processor.resultVariable(), String.valueOf(affectedRows));
+            }
+            return "SQL affected " + affectedRows + " row(s)";
+        } catch (SQLException exception) {
+            throw new BadRequestException("SQL execution failed: " + exception.getMessage());
+        }
+    }
+
+    private DbConnectionEntity requireActiveDbConnection(Long id, Long workspaceId) {
+        DbConnectionEntity entity = dbConnectionMapper.selectById(id);
+        if (entity == null) {
+            throw new BadRequestException("Database connection not found");
+        }
+        if (!entity.getWorkspaceId().equals(workspaceId)) {
+            throw new BadRequestException("Database connection must belong to the same workspace");
+        }
+        if (!Integer.valueOf(1).equals(entity.getStatus())) {
+            throw new BadRequestException("Database connection is disabled");
+        }
+        return entity;
+    }
+
+    private List<Map<String, Object>> readSqlRows(ResultSet resultSet) throws SQLException {
+        ResultSetMetaData metaData = resultSet.getMetaData();
+        int columnCount = metaData.getColumnCount();
+        List<Map<String, Object>> rows = new ArrayList<>();
+        while (resultSet.next()) {
+            LinkedHashMap<String, Object> row = new LinkedHashMap<>();
+            for (int index = 1; index <= columnCount; index++) {
+                String label = metaData.getColumnLabel(index);
+                if (label == null || label.isBlank()) {
+                    label = metaData.getColumnName(index);
+                }
+                row.put(label, resultSet.getObject(index));
+            }
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private void writeSqlVariables(ApiProcessorInput processor, List<Map<String, Object>> rows, Map<String, String> variables) {
+        List<String> variableNames = splitCsv(processor.variableNames());
+        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+            Map<String, Object> row = rows.get(rowIndex);
+            for (String variableName : variableNames) {
+                Object value = findSqlColumnValue(row, variableName);
+                variables.put(variableName + "_" + (rowIndex + 1), stringifySqlValue(value));
+            }
+        }
+        if (!rows.isEmpty()) {
+            Map<String, Object> firstRow = rows.get(0);
+            for (ApiKeyValueInput param : defaultList(processor.extractParams())) {
+                if (param == null || param.key() == null || param.key().isBlank()) {
+                    continue;
+                }
+                String columnName = Optional.ofNullable(param.value()).orElse("").trim();
+                variables.put(param.key().trim(), stringifySqlValue(findSqlColumnValue(firstRow, columnName)));
+            }
+        }
+        if (processor.resultVariable() != null && !processor.resultVariable().isBlank()) {
+            variables.put(processor.resultVariable(), ApiAutomationJsonSupport.toJson(rows, "Failed to serialize SQL result"));
+        }
+    }
+
+    private Object findSqlColumnValue(Map<String, Object> row, String columnName) {
+        if (row == null || columnName == null || columnName.isBlank()) {
+            return null;
+        }
+        if (row.containsKey(columnName)) {
+            return row.get(columnName);
+        }
+        for (Map.Entry<String, Object> entry : row.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(columnName)) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
+    private String stringifySqlValue(Object value) {
+        if (value == null) {
+            return "";
+        }
+        if (value instanceof Number || value instanceof Boolean || value instanceof CharSequence) {
+            return String.valueOf(value);
+        }
+        return ApiAutomationJsonSupport.toJson(value, "Failed to serialize SQL value");
+    }
+
+    private List<String> splitCsv(String value) {
+        if (value == null || value.isBlank()) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (String item : value.split(",")) {
+            String normalized = item.trim();
+            if (!normalized.isBlank()) {
+                result.add(normalized);
+            }
+        }
+        return result;
+    }
+
     private String applyProcessorExtractors(
             List<ApiProcessorExtractItemInput> extractors,
+            ApiRequestSnapshot request,
             ApiResponseSnapshot response,
+            ResolvedEnvironment environment,
             Map<String, String> variables,
             List<ApiExtractionResult> extractionResults
     ) {
@@ -1078,17 +1262,201 @@ public class ApiAutomationService {
             if (Boolean.FALSE.equals(extractor.enabled())) {
                 continue;
             }
+            String variableName = blankToFallback(firstNonBlank(extractor.variableName(), extractor.name()), "");
             try {
-                String value = extractValue(response, extractor.sourceType(), extractor.expression());
-                variables.put(extractor.name(), value);
-                extractionResults.add(new ApiExtractionResult(extractor.name(), true, value, "Extracted"));
+                if (variableName.isBlank()) {
+                    throw new BadRequestException("Extractor variable name cannot be blank");
+                }
+                String value = extractProcessorValue(extractor, request, response);
+                variables.put(variableName, value);
+                if ("ENVIRONMENT".equalsIgnoreCase(extractor.variableType())) {
+                    persistEnvironmentVariable(environment, variableName, value);
+                }
+                extractionResults.add(new ApiExtractionResult(variableName, true, value, "Extracted"));
                 successCount++;
             } catch (Exception exception) {
-                extractionResults.add(new ApiExtractionResult(extractor.name(), false, null, exception.getMessage()));
+                extractionResults.add(new ApiExtractionResult(variableName, false, null, exception.getMessage()));
                 throw new BadRequestException(exception.getMessage());
             }
         }
         return "Extracted " + successCount + " variable(s)";
+    }
+
+    private String extractProcessorValue(ApiProcessorExtractItemInput extractor, ApiRequestSnapshot request, ApiResponseSnapshot response) throws Exception {
+        String scope = blankToFallback(firstNonBlank(extractor.extractScope(), legacyExtractScope(extractor.sourceType())), "BODY").toUpperCase(Locale.ROOT);
+        String type = blankToFallback(firstNonBlank(extractor.extractType(), legacyExtractType(extractor.sourceType())), "JSON_PATH").toUpperCase(Locale.ROOT);
+        String expression = Optional.ofNullable(extractor.expression()).orElse("");
+        String source = resolveExtractSource(scope, expression, request, response);
+        String legacySourceType = Optional.ofNullable(extractor.sourceType()).orElse("").trim().toUpperCase(Locale.ROOT);
+        if ("HEADER".equals(legacySourceType) || "STATUS_CODE".equals(legacySourceType)) {
+            return source;
+        }
+        List<String> matches = switch (type) {
+            case "JSON_PATH" -> extractByJsonPath(source, expression);
+            case "X_PATH" -> extractByXPath(source, expression, extractor.responseFormat());
+            case "REGEX" -> extractByRegex(source, expression, extractor.expressionMatchingRule());
+            default -> throw new BadRequestException("Unsupported extract type: " + type);
+        };
+        if (matches.isEmpty()) {
+            throw new BadRequestException("No match found for extractor expression");
+        }
+        String rule = blankToFallback(extractor.resultMatchingRule(), "RANDOM").toUpperCase(Locale.ROOT);
+        if ("ALL".equals(rule)) {
+            return ApiAutomationJsonSupport.toJson(matches, "Failed to serialize extractor matches");
+        }
+        if ("SPECIFIC".equals(rule)) {
+            int index = Math.max(1, extractor.resultMatchingRuleNum() == null ? 1 : extractor.resultMatchingRuleNum()) - 1;
+            if (index >= matches.size()) {
+                throw new BadRequestException("Specific match index is out of range");
+            }
+            return matches.get(index);
+        }
+        return matches.get(ThreadLocalRandom.current().nextInt(matches.size()));
+    }
+
+    private String resolveExtractSource(String scope, String expression, ApiRequestSnapshot request, ApiResponseSnapshot response) {
+        return switch (scope) {
+            case "BODY" -> response == null || response.body() == null ? "" : response.body();
+            case "UNESCAPED_BODY" -> HtmlUtils.htmlUnescape(response == null || response.body() == null ? "" : response.body());
+            case "BODY_AS_DOCUMENT" -> response == null || response.body() == null ? "" : response.body();
+            case "URL" -> request == null || request.url() == null ? "" : request.url();
+            case "REQUEST_HEADERS" -> resolveHeaderSource(request == null ? null : request.headers(), expression);
+            case "RESPONSE_HEADERS" -> resolveHeaderSource(response == null ? null : response.headers(), expression);
+            case "RESPONSE_CODE" -> response == null || response.statusCode() == null ? "" : String.valueOf(response.statusCode());
+            case "RESPONSE_MESSAGE" -> responseMessage(response == null ? null : response.statusCode());
+            default -> throw new BadRequestException("Unsupported extract scope: " + scope);
+        };
+    }
+
+    private String resolveHeaderSource(Map<String, String> headers, String expression) {
+        if (headers == null || headers.isEmpty()) {
+            return "";
+        }
+        if (expression != null && !expression.isBlank()) {
+            for (Map.Entry<String, String> entry : headers.entrySet()) {
+                if (entry.getKey().equalsIgnoreCase(expression.trim())) {
+                    return Optional.ofNullable(entry.getValue()).orElse("");
+                }
+            }
+        }
+        return ApiAutomationJsonSupport.toJson(headers, "Failed to serialize headers");
+    }
+
+    private List<String> extractByJsonPath(String source, String expression) {
+        if (source == null || source.isBlank()) {
+            return List.of();
+        }
+        Object value = JsonPath.read(source, expression == null || expression.isBlank() ? "$" : expression);
+        return flattenExtractedValue(value);
+    }
+
+    private List<String> extractByXPath(String source, String expression, String responseFormat) throws Exception {
+        if (source == null || source.isBlank() || expression == null || expression.isBlank()) {
+            return List.of();
+        }
+        Document document;
+        if ("HTML".equalsIgnoreCase(responseFormat)) {
+            document = new W3CDom().fromJsoup(Jsoup.parse(source));
+        } else {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(false);
+            document = factory.newDocumentBuilder().parse(new InputSource(new StringReader(source)));
+        }
+        Object nodeSet = XPathFactory.newInstance().newXPath().evaluate(expression, document, XPathConstants.NODESET);
+        if (nodeSet instanceof NodeList nodes && nodes.getLength() > 0) {
+            List<String> values = new ArrayList<>();
+            for (int index = 0; index < nodes.getLength(); index++) {
+                values.add(Optional.ofNullable(nodes.item(index).getTextContent()).orElse(""));
+            }
+            return values;
+        }
+        Object result = XPathFactory.newInstance().newXPath().evaluate(expression, document, XPathConstants.STRING);
+        return result == null || String.valueOf(result).isBlank() ? List.of() : List.of(String.valueOf(result));
+    }
+
+    private List<String> extractByRegex(String source, String expression, String matchingRule) {
+        if (source == null || expression == null || expression.isBlank()) {
+            return List.of();
+        }
+        List<String> matches = new ArrayList<>();
+        Matcher matcher = Pattern.compile(expression, Pattern.DOTALL).matcher(source);
+        boolean useGroup = "GROUP".equalsIgnoreCase(matchingRule);
+        while (matcher.find()) {
+            if (useGroup && matcher.groupCount() > 0) {
+                matches.add(matcher.group(1));
+            } else {
+                matches.add(matcher.group());
+            }
+        }
+        return matches;
+    }
+
+    private List<String> flattenExtractedValue(Object value) {
+        if (value == null) {
+            return List.of();
+        }
+        if (value instanceof List<?> list) {
+            return list.stream().map(this::stringifyExtractedValue).toList();
+        }
+        return List.of(stringifyExtractedValue(value));
+    }
+
+    private String stringifyExtractedValue(Object value) {
+        if (value == null) {
+            return "";
+        }
+        if (value instanceof Number || value instanceof Boolean || value instanceof CharSequence) {
+            return String.valueOf(value);
+        }
+        return ApiAutomationJsonSupport.toJson(value, "Failed to serialize extracted value");
+    }
+
+    private void persistEnvironmentVariable(ResolvedEnvironment environment, String name, String value) {
+        if (environment == null || environment.environmentId() == null) {
+            throw new BadRequestException("Environment variable extraction requires a selected environment");
+        }
+        EnvConfigEntity entity = requireEnvironment(environment.environmentId());
+        EnvironmentConfigPayload config = ApiAutomationJsonSupport.read(entity.getConfigJson(), EnvironmentConfigPayload.class,
+                new EnvironmentConfigPayload(List.of(), emptyAuthConfig(), 10000, List.of()));
+        List<ApiVariableItem> nextVariables = new ArrayList<>();
+        boolean updated = false;
+        for (ApiVariableItem item : defaultList(config.variables())) {
+            if (item.name() != null && item.name().equals(name)) {
+                nextVariables.add(new ApiVariableItem(name, value, item.sensitive()));
+                updated = true;
+            } else {
+                nextVariables.add(item);
+            }
+        }
+        if (!updated) {
+            nextVariables.add(new ApiVariableItem(name, value, false));
+        }
+        entity.setConfigJson(ApiAutomationJsonSupport.toJson(new EnvironmentConfigPayload(
+                defaultList(config.headers()),
+                normalizeAuth(config.authConfig()),
+                config.timeoutMs() == null ? 10000 : config.timeoutMs(),
+                nextVariables
+        ), "Failed to serialize environment config"));
+        entity.setUpdatedAt(LocalDateTime.now());
+        envConfigMapper.updateById(entity);
+    }
+
+    private String responseMessage(Integer statusCode) {
+        if (statusCode == null) {
+            return "";
+        }
+        return switch (statusCode) {
+            case 200 -> "OK";
+            case 201 -> "Created";
+            case 202 -> "Accepted";
+            case 204 -> "No Content";
+            case 400 -> "Bad Request";
+            case 401 -> "Unauthorized";
+            case 403 -> "Forbidden";
+            case 404 -> "Not Found";
+            case 500 -> "Internal Server Error";
+            default -> "";
+        };
     }
 
     private List<ApiAssertionResult> evaluateAssertions(
@@ -1500,8 +1868,17 @@ public class ApiAutomationService {
                 true,
                 null,
                 null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
                 legacyExtractors.stream()
-                        .map(item -> new ApiProcessorExtractItemInput(item.name(), item.sourceType(), item.expression(), true))
+                        .map(item -> new ApiProcessorExtractItemInput(item.name(), item.sourceType(), item.expression(), true,
+                                item.name(), null, "TEMPORARY", null, null, null, null, null, null))
                         .toList()
         ));
     }
@@ -1541,8 +1918,17 @@ public class ApiAutomationService {
                     true,
                     null,
                     null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
                     defaultList(legacyExtractors).stream()
-                            .map(item -> new ApiProcessorExtractItemInput(item.name(), item.sourceType(), item.expression(), true))
+                            .map(item -> new ApiProcessorExtractItemInput(item.name(), item.sourceType(), item.expression(), true,
+                                    item.name(), null, "TEMPORARY", null, null, null, null, null, null))
                             .toList()
             ));
         }
@@ -1568,15 +1954,34 @@ public class ApiAutomationService {
                     type,
                     blankToNull(processor.name()),
                     !Boolean.FALSE.equals(processor.enabled()),
+                    blankToNull(processor.description()),
+                    "SCRIPT".equals(type) ? "JAVASCRIPT" : blankToNull(processor.scriptLanguage()),
                     Optional.ofNullable(processor.script()).orElse(""),
-                    processor.delayMs() == null || processor.delayMs() <= 0 ? 1000 : processor.delayMs(),
+                    normalizeDelayMs(processor.delayMs()),
+                    processor.dataSourceId(),
+                    blankToNull(processor.dataSourceName()),
+                    processor.queryTimeout() == null || processor.queryTimeout() <= 0 ? 30000 : processor.queryTimeout(),
+                    blankToNull(processor.variableNames()),
+                    defaultList(processor.extractParams()).stream()
+                            .filter(item -> item != null && item.key() != null && !item.key().isBlank())
+                            .toList(),
+                    blankToNull(processor.resultVariable()),
                     defaultList(processor.extractors()).stream()
-                            .filter(item -> item != null && !blankToFallback(item.name(), "").isBlank())
+                            .filter(item -> item != null && !blankToFallback(firstNonBlank(item.variableName(), item.name()), "").isBlank())
                             .map(item -> new ApiProcessorExtractItemInput(
-                                    item.name().trim(),
-                                    blankToFallback(item.sourceType(), "BODY_JSONPATH").toUpperCase(),
+                                    blankToFallback(firstNonBlank(item.name(), item.variableName()), "").trim(),
+                                    blankToNull(item.sourceType()) == null ? null : item.sourceType().trim().toUpperCase(),
                                     Optional.ofNullable(item.expression()).orElse(""),
-                                    !Boolean.FALSE.equals(item.enabled())
+                                    !Boolean.FALSE.equals(item.enabled()),
+                                    blankToFallback(firstNonBlank(item.variableName(), item.name()), "").trim(),
+                                    blankToNull(item.description()),
+                                    blankToFallback(item.variableType(), "TEMPORARY").toUpperCase(),
+                                    blankToNull(item.extractType()) == null ? legacyExtractType(item.sourceType()) : item.extractType().trim().toUpperCase(),
+                                    blankToNull(item.extractScope()) == null ? legacyExtractScope(item.sourceType()) : item.extractScope().trim().toUpperCase(),
+                                    blankToFallback(item.expressionMatchingRule(), "EXPRESSION").toUpperCase(),
+                                    blankToFallback(item.resultMatchingRule(), "RANDOM").toUpperCase(),
+                                    item.resultMatchingRuleNum() == null || item.resultMatchingRuleNum() <= 0 ? 1 : item.resultMatchingRuleNum(),
+                                    blankToFallback(item.responseFormat(), "JSON").toUpperCase()
                             ))
                             .toList()
             ));
@@ -1702,10 +2107,40 @@ public class ApiAutomationService {
         return value == null || value.isBlank() ? fallback : value.trim();
     }
 
+    private String firstNonBlank(String first, String fallback) {
+        return first == null || first.isBlank() ? fallback : first.trim();
+    }
+
+    private int normalizeDelayMs(Integer delayMs) {
+        if (delayMs == null) {
+            return 1000;
+        }
+        return Math.max(1, Math.min(600000, delayMs));
+    }
+
+    private String legacyExtractType(String sourceType) {
+        String normalized = Optional.ofNullable(sourceType).orElse("").trim().toUpperCase();
+        return switch (normalized) {
+            case "BODY_JSONPATH" -> "JSON_PATH";
+            case "HEADER", "STATUS_CODE" -> "REGEX";
+            default -> "JSON_PATH";
+        };
+    }
+
+    private String legacyExtractScope(String sourceType) {
+        String normalized = Optional.ofNullable(sourceType).orElse("").trim().toUpperCase();
+        return switch (normalized) {
+            case "HEADER" -> "RESPONSE_HEADERS";
+            case "STATUS_CODE" -> "RESPONSE_CODE";
+            default -> "BODY";
+        };
+    }
+
     private String defaultProcessorName(String type, String stage) {
         String normalized = Optional.ofNullable(type).orElse("").trim().toUpperCase();
         return switch (normalized) {
             case "SCRIPT" -> "PRE".equals(stage) ? "Pre Script" : "Post Script";
+            case "SQL" -> "SQL";
             case "TIME_WAITING" -> "Wait";
             case "EXTRACT" -> "Extract";
             default -> "Processor";
@@ -1752,15 +2187,18 @@ public class ApiAutomationService {
     private record EnvironmentConfigPayload(
             List<ApiKeyValueInput> headers,
             ApiAuthConfigInput authConfig,
-            Integer timeoutMs
+            Integer timeoutMs,
+            List<ApiVariableItem> variables
     ) {
     }
 
     private record ResolvedEnvironment(
+            Long environmentId,
             String baseUrl,
             List<ApiKeyValueInput> headers,
             ApiAuthConfigInput authConfig,
-            Integer timeoutMs
+            Integer timeoutMs,
+            List<ApiVariableItem> variables
     ) {
     }
 

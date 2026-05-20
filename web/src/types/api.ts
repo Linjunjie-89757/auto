@@ -480,21 +480,52 @@ export interface ApiExtractorConfig {
 
 export interface ApiProcessorExtractorConfig {
   name: string
-  sourceType: 'BODY_JSONPATH' | 'HEADER' | 'STATUS_CODE'
+  sourceType?: 'BODY_JSONPATH' | 'HEADER' | 'STATUS_CODE'
+  variableName?: string
+  description?: string
+  variableType?: 'TEMPORARY' | 'ENVIRONMENT'
+  extractType?: 'JSON_PATH' | 'X_PATH' | 'REGEX'
+  extractScope?: 'BODY' | 'UNESCAPED_BODY' | 'BODY_AS_DOCUMENT' | 'URL' | 'REQUEST_HEADERS' | 'RESPONSE_HEADERS' | 'RESPONSE_CODE' | 'RESPONSE_MESSAGE'
   expression: string
+  expressionMatchingRule?: 'EXPRESSION' | 'GROUP'
+  resultMatchingRule?: 'RANDOM' | 'SPECIFIC' | 'ALL'
+  resultMatchingRuleNum?: number
+  responseFormat?: 'JSON' | 'XML' | 'HTML'
   enabled?: boolean
 }
 
 export interface ApiProcessorBaseConfig {
   id: string
-  processorType: 'SCRIPT' | 'TIME_WAITING' | 'EXTRACT'
+  processorType: 'SCRIPT' | 'SQL' | 'TIME_WAITING' | 'EXTRACT'
   name: string
   enabled: boolean
+  description?: string | null
 }
 
 export interface ApiScriptProcessorConfig extends ApiProcessorBaseConfig {
   processorType: 'SCRIPT'
+  scriptLanguage?: 'JAVASCRIPT'
   script: string
+  delayMs?: number | null
+  extractors?: ApiProcessorExtractorConfig[]
+}
+
+export interface ApiSqlExtractParam {
+  key: string
+  value: string
+  description?: string
+  enabled?: boolean
+}
+
+export interface ApiSqlProcessorConfig extends ApiProcessorBaseConfig {
+  processorType: 'SQL'
+  script: string
+  dataSourceId?: number | null
+  dataSourceName?: string | null
+  queryTimeout?: number | null
+  variableNames?: string | null
+  extractParams?: ApiSqlExtractParam[]
+  resultVariable?: string | null
   delayMs?: number | null
   extractors?: ApiProcessorExtractorConfig[]
 }
@@ -515,6 +546,7 @@ export interface ApiExtractProcessorConfig extends ApiProcessorBaseConfig {
 
 export type ApiProcessorConfig =
   | ApiScriptProcessorConfig
+  | ApiSqlProcessorConfig
   | ApiWaitProcessorConfig
   | ApiExtractProcessorConfig
 
@@ -794,6 +826,22 @@ export interface ParamSetItem {
   status: number
 }
 
+export interface DbConnectionItem {
+  id: number
+  workspaceCode: string
+  workspaceName: string
+  connectionName: string
+  dbType: 'MYSQL' | 'H2'
+  driverClassName: string | null
+  jdbcUrl: string
+  username: string | null
+  passwordConfigured: boolean
+  poolMax: number
+  timeoutMs: number
+  description: string | null
+  status: number
+}
+
 export interface CreateWorkspacePayload {
   workspaceCode: string
   workspaceName: string
@@ -849,6 +897,29 @@ export interface CreateParamPayload {
   paramName: string
   contentJson: string
   status?: number
+}
+
+export interface CreateDbConnectionPayload {
+  workspaceCode?: string
+  connectionName: string
+  dbType: 'MYSQL' | 'H2'
+  driverClassName?: string | null
+  jdbcUrl: string
+  username?: string | null
+  password?: string | null
+  poolMax?: number
+  timeoutMs?: number
+  description?: string | null
+  status?: number
+}
+
+export interface TestDbConnectionPayload extends Partial<CreateDbConnectionPayload> {
+  id?: number | null
+}
+
+export interface DbConnectionTestResult {
+  success: boolean
+  message: string
 }
 
 export interface BugSummary {

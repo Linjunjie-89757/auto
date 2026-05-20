@@ -76,7 +76,16 @@ public final class ApiAutomationModels {
             String name,
             String sourceType,
             String expression,
-            Boolean enabled
+            Boolean enabled,
+            String variableName,
+            String description,
+            String variableType,
+            String extractType,
+            String extractScope,
+            String expressionMatchingRule,
+            String resultMatchingRule,
+            Integer resultMatchingRuleNum,
+            String responseFormat
     ) {
     }
 
@@ -86,8 +95,16 @@ public final class ApiAutomationModels {
             String processorType,
             String name,
             Boolean enabled,
+            String description,
+            String scriptLanguage,
             String script,
             Integer delayMs,
+            Long dataSourceId,
+            String dataSourceName,
+            Integer queryTimeout,
+            String variableNames,
+            List<ApiKeyValueInput> extractParams,
+            String resultVariable,
             List<ApiProcessorExtractItemInput> extractors
     ) {
     }

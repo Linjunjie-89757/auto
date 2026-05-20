@@ -19,6 +19,8 @@
     "smoke:cases": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-playwright.ps1 test tests/cases-crud-smoke.spec.ts --project=chromium",
     "smoke:tasks": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-playwright.ps1 test tests/tasks-crud-smoke.spec.ts --project=chromium",
     "smoke:reports": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-playwright.ps1 test tests/reports-crud-smoke.spec.ts --project=chromium",
+    "smoke:api-processors": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-api-processors-smoke.ps1",
+    "smoke:api-ui": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-api-processors-smoke.ps1 -Specs tests/api-ui-smoke.spec.ts",
     "smoke:mysql": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-mysql-smoke.ps1 -Suite smoke",
     "smoke:mysql:cases": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-mysql-smoke.ps1 -Suite smoke:cases",
     "smoke:mysql:tasks": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\run-mysql-smoke.ps1 -Suite smoke:tasks",

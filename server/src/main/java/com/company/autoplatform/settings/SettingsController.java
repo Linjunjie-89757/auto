@@ -107,4 +107,54 @@ public class SettingsController {
         settingsService.deleteParam(id, workspaceCode);
         return ApiResponse.ok(null, "参数集删除成功");
     }
+
+    @GetMapping("/db-connections")
+    public ApiResponse<PageResponse<DbConnectionItem>> listDbConnections(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(settingsService.listDbConnections(workspaceCode));
+    }
+
+    @PostMapping("/db-connections")
+    public ApiResponse<DbConnectionItem> createDbConnection(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody DbConnectionRequest request
+    ) {
+        return ApiResponse.ok(settingsService.createDbConnection(workspaceCode, request), "Database connection created");
+    }
+
+    @PutMapping("/db-connections/{id}")
+    public ApiResponse<DbConnectionItem> updateDbConnection(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody DbConnectionRequest request
+    ) {
+        return ApiResponse.ok(settingsService.updateDbConnection(id, workspaceCode, request), "Database connection updated");
+    }
+
+    @PutMapping("/db-connections/{id}/status")
+    public ApiResponse<DbConnectionItem> updateDbConnectionStatus(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody UpdateSettingStatusRequest request
+    ) {
+        return ApiResponse.ok(settingsService.updateDbConnectionStatus(id, workspaceCode, request), "Database connection status updated");
+    }
+
+    @DeleteMapping("/db-connections/{id}")
+    public ApiResponse<Void> deleteDbConnection(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        settingsService.deleteDbConnection(id, workspaceCode);
+        return ApiResponse.ok(null, "Database connection deleted");
+    }
+
+    @PostMapping("/db-connections/test")
+    public ApiResponse<DbConnectionTestResult> testDbConnection(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestBody DbConnectionTestRequest request
+    ) {
+        return ApiResponse.ok(settingsService.testDbConnection(workspaceCode, request));
+    }
 }

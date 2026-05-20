@@ -252,11 +252,11 @@ a {
   margin: 0;
 }
 
-.case-tabs :deep(.el-tabs__nav-wrap) {
+.case-tabs .el-tabs__nav-wrap {
   min-height: 48px;
 }
 
-.case-tabs :deep(.el-tabs__item) {
+.case-tabs .el-tabs__item {
   height: 48px;
   padding: 0 18px;
   display: inline-flex;
@@ -265,7 +265,7 @@ a {
   line-height: 1;
 }
 
-.case-tabs :deep(.el-tabs__active-bar) {
+.case-tabs .el-tabs__active-bar {
   bottom: 1px;
 }
 

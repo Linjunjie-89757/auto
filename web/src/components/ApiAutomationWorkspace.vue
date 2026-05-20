@@ -2842,7 +2842,7 @@ function formatTimeLabel(value?: string | null) {
                         <el-radio-button
                           v-for="option in requestAuthTypeOptions"
                           :key="option.value"
-                          :label="option.value"
+                          :value="option.value"
                         >
                           {{ option.label }}
                         </el-radio-button>
@@ -3229,7 +3229,7 @@ function formatTimeLabel(value?: string | null) {
                     <el-radio-button
                       v-for="option in requestAuthTypeOptions"
                       :key="`env-${option.value}`"
-                      :label="option.value"
+                      :value="option.value"
                     >
                       {{ option.label }}
                     </el-radio-button>

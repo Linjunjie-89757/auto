@@ -55,12 +55,48 @@ public final class ApiAutomationModels {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ApiAssertionItemInput(
+            String header,
+            String expression,
+            String variableName,
+            String condition,
+            String expectedValue,
+            Boolean enabled
+    ) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ApiAssertionGroupInput(
+            List<ApiAssertionItemInput> assertions,
+            String responseFormat
+    ) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record ApiAssertionInput(
             String type,
             String subject,
             String operator,
-            String expectedValue
+            String expectedValue,
+            String id,
+            String assertionType,
+            String name,
+            Boolean enabled,
+            String description,
+            String condition,
+            List<ApiAssertionItemInput> assertions,
+            String assertionBodyType,
+            ApiAssertionGroupInput jsonPathAssertion,
+            ApiAssertionGroupInput xpathAssertion,
+            ApiAssertionGroupInput regexAssertion,
+            List<ApiAssertionItemInput> variableAssertionItems,
+            String scriptLanguage,
+            String script
     ) {
+        public ApiAssertionInput(String type, String subject, String operator, String expectedValue) {
+            this(type, subject, operator, expectedValue, null, null, null, null, null, null,
+                    null, null, null, null, null, null, null, null);
+        }
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -320,11 +356,19 @@ public final class ApiAutomationModels {
     }
 
     public record ApiAssertionResult(
+            String id,
             String type,
+            String name,
             String subject,
+            String condition,
+            String expectedValue,
+            String actualValue,
             boolean success,
             String message
     ) {
+        public ApiAssertionResult(String type, String subject, boolean success, String message) {
+            this(null, type, null, subject, null, null, null, success, message);
+        }
     }
 
     public record ApiExtractionResult(

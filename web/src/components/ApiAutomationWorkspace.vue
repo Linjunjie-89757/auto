@@ -10,6 +10,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
 import { useWorkspace } from '../composables/useWorkspace'
 import { useWorkspaceAccess } from '../composables/useWorkspaceAccess'
+import ApiAssertionEditor from './ApiAssertionEditor.vue'
 import ApiProcessorEditor from './ApiProcessorEditor.vue'
 import MonacoCodeEditor from './MonacoCodeEditor.vue'
 import type {
@@ -96,6 +97,7 @@ const dragOverParamGroup = ref<SortableParamGroup | null>(null)
 const dragOverParamIndex = ref<number | null>(null)
 const activePreProcessorId = ref<string | null>(null)
 const activePostProcessorId = ref<string | null>(null)
+const activeAssertionId = ref<string | null>(null)
 
 const definitions = ref<ApiDefinitionItem[]>([])
 const scenarios = ref<ApiScenarioItem[]>([])
@@ -1153,10 +1155,6 @@ function normalizePostProcessorList(detail: ApiDefinitionDetail) {
   ]
 }
 
-function emptyAssertion(): ApiAssertionConfig {
-  return { type: 'STATUS_CODE', subject: '', operator: 'EQUALS', expectedValue: '200' }
-}
-
 function emptyProcessorExtractor(): ApiProcessorExtractorConfig {
   return {
     name: '',
@@ -1664,7 +1662,7 @@ function parseBatchKeyValueInput() {
     .split(/\r?\n/)
     .map(line => line.trim())
     .filter(Boolean)
-    .map((line) => {
+    .map<ApiKeyValue | null>((line) => {
       const columns = splitBatchLine(line).filter(Boolean)
       if (!columns.length) {
         return null
@@ -1704,7 +1702,7 @@ function parseBatchAssertions() {
     .split(/\r?\n/)
     .map(line => line.trim())
     .filter(Boolean)
-    .map((line) => {
+    .map<ApiAssertionConfig | null>((line) => {
       const parts = splitBatchColumns(line).filter(Boolean)
       const type = normalizeAssertionType(parts[0] || '')
       if (!type) {
@@ -1726,7 +1724,7 @@ function parseBatchAssertions() {
       } satisfies ApiAssertionConfig
     })
     .filter((item): item is ApiAssertionConfig => !!item && !!item.expectedValue)
-  return dedupeByKey(rows, item => `${item.type}|${item.subject}`)
+  return dedupeByKey(rows, item => `${item.type ?? ''}|${item.subject ?? ''}`)
 }
 
 function normalizeExtractorType(value: string) {
@@ -1908,10 +1906,6 @@ async function createDefinitionModule(node: DefinitionDirectoryTreeNode) {
       ElMessage.error((error as Error).message)
     }
   }
-}
-
-function addAssertion() {
-  definitionForm.assertions.push(emptyAssertion())
 }
 
 function addScenarioStep() {
@@ -2546,7 +2540,7 @@ function formatTimeLabel(value?: string | null) {
                 <button :class="['ms-like-top-tab', { active: activeRequestTab === 'auth' }]" @click="activeRequestTab = 'auth'">Auth</button>
                 <button data-testid="request-tab-pre" :class="['ms-like-top-tab', { active: activeRequestTab === 'pre' }]" @click="activeRequestTab = 'pre'">前置处理</button>
                 <button data-testid="request-tab-post" :class="['ms-like-top-tab', { active: activeRequestTab === 'post' }]" @click="activeRequestTab = 'post'">后置处理</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="activeRequestTab = 'tests'">断言</button>
+                <button data-testid="request-tab-tests" :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="activeRequestTab = 'tests'">断言</button>
                 <button :class="['ms-like-top-tab', { active: activeRequestTab === 'settings' }]" @click="activeRequestTab = 'settings'">&#35774;&#32622;</button>
               </div>
 
@@ -2828,34 +2822,15 @@ function formatTimeLabel(value?: string | null) {
                 </template>
 
                 <template v-else-if="activeRequestTab === 'tests'">
-                  <div class="request-section ms-like-table-surface">
-                    <div class="ms-like-table-header">
-                      <label class="ms-like-check-cell">
-                        <el-checkbox model-value />
-                        <span>&#21442;&#25968;&#21517;&#31216;</span>
-                      </label>
-                      <span>&#21442;&#25968;&#20540;</span>
-                      <span>&#25551;&#36848;</span>
-                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('assertion')">&#25209;&#37327;&#28155;&#21152;</button>
+                  <div class="request-section" data-testid="assertions-section">
+                    <ApiAssertionEditor
+                      v-model="definitionForm.assertions"
+                      v-model:active-id="activeAssertionId"
+                      :latest-response="currentResponseStep?.response ?? null"
+                    />
+                    <div class="editor-actions left">
+                      <el-button text type="primary" @click="openBatchAddDrawer('assertion')">&#25209;&#37327;&#28155;&#21152;</el-button>
                     </div>
-                    <div v-for="(item, index) in definitionForm.assertions" :key="`assert-${index}`" class="ms-like-table-row">
-                      <div class="ms-like-drag-cell">&#8942;</div>
-                      <div class="ms-like-checkbox-field">
-                        <el-checkbox model-value />
-                        <el-select v-model="item.type">
-                          <el-option label="STATUS_CODE" value="STATUS_CODE" />
-                          <el-option label="HEADER_EQUALS" value="HEADER_EQUALS" />
-                          <el-option label="HEADER_CONTAINS" value="HEADER_CONTAINS" />
-                          <el-option label="BODY_JSONPATH_EQUALS" value="BODY_JSONPATH_EQUALS" />
-                          <el-option label="BODY_JSONPATH_CONTAINS" value="BODY_JSONPATH_CONTAINS" />
-                          <el-option label="RESPONSE_TIME_LE" value="RESPONSE_TIME_LE" />
-                        </el-select>
-                      </div>
-                      <el-input v-model="item.subject" placeholder="subject / &#34920;&#36798;&#24335;" />
-                      <el-input v-model="item.expectedValue" placeholder="&#26399;&#26395;&#20540;" />
-                      <button type="button" class="ms-like-row-remove" @click="definitionForm.assertions.splice(index, 1)">&#21024;&#38500;</button>
-                    </div>
-                    <button type="button" class="ms-like-add-row" @click="addAssertion">+ &#28155;&#21152;&#19968;&#34892;</button>
                   </div>
                 </template>
 
@@ -3036,7 +3011,12 @@ function formatTimeLabel(value?: string | null) {
                   <div v-for="(item, index) in currentAssertionResults" :key="`assertion-preview-${index}`" class="result-item">
                     <el-tag size="small" :type="item.success ? 'success' : 'danger'">{{ item.success ? 'PASS' : 'FAIL' }}</el-tag>
                     <div>
-                      <div class="result-title">{{ item.type }} · {{ item.subject || '默认项' }}</div>
+                      <div class="result-title">{{ item.name || item.type }} · {{ item.subject || '默认项' }}</div>
+                      <div class="result-meta">
+                        <span v-if="item.condition">{{ item.condition }}</span>
+                        <span v-if="item.expectedValue !== undefined"> · 期望 {{ item.expectedValue || '空值' }}</span>
+                        <span v-if="item.actualValue !== undefined"> · 实际 {{ item.actualValue || '空值' }}</span>
+                      </div>
                       <div class="result-meta">{{ item.message }}</div>
                     </div>
                   </div>

@@ -465,11 +465,69 @@ export interface ApiRequestBodyConfig {
   plainText?: string | null
 }
 
+export type ApiAssertionType =
+  | 'RESPONSE_CODE'
+  | 'RESPONSE_HEADER'
+  | 'RESPONSE_BODY'
+  | 'RESPONSE_TIME'
+  | 'VARIABLE'
+  | 'SCRIPT'
+
+export type ApiAssertionCondition =
+  | 'EQUALS'
+  | 'NOT_EQUALS'
+  | 'CONTAINS'
+  | 'NOT_CONTAINS'
+  | 'EMPTY'
+  | 'NOT_EMPTY'
+  | 'START_WITH'
+  | 'END_WITH'
+  | 'REGEX'
+  | 'GT'
+  | 'GT_OR_EQUALS'
+  | 'LT'
+  | 'LT_OR_EQUALS'
+  | 'LENGTH_EQUALS'
+  | 'LENGTH_NOT_EQUALS'
+  | 'LENGTH_GT'
+  | 'LENGTH_GT_OR_EQUALS'
+  | 'LENGTH_LT'
+  | 'LENGTH_LT_OR_EQUALS'
+  | 'UNCHECKED'
+
+export interface ApiAssertionItemConfig {
+  header?: string
+  expression?: string
+  variableName?: string
+  condition?: ApiAssertionCondition | string
+  expectedValue?: string
+  enabled?: boolean
+}
+
+export interface ApiAssertionGroupConfig {
+  assertions: ApiAssertionItemConfig[]
+  responseFormat?: 'XML' | 'HTML'
+}
+
 export interface ApiAssertionConfig {
-  type: string
-  subject: string
-  operator: string
-  expectedValue: string
+  type?: string
+  subject?: string
+  operator?: string
+  expectedValue?: string
+  id?: string
+  assertionType?: ApiAssertionType
+  name?: string
+  enabled?: boolean
+  description?: string | null
+  condition?: ApiAssertionCondition | string
+  assertions?: ApiAssertionItemConfig[]
+  assertionBodyType?: 'JSON_PATH' | 'X_PATH' | 'REGEX'
+  jsonPathAssertion?: ApiAssertionGroupConfig
+  xpathAssertion?: ApiAssertionGroupConfig
+  regexAssertion?: ApiAssertionGroupConfig
+  variableAssertionItems?: ApiAssertionItemConfig[]
+  scriptLanguage?: 'JAVASCRIPT'
+  script?: string
 }
 
 export interface ApiExtractorConfig {
@@ -656,8 +714,13 @@ export interface ApiResponseSnapshot {
 }
 
 export interface ApiAssertionResult {
+  id?: string | null
   type: string
+  name?: string | null
   subject: string
+  condition?: string | null
+  expectedValue?: string | null
+  actualValue?: string | null
   success: boolean
   message: string
 }

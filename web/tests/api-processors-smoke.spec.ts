@@ -22,7 +22,7 @@ type ApiRunResponse = {
   result: string
   stepResults: Array<{
     success: boolean
-    assertionResults: Array<{ success: boolean; message: string }>
+    assertionResults: Array<{ type: string; subject: string; success: boolean; message: string; actualValue?: string | null }>
     extractionResults: Array<{ name: string; success: boolean; value: string | null }>
     processorResults: Array<{
       stage: 'PRE' | 'POST'
@@ -97,7 +97,35 @@ test.describe.serial('API processors smoke', () => {
         },
       },
       assertions: [
-        { type: 'STATUS_CODE', subject: '', operator: 'EQUALS', expectedValue: '401' },
+        {
+          assertionType: 'RESPONSE_CODE',
+          name: 'Status smoke',
+          enabled: true,
+          condition: 'EQUALS',
+          expectedValue: '401',
+        },
+        {
+          assertionType: 'RESPONSE_BODY',
+          name: 'Body regex smoke',
+          enabled: true,
+          assertionBodyType: 'REGEX',
+          regexAssertion: {
+            responseFormat: 'XML',
+            assertions: [
+              { expression: '.*', condition: 'EQUALS', expectedValue: '', enabled: true },
+            ],
+          },
+        },
+        {
+          assertionType: 'VARIABLE',
+          name: 'SQL variable smoke',
+          enabled: true,
+          variableAssertionItems: [
+            { variableName: 'firstToken', condition: 'EQUALS', expectedValue: 'status-ok', enabled: true },
+            { variableName: 'status_code_1', condition: 'EQUALS', expectedValue: '401', enabled: true },
+            { variableName: 'sqlRows', condition: 'CONTAINS', expectedValue: 'status-ok', enabled: true },
+          ],
+        },
       ],
       extractors: [],
       preProcessors: [
@@ -115,6 +143,20 @@ test.describe.serial('API processors smoke', () => {
         },
       ],
       postProcessors: [
+        {
+          id: 'post-sql-smoke',
+          processorType: 'SQL',
+          name: 'Post SQL Smoke',
+          enabled: true,
+          dataSourceId: dbConnection.id,
+          queryTimeout: 5000,
+          script: "SELECT 'status-ok' AS firstToken, 401 AS status_code",
+          variableNames: 'status_code',
+          extractParams: [
+            { key: 'firstToken', value: 'firstToken', enabled: true },
+          ],
+          resultVariable: 'sqlRows',
+        },
         {
           id: 'post-extract-smoke',
           processorType: 'EXTRACT',
@@ -149,6 +191,16 @@ test.describe.serial('API processors smoke', () => {
     const step = run.stepResults[0]
     expect(step.success).toBeTruthy()
     expect(step.assertionResults.every(item => item.success)).toBeTruthy()
+    expect(step.assertionResults).toContainEqual(expect.objectContaining({
+      type: 'VARIABLE',
+      subject: 'firstToken',
+      success: true,
+      actualValue: 'status-ok',
+    }))
+    expect(step.assertionResults).toContainEqual(expect.objectContaining({
+      type: 'RESPONSE_BODY',
+      success: true,
+    }))
     expect(step.extractionResults).toContainEqual(expect.objectContaining({
       name: 'statusCodeVar',
       success: true,
@@ -165,6 +217,15 @@ test.describe.serial('API processors smoke', () => {
       processorType: 'EXTRACT',
       success: true,
       outputVariables: expect.objectContaining({ statusCodeVar: '401' }),
+    }))
+    expect(step.processorResults).toContainEqual(expect.objectContaining({
+      stage: 'POST',
+      processorType: 'SQL',
+      success: true,
+      outputVariables: expect.objectContaining({
+        firstToken: 'status-ok',
+        status_code_1: '401',
+      }),
     }))
   })
 })

@@ -130,7 +130,44 @@ test.describe.serial('API UI smoke', () => {
         },
       },
       assertions: [
-        { type: 'STATUS_CODE', subject: '', operator: 'EQUALS', expectedValue: '401' },
+        {
+          id: 'ui-assert-status',
+          assertionType: 'RESPONSE_CODE',
+          name: 'UI Status Assertion',
+          enabled: true,
+          condition: 'EQUALS',
+          expectedValue: '401',
+        },
+        {
+          id: 'ui-assert-body',
+          assertionType: 'RESPONSE_BODY',
+          name: 'UI Body Regex',
+          enabled: true,
+          assertionBodyType: 'REGEX',
+          regexAssertion: {
+            responseFormat: 'XML',
+            assertions: [
+              { expression: '.*', condition: 'EQUALS', expectedValue: '', enabled: true },
+            ],
+          },
+        },
+        {
+          id: 'ui-assert-variable',
+          assertionType: 'VARIABLE',
+          name: 'UI Variable Assertion',
+          enabled: true,
+          variableAssertionItems: [
+            { variableName: 'firstToken', condition: 'EQUALS', expectedValue: 'ui-token', enabled: true },
+          ],
+        },
+        {
+          id: 'ui-assert-script',
+          assertionType: 'SCRIPT',
+          name: 'UI Script Assertion',
+          enabled: true,
+          scriptLanguage: 'JAVASCRIPT',
+          script: "if (response.statusCode !== 401) fail('bad status')",
+        },
       ],
       extractors: [],
       preProcessors: [
@@ -179,6 +216,7 @@ test.describe.serial('API UI smoke', () => {
 
     await assertPreSqlProcessorEcho(page, 'sqlRows')
     await assertPostExtractProcessorEcho(page, 'status extractor')
+    await assertAssertionsEcho(page)
 
     await page.locator('[data-testid="request-tab-pre"]').click()
     await fillInput(page.locator('[data-testid="processor-sql-result-variable-pre"]'), 'sqlRowsEcho')
@@ -194,6 +232,7 @@ test.describe.serial('API UI smoke', () => {
     await openDefinition(page, definitionName)
     await assertPreSqlProcessorEcho(page, 'sqlRowsEcho')
     await assertPostExtractProcessorEcho(page, 'saved from ui')
+    await assertAssertionsEcho(page)
   })
 })
 
@@ -241,6 +280,24 @@ async function assertPostExtractProcessorEcho(page: Page, description: string) {
   await expect(extractRow.locator('.extractor-card-head .el-input input').first()).toHaveValue('statusCodeVar')
   await expect(extractRow.locator(':scope > .el-input input').nth(0)).toHaveValue('401')
   await expect(extractRow.locator(':scope > .el-input input').nth(1)).toHaveValue(description)
+}
+
+async function assertAssertionsEcho(page: Page) {
+  await page.locator('[data-testid="request-tab-tests"]').click()
+  await expect(page.locator('[data-testid="assertions-section"]')).toBeVisible()
+  await expect(page.locator('[data-testid="assertion-name-input"]')).toHaveValue('UI Status Assertion')
+  await expect(page.locator('[data-testid="assertion-code-expected"]')).toHaveValue('401')
+
+  await page.locator('.assertion-list-item', { hasText: 'UI Body Regex' }).click()
+  await expect(page.locator('[data-testid="assertion-body-type"]')).toContainText('Regex')
+  await expect(page.locator('[data-testid="assertion-body-expression-0"]')).toHaveValue('.*')
+
+  await page.locator('.assertion-list-item', { hasText: 'UI Variable Assertion' }).click()
+  await expect(page.locator('[data-testid="assertion-variable-name-0"]')).toHaveValue('firstToken')
+  await expect(page.locator('[data-testid="assertion-variable-expected-0"]')).toHaveValue('ui-token')
+
+  await page.locator('.assertion-list-item', { hasText: 'UI Script Assertion' }).click()
+  await expect(page.locator('[data-testid="assertion-name-input"]')).toHaveValue('UI Script Assertion')
 }
 
 async function fillInput(locator: Locator, value: string) {

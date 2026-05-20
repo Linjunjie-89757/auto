@@ -61,23 +61,25 @@ public class ApiAutomationScriptRunner {
             (async () => {
               try {
                 const script = String(input.script || '');
+                const body = [
+                  'var setVar = helpers.setVar;',
+                  'var getVar = helpers.getVar;',
+                  'var removeVar = helpers.removeVar;',
+                  'var log = helpers.log;',
+                  'var fail = helpers.fail;',
+                  'var require = undefined;',
+                  'var process = undefined;',
+                  'var global = undefined;',
+                  'var module = undefined;',
+                  'var exports = undefined;',
+                  script,
+                ].join('\\n');
                 const runner = new AsyncFunction(
                   'helpers',
                   'vars',
                   'request',
                   'response',
-                  '"use strict";\\n' +
-                  'const setVar = helpers.setVar;\\n' +
-                  'const getVar = helpers.getVar;\\n' +
-                  'const removeVar = helpers.removeVar;\\n' +
-                  'const log = helpers.log;\\n' +
-                  'const fail = helpers.fail;\\n' +
-                  'const require = undefined;\\n' +
-                  'const process = undefined;\\n' +
-                  'const global = undefined;\\n' +
-                  'const module = undefined;\\n' +
-                  'const exports = undefined;\\n' +
-                  script
+                  body
                 );
                 await runner(helpers, vars, request, response);
                 process.stdout.write(JSON.stringify({

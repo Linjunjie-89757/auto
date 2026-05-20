@@ -32,6 +32,7 @@ import org.xml.sax.InputSource;
 
 import java.io.IOException;
 import java.io.StringReader;
+import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpHeaders;
 import java.net.URLEncoder;
@@ -766,7 +767,7 @@ public class ApiAutomationService {
             ApiRequestSnapshot requestSnapshot = new ApiRequestSnapshot(request.method(), request.url(), sentRequest.headers(), request.body());
             executeProcessors("POST", postProcessors, definition.getWorkspaceId(), requestConfig, requestSnapshot, responseSnapshot, environment, variables, processorResults, extractionResults);
 
-            List<ApiAssertionResult> assertionResults = evaluateAssertions(assertions, responseSnapshot, durationMs, variables);
+            List<ApiAssertionResult> assertionResults = evaluateAssertions(assertions, requestSnapshot, responseSnapshot, durationMs, variables);
             boolean success = assertionResults.stream().allMatch(ApiAssertionResult::success);
             String errorMessage = success ? null : firstFailedMessage(assertionResults);
             ApiRunStepResultResponse result = new ApiRunStepResultResponse(
@@ -1088,6 +1089,18 @@ public class ApiAutomationService {
         context.put("headers", response.headers() == null ? Map.of() : response.headers());
         context.put("body", response.body());
         context.put("contentType", response.contentType());
+        return context;
+    }
+
+    private Map<String, Object> toRequestContext(ApiRequestSnapshot request) {
+        if (request == null) {
+            return Map.of();
+        }
+        LinkedHashMap<String, Object> context = new LinkedHashMap<>();
+        context.put("method", request.method());
+        context.put("url", request.url());
+        context.put("headers", request.headers() == null ? Map.of() : request.headers());
+        context.put("body", request.body());
         return context;
     }
 
@@ -1461,54 +1474,404 @@ public class ApiAutomationService {
 
     private List<ApiAssertionResult> evaluateAssertions(
             List<ApiAssertionInput> assertions,
+            ApiRequestSnapshot request,
             ApiResponseSnapshot response,
             long durationMs,
             Map<String, String> variables
     ) {
         List<ApiAssertionResult> results = new ArrayList<>();
-        for (ApiAssertionInput assertion : assertions) {
-            String type = Optional.ofNullable(assertion.type()).orElse("").toUpperCase();
+        for (ApiAssertionInput assertion : defaultList(assertions)) {
+            if (assertion == null || Boolean.FALSE.equals(assertion.enabled())) {
+                continue;
+            }
+            String type = normalizeAssertionType(assertion);
             try {
-                String subject = replaceVariables(Optional.ofNullable(assertion.subject()).orElse(""), variables);
-                String expectedValue = replaceVariables(Optional.ofNullable(assertion.expectedValue()).orElse(""), variables);
-                boolean success;
-                String actual;
                 switch (type) {
-                    case "STATUS_CODE" -> {
-                        actual = String.valueOf(response.statusCode());
-                        success = actual.equals(expectedValue);
-                    }
-                    case "HEADER_EQUALS" -> {
-                        actual = Optional.ofNullable(response.headers().get(subject)).orElse("");
-                        success = actual.equals(expectedValue);
-                    }
-                    case "HEADER_CONTAINS" -> {
-                        actual = Optional.ofNullable(response.headers().get(subject)).orElse("");
-                        success = actual.contains(expectedValue);
-                    }
-                    case "BODY_JSONPATH_EQUALS" -> {
-                        actual = extractJsonValue(response.body(), subject);
-                        success = actual.equals(expectedValue);
-                    }
-                    case "BODY_JSONPATH_CONTAINS" -> {
-                        actual = extractJsonValue(response.body(), subject);
-                        success = actual.contains(expectedValue);
-                    }
-                    case "RESPONSE_TIME_LE" -> {
-                        actual = String.valueOf(durationMs);
-                        success = durationMs <= Long.parseLong(expectedValue.isBlank() ? "0" : expectedValue);
-                    }
+                    case "RESPONSE_CODE" -> results.add(evaluateSingleAssertion(
+                            assertion,
+                            type,
+                            firstNonBlank(assertion.name(), "Status Code"),
+                            "statusCode",
+                            normalizeAssertionCondition(assertion.condition(), legacyCondition(assertion.type(), assertion.operator())),
+                            String.valueOf(response.statusCode()),
+                            assertion.expectedValue(),
+                            variables,
+                            null
+                    ));
+                    case "RESPONSE_HEADER" -> results.addAll(evaluateHeaderAssertions(assertion, response, variables));
+                    case "RESPONSE_BODY" -> results.addAll(evaluateBodyAssertions(assertion, response, variables));
+                    case "RESPONSE_TIME" -> results.add(evaluateSingleAssertion(
+                            assertion,
+                            type,
+                            firstNonBlank(assertion.name(), "Response Time"),
+                            "durationMs",
+                            normalizeAssertionCondition(assertion.condition(), "LT_OR_EQUALS"),
+                            String.valueOf(durationMs),
+                            assertion.expectedValue(),
+                            variables,
+                            null
+                    ));
+                    case "VARIABLE" -> results.addAll(evaluateVariableAssertions(assertion, variables));
+                    case "SCRIPT" -> results.add(evaluateScriptAssertion(assertion, request, response, variables));
                     default -> throw new BadRequestException("Unsupported assertion type: " + type);
                 }
-                String message = success
-                        ? "Assertion passed"
-                        : "Expected " + expectedValue + " but got " + actual;
-                results.add(new ApiAssertionResult(type, subject, success, message));
             } catch (Exception exception) {
-                results.add(new ApiAssertionResult(type, assertion.subject(), false, exception.getMessage()));
+                results.add(new ApiAssertionResult(
+                        assertion.id(),
+                        type,
+                        firstNonBlank(assertion.name(), defaultAssertionName(type)),
+                        assertion.subject(),
+                        normalizeAssertionCondition(assertion.condition(), legacyCondition(assertion.type(), assertion.operator())),
+                        assertion.expectedValue(),
+                        null,
+                        false,
+                        exception.getMessage()
+                ));
             }
         }
         return results;
+    }
+
+    private List<ApiAssertionResult> evaluateHeaderAssertions(
+            ApiAssertionInput assertion,
+            ApiResponseSnapshot response,
+            Map<String, String> variables
+    ) {
+        List<ApiAssertionItemInput> items = defaultList(assertion.assertions());
+        if (items.isEmpty() && assertion.subject() != null) {
+            items = List.of(new ApiAssertionItemInput(assertion.subject(), null, null,
+                    legacyCondition(assertion.type(), assertion.operator()), assertion.expectedValue(), true));
+        }
+        List<ApiAssertionResult> results = new ArrayList<>();
+        int index = 0;
+        for (ApiAssertionItemInput item : items) {
+            if (item == null || Boolean.FALSE.equals(item.enabled())) {
+                continue;
+            }
+            String header = replaceVariables(Optional.ofNullable(item.header()).orElse(""), variables);
+            String actual = findHeaderValue(response.headers(), header);
+            results.add(evaluateSingleAssertion(
+                    assertion,
+                    "RESPONSE_HEADER",
+                    firstNonBlank(assertion.name(), "Response Header"),
+                    header,
+                    normalizeAssertionCondition(item.condition(), legacyCondition(assertion.type(), assertion.operator())),
+                    actual,
+                    item.expectedValue(),
+                    variables,
+                    "header[" + index + "]"
+            ));
+            index++;
+        }
+        return results;
+    }
+
+    private List<ApiAssertionResult> evaluateBodyAssertions(
+            ApiAssertionInput assertion,
+            ApiResponseSnapshot response,
+            Map<String, String> variables
+    ) {
+        String bodyType = normalizeBodyAssertionType(assertion);
+        ApiAssertionGroupInput group = switch (bodyType) {
+            case "X_PATH" -> assertion.xpathAssertion();
+            case "REGEX" -> assertion.regexAssertion();
+            default -> assertion.jsonPathAssertion();
+        };
+        List<ApiAssertionItemInput> items = group == null ? List.of() : defaultList(group.assertions());
+        if (items.isEmpty() && assertion.subject() != null) {
+            items = List.of(new ApiAssertionItemInput(null, assertion.subject(), null,
+                    legacyCondition(assertion.type(), assertion.operator()), assertion.expectedValue(), true));
+        }
+
+        List<ApiAssertionResult> results = new ArrayList<>();
+        int index = 0;
+        for (ApiAssertionItemInput item : items) {
+            if (item == null || Boolean.FALSE.equals(item.enabled())) {
+                continue;
+            }
+            String expression = replaceVariables(Optional.ofNullable(item.expression()).orElse(""), variables);
+            String condition = normalizeAssertionCondition(item.condition(), legacyCondition(assertion.type(), assertion.operator()));
+            String expectedValue = replaceVariables(Optional.ofNullable(item.expectedValue()).orElse(""), variables);
+            List<String> values;
+            try {
+                values = switch (bodyType) {
+                    case "X_PATH" -> extractByXPath(response.body(), expression, group == null ? "XML" : group.responseFormat());
+                    case "REGEX" -> extractByRegex(response.body(), expression, "EXPRESSION");
+                    default -> extractByJsonPath(response.body(), expression);
+                };
+            } catch (Exception exception) {
+                throw new BadRequestException(exception.getMessage());
+            }
+            AssertionComparison comparison = compareValues(values, condition, expectedValue);
+            results.add(new ApiAssertionResult(
+                    assertion.id(),
+                    "RESPONSE_BODY",
+                    firstNonBlank(assertion.name(), "Response Body"),
+                    expression,
+                    condition,
+                    expectedValue,
+                    formatActualValues(values),
+                    comparison.success(),
+                    comparison.message()
+            ));
+            index++;
+        }
+        return results;
+    }
+
+    private List<ApiAssertionResult> evaluateVariableAssertions(ApiAssertionInput assertion, Map<String, String> variables) {
+        List<ApiAssertionResult> results = new ArrayList<>();
+        int index = 0;
+        for (ApiAssertionItemInput item : defaultList(assertion.variableAssertionItems())) {
+            if (item == null || Boolean.FALSE.equals(item.enabled())) {
+                continue;
+            }
+            String variableName = replaceVariables(Optional.ofNullable(item.variableName()).orElse(""), variables);
+            boolean found = variables.containsKey(variableName);
+            String actual = Optional.ofNullable(variables.get(variableName)).orElse("");
+            String condition = normalizeAssertionCondition(item.condition(), assertion.condition());
+            String expectedValue = replaceVariables(Optional.ofNullable(item.expectedValue()).orElse(""), variables);
+            AssertionComparison comparison = compareValue(actual, condition, expectedValue);
+            String message = comparison.message();
+            if (!found && !comparison.success()) {
+                message = "Variable not found: " + variableName + ". " + message;
+            }
+            results.add(new ApiAssertionResult(
+                    assertion.id(),
+                    "VARIABLE",
+                    firstNonBlank(assertion.name(), "Variable"),
+                    variableName,
+                    condition,
+                    expectedValue,
+                    actual,
+                    comparison.success(),
+                    message
+            ));
+            index++;
+        }
+        return results;
+    }
+
+    private ApiAssertionResult evaluateScriptAssertion(
+            ApiAssertionInput assertion,
+            ApiRequestSnapshot request,
+            ApiResponseSnapshot response,
+            Map<String, String> variables
+    ) {
+        String script = Optional.ofNullable(assertion.script()).orElse("");
+        String type = "SCRIPT";
+        String name = firstNonBlank(assertion.name(), "Script");
+        if (script.isBlank()) {
+            return new ApiAssertionResult(assertion.id(), type, name, "script", "UNCHECKED", "", "",
+                    false, "Script assertion content cannot be blank");
+        }
+        ApiAutomationScriptRunner.ScriptExecutionResult scriptResult = scriptRunner.execute(
+                script,
+                new LinkedHashMap<>(variables),
+                toRequestContext(request),
+                toResponseContext(response)
+        );
+        variables.clear();
+        variables.putAll(scriptResult.variables());
+        return new ApiAssertionResult(
+                assertion.id(),
+                type,
+                name,
+                "script",
+                "UNCHECKED",
+                "",
+                "",
+                scriptResult.success(),
+                scriptResult.success() ? "Assertion passed" : scriptResult.message()
+        );
+    }
+
+    private ApiAssertionResult evaluateSingleAssertion(
+            ApiAssertionInput assertion,
+            String type,
+            String name,
+            String subject,
+            String condition,
+            String actual,
+            String rawExpectedValue,
+            Map<String, String> variables,
+            String fallbackId
+    ) {
+        String expectedValue = replaceVariables(Optional.ofNullable(rawExpectedValue).orElse(""), variables);
+        AssertionComparison comparison = compareValue(Optional.ofNullable(actual).orElse(""), condition, expectedValue);
+        return new ApiAssertionResult(
+                firstNonBlank(assertion.id(), fallbackId),
+                type,
+                name,
+                subject,
+                condition,
+                expectedValue,
+                Optional.ofNullable(actual).orElse(""),
+                comparison.success(),
+                comparison.message()
+        );
+    }
+
+    private AssertionComparison compareValues(List<String> actualValues, String condition, String expectedValue) {
+        List<String> values = defaultList(actualValues);
+        String normalized = normalizeAssertionCondition(condition, "EQUALS");
+        if ("EMPTY".equals(normalized)) {
+            boolean success = values.isEmpty() || values.stream().allMatch(value -> value == null || value.isEmpty());
+            return comparisonResult(success, formatActualValues(values), expectedValue);
+        }
+        if ("NOT_EMPTY".equals(normalized)) {
+            boolean success = !values.isEmpty() && values.stream().anyMatch(value -> value != null && !value.isEmpty());
+            return comparisonResult(success, formatActualValues(values), expectedValue);
+        }
+        if (values.isEmpty()) {
+            return new AssertionComparison(false, "No value matched expression");
+        }
+        return values.stream()
+                .map(value -> compareValue(value, normalized, expectedValue))
+                .filter(AssertionComparison::success)
+                .findFirst()
+                .orElseGet(() -> comparisonResult(false, formatActualValues(values), expectedValue));
+    }
+
+    private AssertionComparison compareValue(String actual, String condition, String expectedValue) {
+        String normalized = normalizeAssertionCondition(condition, "EQUALS");
+        String safeActual = Optional.ofNullable(actual).orElse("");
+        String safeExpected = Optional.ofNullable(expectedValue).orElse("");
+        boolean success = switch (normalized) {
+            case "UNCHECKED" -> true;
+            case "EQUALS" -> safeActual.equals(safeExpected);
+            case "NOT_EQUALS" -> !safeActual.equals(safeExpected);
+            case "CONTAINS" -> safeActual.contains(safeExpected);
+            case "NOT_CONTAINS" -> !safeActual.contains(safeExpected);
+            case "EMPTY" -> safeActual.isEmpty();
+            case "NOT_EMPTY" -> !safeActual.isEmpty();
+            case "START_WITH" -> safeActual.startsWith(safeExpected);
+            case "END_WITH" -> safeActual.endsWith(safeExpected);
+            case "REGEX" -> Pattern.compile(safeExpected, Pattern.DOTALL).matcher(safeActual).find();
+            case "GT" -> compareNumber(safeActual, safeExpected) > 0;
+            case "GT_OR_EQUALS" -> compareNumber(safeActual, safeExpected) >= 0;
+            case "LT" -> compareNumber(safeActual, safeExpected) < 0;
+            case "LT_OR_EQUALS" -> compareNumber(safeActual, safeExpected) <= 0;
+            case "LENGTH_EQUALS" -> safeActual.length() == parseExpectedLength(safeExpected);
+            case "LENGTH_NOT_EQUALS" -> safeActual.length() != parseExpectedLength(safeExpected);
+            case "LENGTH_GT" -> safeActual.length() > parseExpectedLength(safeExpected);
+            case "LENGTH_GT_OR_EQUALS" -> safeActual.length() >= parseExpectedLength(safeExpected);
+            case "LENGTH_LT" -> safeActual.length() < parseExpectedLength(safeExpected);
+            case "LENGTH_LT_OR_EQUALS" -> safeActual.length() <= parseExpectedLength(safeExpected);
+            default -> throw new BadRequestException("Unsupported assertion condition: " + normalized);
+        };
+        return comparisonResult(success, safeActual, safeExpected);
+    }
+
+    private AssertionComparison comparisonResult(boolean success, String actual, String expectedValue) {
+        return new AssertionComparison(success, success ? "Assertion passed" : "Expected " + expectedValue + " but got " + actual);
+    }
+
+    private int compareNumber(String actual, String expectedValue) {
+        try {
+            return new BigDecimal(actual.trim()).compareTo(new BigDecimal(expectedValue.trim()));
+        } catch (RuntimeException exception) {
+            throw new BadRequestException("Actual and expected values must be numeric");
+        }
+    }
+
+    private int parseExpectedLength(String expectedValue) {
+        try {
+            return Integer.parseInt(expectedValue.trim());
+        } catch (RuntimeException exception) {
+            throw new BadRequestException("Expected value must be an integer length");
+        }
+    }
+
+    private String formatActualValues(List<String> values) {
+        return ApiAutomationJsonSupport.toJson(defaultList(values), "Failed to serialize assertion actual values");
+    }
+
+    private String findHeaderValue(Map<String, String> headers, String headerName) {
+        if (headers == null || headerName == null) {
+            return "";
+        }
+        return headers.entrySet().stream()
+                .filter(entry -> entry.getKey().equalsIgnoreCase(headerName))
+                .map(Map.Entry::getValue)
+                .findFirst()
+                .orElse("");
+    }
+
+    private String normalizeAssertionType(ApiAssertionInput assertion) {
+        String type = Optional.ofNullable(firstNonBlank(assertion.assertionType(), assertion.type()))
+                .orElse("")
+                .toUpperCase(Locale.ROOT);
+        return switch (type) {
+            case "STATUS_CODE" -> "RESPONSE_CODE";
+            case "HEADER_EQUALS", "HEADER_CONTAINS" -> "RESPONSE_HEADER";
+            case "BODY_JSONPATH_EQUALS", "BODY_JSONPATH_CONTAINS" -> "RESPONSE_BODY";
+            case "RESPONSE_TIME_LE" -> "RESPONSE_TIME";
+            default -> type;
+        };
+    }
+
+    private String normalizeBodyAssertionType(ApiAssertionInput assertion) {
+        String type = Optional.ofNullable(assertion.assertionBodyType()).orElse("").trim().toUpperCase(Locale.ROOT);
+        if (!type.isBlank()) {
+            return "XPATH".equals(type) ? "X_PATH" : type;
+        }
+        String legacyType = Optional.ofNullable(assertion.type()).orElse("").trim().toUpperCase(Locale.ROOT);
+        if (legacyType.startsWith("BODY_JSONPATH_")) {
+            return "JSON_PATH";
+        }
+        return "JSON_PATH";
+    }
+
+    private String legacyCondition(String type, String operator) {
+        String normalizedType = Optional.ofNullable(type).orElse("").trim().toUpperCase(Locale.ROOT);
+        if ("HEADER_CONTAINS".equals(normalizedType) || "BODY_JSONPATH_CONTAINS".equals(normalizedType)) {
+            return "CONTAINS";
+        }
+        if ("RESPONSE_TIME_LE".equals(normalizedType)) {
+            return "LT_OR_EQUALS";
+        }
+        String normalizedOperator = Optional.ofNullable(operator).orElse("").trim().toUpperCase(Locale.ROOT);
+        if (!normalizedOperator.isBlank()) {
+            return normalizedOperator;
+        }
+        return "EQUALS";
+    }
+
+    private String normalizeAssertionCondition(String condition, String fallback) {
+        String normalized = Optional.ofNullable(firstNonBlank(condition, fallback))
+                .orElse("EQUALS")
+                .toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "=", "==", "EQUAL" -> "EQUALS";
+            case "!=", "<>", "NOT_EQUAL" -> "NOT_EQUALS";
+            case "NOTCONTAINS" -> "NOT_CONTAINS";
+            case "STARTS_WITH", "START_WITH" -> "START_WITH";
+            case "ENDS_WITH", "END_WITH" -> "END_WITH";
+            case "GTE", ">=" -> "GT_OR_EQUALS";
+            case "GT", ">" -> "GT";
+            case "LTE", "<=" -> "LT_OR_EQUALS";
+            case "LT", "<" -> "LT";
+            default -> normalized;
+        };
+    }
+
+    private String defaultAssertionName(String type) {
+        return switch (type) {
+            case "RESPONSE_CODE" -> "Status Code";
+            case "RESPONSE_HEADER" -> "Response Header";
+            case "RESPONSE_BODY" -> "Response Body";
+            case "RESPONSE_TIME" -> "Response Time";
+            case "VARIABLE" -> "Variable";
+            case "SCRIPT" -> "Script";
+            default -> "Assertion";
+        };
+    }
+
+    private record AssertionComparison(
+            boolean success,
+            String message
+    ) {
     }
 
     private void persistStep(ReportEntity report, Long workspaceId, RunStepComputation computation) {

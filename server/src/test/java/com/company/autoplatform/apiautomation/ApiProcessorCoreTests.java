@@ -197,6 +197,130 @@ class ApiProcessorCoreTests extends IntegrationTestSupport {
         assertExtraction(step, "legacyStatus", "200");
     }
 
+    @Test
+    void legacyAssertionsStillExecute() {
+        ApiRunResponse run = apiAutomationService.debugRunDefinitionDraft(WORKSPACE_CODE, new ApiDebugDefinitionRequest(
+                WORKSPACE_CODE,
+                null,
+                "legacy assertions",
+                request("GET", baseUrl + "/json", List.of()),
+                List.of(
+                        new ApiAssertionInput("STATUS_CODE", null, "EQUALS", "200"),
+                        new ApiAssertionInput("HEADER_EQUALS", "X-Trace", "EQUALS", "trace-123"),
+                        new ApiAssertionInput("HEADER_CONTAINS", "X-Legacy", "EQUALS", "legacy"),
+                        new ApiAssertionInput("BODY_JSONPATH_EQUALS", "$.user.name", "EQUALS", "Alice"),
+                        new ApiAssertionInput("BODY_JSONPATH_CONTAINS", "$.legacy", "EQUALS", "json"),
+                        new ApiAssertionInput("RESPONSE_TIME_LE", null, "EQUALS", "999999")
+                ),
+                List.of(),
+                List.of(),
+                List.of(),
+                null,
+                null
+        ));
+
+        ApiRunStepResultResponse step = run.stepResults().getFirst();
+        assertThat(run.result()).isEqualTo("SUCCESS");
+        assertThat(step.assertionResults()).hasSize(6).allMatch(ApiAssertionResult::success);
+        assertThat(step.assertionResults()).extracting(ApiAssertionResult::type)
+                .contains("RESPONSE_CODE", "RESPONSE_HEADER", "RESPONSE_BODY", "RESPONSE_TIME");
+    }
+
+    @Test
+    void newResponseBodyHeaderTimeVariableAndScriptAssertionsExecute() {
+        DbConnectionItem dbConnection = createH2Connection("assertion-sql-" + System.nanoTime());
+
+        ApiRunResponse run = apiAutomationService.debugRunDefinitionDraft(WORKSPACE_CODE, new ApiDebugDefinitionRequest(
+                WORKSPACE_CODE,
+                null,
+                "new assertions",
+                request("GET", baseUrl + "/json", List.of()),
+                List.of(
+                        responseCodeAssertion("EQUALS", "200"),
+                        headerAssertion("X-Trace", "EQUALS", "trace-123"),
+                        bodyAssertion("JSON_PATH", "$.user.name", "EQUALS", "Alice", "XML"),
+                        bodyAssertion("REGEX", "Alice", "EQUALS", "Alice", "XML"),
+                        responseTimeAssertion("999999"),
+                        variableAssertion(List.of(
+                                assertionItem(null, null, "firstToken", "EQUALS", "alpha", true),
+                                assertionItem(null, null, "id_1", "EQUALS", "7", true),
+                                assertionItem(null, null, "sqlRows", "CONTAINS", "alpha", true)
+                        )),
+                        scriptAssertion("if (response.statusCode !== 200) fail('bad status'); if (!request.url.includes('/json')) fail('bad request');")
+                ),
+                List.of(),
+                List.of(),
+                List.of(new ApiProcessorInput(
+                        "post-sql",
+                        "SQL",
+                        "SQL postprocessor",
+                        true,
+                        null,
+                        null,
+                        "SELECT 'alpha' AS token, 7 AS id",
+                        null,
+                        dbConnection.id(),
+                        null,
+                        5000,
+                        "id",
+                        List.of(new ApiKeyValueInput("firstToken", "token", null, true, null, null, null, null, null)),
+                        "sqlRows",
+                        List.of()
+                )),
+                null,
+                null
+        ));
+
+        ApiRunStepResultResponse step = run.stepResults().getFirst();
+        assertThat(run.result()).isEqualTo("SUCCESS");
+        assertThat(step.assertionResults()).allMatch(ApiAssertionResult::success);
+        assertThat(step.assertionResults()).anySatisfy(result -> {
+            assertThat(result.type()).isEqualTo("VARIABLE");
+            assertThat(result.subject()).isEqualTo("firstToken");
+            assertThat(result.actualValue()).isEqualTo("alpha");
+        });
+        assertThat(step.assertionResults()).anySatisfy(result -> {
+            assertThat(result.type()).isEqualTo("RESPONSE_BODY");
+            assertThat(result.subject()).isEqualTo("$.user.name");
+            assertThat(result.actualValue()).contains("Alice");
+        });
+    }
+
+    @Test
+    void xpathAssertionReadsXmlAndFailuresIncludeActualExpected() {
+        ApiRunResponse run = apiAutomationService.debugRunDefinitionDraft(WORKSPACE_CODE, new ApiDebugDefinitionRequest(
+                WORKSPACE_CODE,
+                null,
+                "xpath assertions",
+                request("GET", baseUrl + "/xml", List.of()),
+                List.of(
+                        bodyAssertion("X_PATH", "/root/user/name", "EQUALS", "Alice XML", "XML"),
+                        variableAssertion(List.of(assertionItem(null, null, "missingToken", "EQUALS", "expected", true)))
+                ),
+                List.of(),
+                List.of(),
+                List.of(),
+                null,
+                null
+        ));
+
+        ApiRunStepResultResponse step = run.stepResults().getFirst();
+        assertThat(run.result()).isEqualTo("FAILED");
+        assertThat(step.assertionResults()).anySatisfy(result -> {
+            assertThat(result.type()).isEqualTo("RESPONSE_BODY");
+            assertThat(result.success()).isTrue();
+            assertThat(result.actualValue()).contains("Alice XML");
+        });
+        assertThat(step.assertionResults()).anySatisfy(result -> {
+            assertThat(result.type()).isEqualTo("VARIABLE");
+            assertThat(result.success()).isFalse();
+            assertThat(result.subject()).isEqualTo("missingToken");
+            assertThat(result.expectedValue()).isEqualTo("expected");
+            assertThat(result.actualValue()).isEmpty();
+            assertThat(result.message()).contains("Variable not found");
+        });
+    }
+
     private DbConnectionItem createH2Connection(String name) {
         return settingsService.createDbConnection(WORKSPACE_CODE, new DbConnectionRequest(
                 null,
@@ -266,6 +390,57 @@ class ApiProcessorCoreTests extends IntegrationTestSupport {
                     assertThat(result.success()).isTrue();
                     assertThat(result.value()).isEqualTo(value);
                 });
+    }
+
+    private ApiAssertionInput responseCodeAssertion(String condition, String expectedValue) {
+        return new ApiAssertionInput(null, null, null, expectedValue, "assert-code", "RESPONSE_CODE",
+                "Status", true, null, condition, null, null, null, null, null, null, null, null);
+    }
+
+    private ApiAssertionInput headerAssertion(String header, String condition, String expectedValue) {
+        return new ApiAssertionInput(null, null, null, null, "assert-header", "RESPONSE_HEADER",
+                "Header", true, null, null,
+                List.of(assertionItem(header, null, null, condition, expectedValue, true)),
+                null, null, null, null, null, null, null);
+    }
+
+    private ApiAssertionInput bodyAssertion(String bodyType, String expression, String condition, String expectedValue, String responseFormat) {
+        ApiAssertionGroupInput group = new ApiAssertionGroupInput(
+                List.of(assertionItem(null, expression, null, condition, expectedValue, true)),
+                responseFormat
+        );
+        return new ApiAssertionInput(null, null, null, null, "assert-body-" + bodyType, "RESPONSE_BODY",
+                "Body", true, null, null, null, bodyType,
+                "JSON_PATH".equals(bodyType) ? group : null,
+                "X_PATH".equals(bodyType) ? group : null,
+                "REGEX".equals(bodyType) ? group : null,
+                null, null, null);
+    }
+
+    private ApiAssertionInput responseTimeAssertion(String expectedValue) {
+        return new ApiAssertionInput(null, null, null, expectedValue, "assert-time", "RESPONSE_TIME",
+                "Time", true, null, "LT_OR_EQUALS", null, null, null, null, null, null, null, null);
+    }
+
+    private ApiAssertionInput variableAssertion(List<ApiAssertionItemInput> items) {
+        return new ApiAssertionInput(null, null, null, null, "assert-variable", "VARIABLE",
+                "Variable", true, null, null, null, null, null, null, null, items, null, null);
+    }
+
+    private ApiAssertionInput scriptAssertion(String script) {
+        return new ApiAssertionInput(null, null, null, null, "assert-script", "SCRIPT",
+                "Script", true, null, null, null, null, null, null, null, null, "JAVASCRIPT", script);
+    }
+
+    private ApiAssertionItemInput assertionItem(
+            String header,
+            String expression,
+            String variableName,
+            String condition,
+            String expectedValue,
+            Boolean enabled
+    ) {
+        return new ApiAssertionItemInput(header, expression, variableName, condition, expectedValue, enabled);
     }
 
     private void writeResponse(HttpExchange exchange, int status, String contentType, Map<String, String> headers, String body) throws IOException {

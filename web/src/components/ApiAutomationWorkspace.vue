@@ -47,6 +47,7 @@ type RequestEditorTab = {
   definitionId: number | null
   title: string
   method: string
+  activeTab: RequestContentTab
   draft: ApiDefinitionDetail
   savedFingerprint: string
   isDirty: boolean
@@ -75,6 +76,7 @@ type DefinitionDirectoryTreeNode = {
 
 type BatchAddMode = 'query' | 'cookie' | 'header' | 'body-form' | 'assertion' | 'extractor'
 type SortableParamGroup = 'query' | 'header' | 'body-form'
+type RequestContentTab = 'params' | 'headers' | 'body' | 'auth' | 'pre' | 'post' | 'tests' | 'settings'
 
 const DEFINITION_TREE_ROOT_KEY = 'definition-root'
 const DEFINITION_TREE_UNASSIGNED_KEY = 'definition-unassigned'
@@ -111,7 +113,7 @@ const definitionSaveDialogVisible = ref(false)
 const definitionSaveDialogDebugAfterSave = ref(false)
 const batchAddDrawerVisible = ref(false)
 const activeTab = ref<'definitions' | 'scenarios' | 'execution' | 'reports' | 'settings'>('definitions')
-const activeRequestTab = ref<'params' | 'headers' | 'body' | 'auth' | 'pre' | 'post' | 'tests' | 'settings'>('params')
+const activeRequestTab = ref<RequestContentTab>('body')
 const responsePreviewTab = ref<'body' | 'header' | 'console' | 'actualRequest'>('body')
 const batchAddMode = ref<BatchAddMode>('query')
 const batchAddInput = ref('')
@@ -1335,6 +1337,23 @@ function fingerprintDefinitionDetail(detail: ApiDefinitionDetail) {
   return JSON.stringify(detail)
 }
 
+function hasEnabledKeyValueRows(rows: ApiKeyValue[]) {
+  return rows.some(item => !isKeyValueRowEmpty(item) && item.enabled !== false)
+}
+
+function resolveDefaultRequestTab(detail: ApiDefinitionDetail): RequestContentTab {
+  if (detail.requestConfig.body.type !== 'NONE') {
+    return 'body'
+  }
+  if (hasEnabledKeyValueRows(detail.requestConfig.queryParams)) {
+    return 'params'
+  }
+  if (hasEnabledKeyValueRows(detail.requestConfig.headers)) {
+    return 'headers'
+  }
+  return 'body'
+}
+
 function buildEmptyDefinitionDetail(): ApiDefinitionDetail {
   return {
     id: 0,
@@ -1386,6 +1405,7 @@ function makeRequestEditorTab(detail?: ApiDefinitionDetail) {
     definitionId: draft.id || null,
     title: draft.name || '\u65b0\u5efa\u8bf7\u6c42',
     method: draft.requestConfig.method || draft.method || 'GET',
+    activeTab: resolveDefaultRequestTab(draft),
     draft,
     savedFingerprint,
     isDirty: false,
@@ -1402,7 +1422,16 @@ function syncActiveRequestEditorTab() {
   current.definitionId = definitionForm.id || null
   current.title = definitionForm.name || '\u65b0\u5efa\u8bf7\u6c42'
   current.method = definitionForm.requestConfig.method || definitionForm.method || 'GET'
+  current.activeTab = activeRequestTab.value
   current.isDirty = current.savedFingerprint !== fingerprintDefinitionDetail(snapshot)
+}
+
+function setActiveRequestContentTab(tab: RequestContentTab) {
+  activeRequestTab.value = tab
+  const current = activeRequestEditorTab.value
+  if (current) {
+    current.activeTab = tab
+  }
 }
 
 function applyDefinitionToEditor(detail: ApiDefinitionDetail, options?: { markSaved?: boolean }) {
@@ -1418,6 +1447,7 @@ function applyDefinitionToEditor(detail: ApiDefinitionDetail, options?: { markSa
     current.definitionId = detail.id || null
     current.title = detail.name || '\u65b0\u5efa\u8bf7\u6c42'
     current.method = detail.requestConfig.method || detail.method || 'GET'
+    current.activeTab = current.activeTab || resolveDefaultRequestTab(cloned)
     if (options?.markSaved) {
       current.savedFingerprint = fingerprintDefinitionDetail(cloned)
       current.isDirty = false
@@ -1434,6 +1464,7 @@ function activateRequestEditorTab(key: string) {
     return
   }
   activeRequestEditorKey.value = key
+  activeRequestTab.value = target.activeTab || resolveDefaultRequestTab(target.draft)
   applyDefinitionToEditor(target.draft)
 }
 
@@ -1468,11 +1499,14 @@ function syncDefinitionTreeSelection(detail: Pick<ApiDefinitionDetail, 'id' | 'w
 function openOrReuseDraftRequest(detail: ApiDefinitionDetail) {
   const current = activeRequestEditorTab.value
   if (current && current.definitionId == null && !current.isDirty) {
-    current.draft = cloneDefinitionDetail(detail)
+    const draft = cloneDefinitionDetail(detail)
+    hydrateDefinitionKeyValueRows(draft)
+    current.draft = draft
     current.definitionId = null
     current.title = detail.name || '\u65b0\u5efa\u8bf7\u6c42'
     current.method = detail.requestConfig.method || detail.method || 'GET'
-    current.savedFingerprint = fingerprintDefinitionDetail(detail)
+    current.activeTab = resolveDefaultRequestTab(draft)
+    current.savedFingerprint = fingerprintDefinitionDetail(draft)
     current.isDirty = false
     activateRequestEditorTab(current.key)
     return
@@ -1496,6 +1530,7 @@ async function closeRequestEditorTab(key: string) {
       current.definitionId = null
       current.title = '\u65b0\u5efa\u8bf7\u6c42'
       current.method = 'GET'
+      current.activeTab = resolveDefaultRequestTab(emptyDetail)
       current.savedFingerprint = fingerprintDefinitionDetail(emptyDetail)
       current.isDirty = false
       activateRequestEditorTab(current.key)
@@ -2622,17 +2657,17 @@ function formatTimeLabel(value?: string | null) {
               </div>
 
               <div class="ms-like-top-tabs">
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'headers' }]" @click="activeRequestTab = 'headers'">&#35831;&#27714;&#22836;</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'body' }]" @click="activeRequestTab = 'body'">&#35831;&#27714;&#20307;</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'params' }]" @click="activeRequestTab = 'params'">
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'headers' }]" @click="setActiveRequestContentTab('headers')">&#35831;&#27714;&#22836;</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'body' }]" @click="setActiveRequestContentTab('body')">&#35831;&#27714;&#20307;</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'params' }]" @click="setActiveRequestContentTab('params')">
                   Params
                   <span v-if="queryEnabledCount" class="ms-like-tab-badge">{{ queryEnabledCount }}</span>
                 </button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'auth' }]" @click="activeRequestTab = 'auth'">Auth</button>
-                <button data-testid="request-tab-pre" :class="['ms-like-top-tab', { active: activeRequestTab === 'pre' }]" @click="activeRequestTab = 'pre'">前置处理</button>
-                <button data-testid="request-tab-post" :class="['ms-like-top-tab', { active: activeRequestTab === 'post' }]" @click="activeRequestTab = 'post'">后置处理</button>
-                <button data-testid="request-tab-tests" :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="activeRequestTab = 'tests'">断言</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'settings' }]" @click="activeRequestTab = 'settings'">&#35774;&#32622;</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'auth' }]" @click="setActiveRequestContentTab('auth')">Auth</button>
+                <button data-testid="request-tab-pre" :class="['ms-like-top-tab', { active: activeRequestTab === 'pre' }]" @click="setActiveRequestContentTab('pre')">前置处理</button>
+                <button data-testid="request-tab-post" :class="['ms-like-top-tab', { active: activeRequestTab === 'post' }]" @click="setActiveRequestContentTab('post')">后置处理</button>
+                <button data-testid="request-tab-tests" :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="setActiveRequestContentTab('tests')">断言</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'settings' }]" @click="setActiveRequestContentTab('settings')">&#35774;&#32622;</button>
               </div>
 
               <div class="ms-like-request-body">

@@ -3094,42 +3094,46 @@ function formatTimeLabel(value?: string | null) {
                 </div>
 
                 <div class="ms-like-response-body">
-                  <MonacoCodeEditor
-                    v-if="responsePreviewTab === 'body'"
-                    :model-value="responseBodyPreview"
-                    :language="responseBodyLanguage"
-                    :read-only="true"
-                    :show-format-button="false"
-                    :fit-content="true"
-                    height="360px"
-                  />
-                  <MonacoCodeEditor
-                    v-else-if="responsePreviewTab === 'header'"
-                    :model-value="responseHeadersPreview"
-                    language="json"
-                    :read-only="true"
-                    :show-format-button="false"
-                    :fit-content="true"
-                    height="360px"
-                  />
-                  <MonacoCodeEditor
-                    v-else-if="responsePreviewTab === 'console'"
-                    :model-value="responseConsolePreview"
-                    language="text"
-                    :read-only="true"
-                    :show-format-button="false"
-                    :fit-content="true"
-                    height="360px"
-                  />
-                  <MonacoCodeEditor
-                    v-else-if="responsePreviewTab === 'actualRequest'"
-                    :model-value="actualRequestPreview"
-                    language="json"
-                    :read-only="true"
-                    :show-format-button="false"
-                    :fit-content="true"
-                    height="360px"
-                  />
+                    <MonacoCodeEditor
+                      v-if="responsePreviewTab === 'body'"
+                      :model-value="responseBodyPreview"
+                      :language="responseBodyLanguage"
+                      :read-only="true"
+                      :show-format-button="false"
+                      :fit-content="true"
+                      :max-fit-content-height="1000"
+                      height="100%"
+                    />
+                    <MonacoCodeEditor
+                      v-else-if="responsePreviewTab === 'header'"
+                      :model-value="responseHeadersPreview"
+                      language="json"
+                      :read-only="true"
+                      :show-format-button="false"
+                      :fit-content="true"
+                      :max-fit-content-height="1000"
+                      height="100%"
+                    />
+                    <MonacoCodeEditor
+                      v-else-if="responsePreviewTab === 'console'"
+                      :model-value="responseConsolePreview"
+                      language="text"
+                      :read-only="true"
+                      :show-format-button="false"
+                      :fit-content="true"
+                      :max-fit-content-height="1000"
+                      height="100%"
+                    />
+                    <MonacoCodeEditor
+                      v-else-if="responsePreviewTab === 'actualRequest'"
+                      :model-value="actualRequestPreview"
+                      language="json"
+                      :read-only="true"
+                      :show-format-button="false"
+                      :fit-content="true"
+                      :max-fit-content-height="1000"
+                      height="100%"
+                    />
                 </div>
               </template>
             </div>
@@ -3623,6 +3627,10 @@ function formatTimeLabel(value?: string | null) {
   min-height: 820px;
 }
 
+.ms-like-layout .ms-like-main {
+  overflow: auto;
+}
+
 .ms-like-sidebar {
   display: flex;
   flex-direction: column;
@@ -3948,10 +3956,15 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-main {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) 290px;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
   background: #fff;
+}
+
+.ms-like-main > * {
+  min-height: 0;
 }
 
 .ms-like-tab-strip {
@@ -4013,8 +4026,8 @@ function formatTimeLabel(value?: string | null) {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  min-height: 0;
   padding: 12px 16px 16px;
+  flex: 0 0 auto;
 }
 
 .ms-like-request-row {
@@ -4507,7 +4520,8 @@ function formatTimeLabel(value?: string | null) {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-height: 0;
+  min-height: 290px;
+  flex: 0 0 auto;
   border-top: 1px solid var(--el-border-color-light);
   background: #fff;
   padding: 10px 16px 16px;
@@ -4521,6 +4535,8 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-response-body {
   min-height: 0;
   overflow: visible;
+  display: flex;
+  flex-direction: column;
 }
 
 .ms-like-response-empty {
@@ -4978,7 +4994,7 @@ pre {
   }
 
   .ms-like-main {
-    grid-template-rows: auto minmax(0, 1fr) 320px;
+    flex: 1;
   }
 
   .ms-like-request-row,

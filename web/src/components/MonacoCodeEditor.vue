@@ -35,12 +35,14 @@ const props = withDefaults(defineProps<{
   readOnly?: boolean
   showFormatButton?: boolean
   fitContent?: boolean
+  maxFitContentHeight?: number
   wordWrap?: EditorWordWrap
 }>(), {
   height: '500px',
   readOnly: false,
   showFormatButton: true,
   fitContent: false,
+  maxFitContentHeight: 1000,
   wordWrap: 'on',
 })
 
@@ -147,7 +149,9 @@ function syncEditorHeight() {
   if (!props.fitContent || !editor) {
     return
   }
-  bodyHeight.value = `${Math.max(editor.getContentHeight(), 120)}px`
+  const contentHeight = editor.getContentHeight()
+  const height = Math.max(120, Math.min(contentHeight, props.maxFitContentHeight))
+  bodyHeight.value = `${height}px`
   editor.layout()
 }
 

@@ -91,6 +91,15 @@ function tryFormatXml(value: string) {
     .join('\n')
 }
 
+function tryFormatJson(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return ''
+  }
+  const parsed = JSON.parse(trimmed)
+  return JSON.stringify(parsed, null, 2)
+}
+
 async function formatDocument() {
   if (!editor) {
     return
@@ -109,16 +118,17 @@ async function formatDocument() {
     return
   }
   if (props.language === 'json') {
-    if (props.readOnly) {
-      editor.updateOptions({ readOnly: false })
+    try {
+      const formatted = tryFormatJson(value)
+      suppressModelSync = true
+      editor.setValue(formatted)
+      suppressModelSync = false
+      emit('update:modelValue', formatted)
+      emit('change', formatted)
     }
-    await editor.getAction('editor.action.formatDocument')?.run()
-    if (props.readOnly) {
-      editor.updateOptions({ readOnly: true })
+    catch {
+      return
     }
-    const formatted = editor.getValue()
-    emit('update:modelValue', formatted)
-    emit('change', formatted)
     return
   }
   if (props.language === 'text') {

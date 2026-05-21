@@ -3591,6 +3591,7 @@ function formatTimeLabel(value?: string | null) {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
   border-right: 1px solid var(--el-border-color-light);
   background: #fff;
   padding: 12px;
@@ -3637,8 +3638,8 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-directory-shell {
-  min-height: 180px;
-  max-height: 280px;
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   border: 1px solid #ebeef5;
   border-radius: 8px;

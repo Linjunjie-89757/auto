@@ -112,7 +112,7 @@ const definitionSaveDialogDebugAfterSave = ref(false)
 const batchAddDrawerVisible = ref(false)
 const activeTab = ref<'definitions' | 'scenarios' | 'execution' | 'reports' | 'settings'>('definitions')
 const activeRequestTab = ref<'params' | 'headers' | 'body' | 'auth' | 'pre' | 'post' | 'tests' | 'settings'>('params')
-const responsePreviewTab = ref<'body' | 'headers' | 'processors' | 'assertions' | 'extractions' | 'history'>('body')
+const responsePreviewTab = ref<'body' | 'header' | 'console' | 'actualRequest'>('body')
 const batchAddMode = ref<BatchAddMode>('query')
 const batchAddInput = ref('')
 const draggingParamGroup = ref<SortableParamGroup | null>(null)
@@ -653,7 +653,6 @@ const filteredScenarios = computed(() => scenarios.value.filter((item) => {
 const apiTasks = computed(() => tasks.value.filter(item => item.engineType === 'API'))
 const apiTaskMap = computed(() => new Map(apiTasks.value.map(item => [item.id, item])))
 const apiReports = computed(() => reports.value.filter(item => apiTaskMap.value.has(item.taskId)))
-const reportHistory = computed(() => [...apiReports.value].sort((left, right) => right.id - left.id).slice(0, 8))
 const currentResponseStep = computed(() => {
   if (!reportStepResults.value.length) {
     return null
@@ -674,21 +673,6 @@ const currentExtractionResults = computed(() => currentResponseStep.value?.extra
 const currentProcessorResults = computed(() => currentResponseStep.value?.processorResults ?? [])
 const currentDebugError = computed(() => currentResponseStep.value?.errorMessage || reportDetail.value?.failureSummary || '')
 const showResponseEmptyState = computed(() => !currentResponseStep.value && !currentDebugError.value)
-const currentAssertionSummary = computed(() => {
-  const total = currentAssertionResults.value.length
-  const passed = currentAssertionResults.value.filter(item => item.success).length
-  return { total, passed }
-})
-const currentExtractionSummary = computed(() => {
-  const total = currentExtractionResults.value.length
-  const passed = currentExtractionResults.value.filter(item => item.success).length
-  return { total, passed }
-})
-const currentProcessorSummary = computed(() => {
-  const total = currentProcessorResults.value.length
-  const passed = currentProcessorResults.value.filter(item => item.success).length
-  return { total, passed }
-})
 const queryEnabledCount = computed(() =>
   definitionForm.requestConfig.queryParams.filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false).length,
 )
@@ -883,18 +867,55 @@ const responseBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
   return 'text'
 })
 
-const responseBodyPreview = computed(() => currentResponseBody.value || 'Run the request to view the response body.')
+const responseBodyPreview = computed(() => currentResponseBody.value || '')
 const responseHeadersPreview = computed(() => JSON.stringify(currentResponseHeaders.value, null, 2))
-
-async function copyText(value: string) {
-  try {
-    await navigator.clipboard.writeText(value)
-    ElMessage.success('Copied')
+const responseConsolePreview = computed(() => {
+  const lines: string[] = []
+  if (currentDebugError.value) {
+    lines.push(`[Error] ${currentDebugError.value}`)
   }
-  catch (error) {
-    ElMessage.error((error as Error).message || 'Copy failed')
+  currentProcessorResults.value.forEach((item, index) => {
+    lines.push(`[Processor ${index + 1}] ${item.stage} / ${item.name} / ${item.success ? 'PASS' : 'FAIL'} / ${item.durationMs} ms`)
+    if (item.message) {
+      lines.push(`  ${item.message}`)
+    }
+    if (Object.keys(item.outputVariables || {}).length) {
+      lines.push(`  outputVariables: ${JSON.stringify(item.outputVariables)}`)
+    }
+    item.logs?.forEach(log => lines.push(`  ${log}`))
+  })
+  currentAssertionResults.value.forEach((item, index) => {
+    lines.push(`[Assertion ${index + 1}] ${(item.name || item.type)} / ${item.success ? 'PASS' : 'FAIL'}`)
+    if (item.message) {
+      lines.push(`  ${item.message}`)
+    }
+    if (item.expectedValue !== undefined || item.actualValue !== undefined) {
+      lines.push(`  expected: ${item.expectedValue ?? ''}`)
+      lines.push(`  actual: ${item.actualValue ?? ''}`)
+    }
+  })
+  currentExtractionResults.value.forEach((item, index) => {
+    lines.push(`[Extraction ${index + 1}] ${item.name} / ${item.success ? 'OK' : 'FAIL'}`)
+    lines.push(`  ${item.value || item.message || ''}`)
+  })
+  return lines.length ? lines.join('\n') : '暂无控制台内容'
+})
+const actualRequestPreview = computed(() => {
+  const snapshot = currentResponseStep.value?.request
+  if (snapshot) {
+    return JSON.stringify(snapshot, null, 2)
   }
-}
+  return JSON.stringify({
+    method: definitionForm.requestConfig.method || definitionForm.method || 'GET',
+    url: definitionForm.requestConfig.path || definitionForm.path || '',
+    headers: Object.fromEntries(
+      definitionForm.requestConfig.headers
+        .filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false)
+        .map(item => [item.key, item.value]),
+    ),
+    body: getModeBodyText(definitionForm.requestConfig.body.type) || null,
+  }, null, 2)
+})
 
 async function pickBinaryBodyFile() {
   const input = document.createElement('input')
@@ -2336,6 +2357,7 @@ async function loadReportPreview(id: number) {
   ])
   reportDetail.value = detail
   reportStepResults.value = steps
+  responsePreviewTab.value = 'body'
 }
 
 async function openReportDetail(id: number) {
@@ -3005,29 +3027,10 @@ function formatTimeLabel(value?: string | null) {
             <div class="ms-like-response-shell">
               <div class="ms-like-response-header">
                 <div class="ms-like-response-title">响应内容</div>
-                <div class="ms-like-response-metrics">
+                <div v-if="!showResponseEmptyState" class="ms-like-response-metrics">
                   <span>状态 {{ currentResponseStatusCode ?? '-' }}</span>
                   <span>耗时 {{ currentResponseDuration ?? '-' }}<template v-if="currentResponseDuration !== null"> ms</template></span>
                   <span>大小 {{ currentResponseSize }}</span>
-                </div>
-                <div v-if="!showResponseEmptyState" class="ms-like-response-actions">
-                  <el-button
-                    v-if="responsePreviewTab === 'body'"
-                    text
-                    type="primary"
-                    @click="copyText(responseBodyPreview)"
-                  >
-                    Copy
-                  </el-button>
-                  <el-button
-                    v-else-if="responsePreviewTab === 'headers'"
-                    text
-                    type="primary"
-                    @click="copyText(responseHeadersPreview)"
-                  >
-                    Copy
-                  </el-button>
-                  <el-button v-if="selectedReportId" text type="primary" @click="openReportDetail(selectedReportId)">完整报告</el-button>
                 </div>
               </div>
 
@@ -3035,30 +3038,29 @@ function formatTimeLabel(value?: string | null) {
                 {{ currentDebugError }}
               </div>
 
-              <div class="ms-like-response-tabs">
-                <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'body' }]" @click="responsePreviewTab = 'body'">Body</button>
-                <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'headers' }]" @click="responsePreviewTab = 'headers'">Headers</button>
-                <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'processors' }]" @click="responsePreviewTab = 'processors'">&#22788;&#29702;&#22120;</button>
-                <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'assertions' }]" @click="responsePreviewTab = 'assertions'">断言</button>
-                <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'extractions' }]" @click="responsePreviewTab = 'extractions'">提取</button>
-                <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'history' }]" @click="responsePreviewTab = 'history'">历史</button>
-              </div>
-
-              <div class="ms-like-response-body">
-                <div v-if="showResponseEmptyState" class="ms-like-response-empty">
-                  <div class="ms-like-response-empty-card">
-                    <div class="ms-like-response-empty-visual">
-                      <div class="ms-like-response-empty-window">
-                        <span></span>
-                        <span></span>
-                        <span></span>
-                      </div>
+              <div v-if="showResponseEmptyState" class="ms-like-response-empty">
+                <div class="ms-like-response-empty-card">
+                  <div class="ms-like-response-empty-visual">
+                    <div class="ms-like-response-empty-window">
+                      <span></span>
+                      <span></span>
+                      <span></span>
                     </div>
-                    <div class="ms-like-response-empty-text">&#28857;&#20987; <span>&#21457;&#36865;</span> &#33719;&#21462;&#21709;&#24212;&#20869;&#23481;</div>
                   </div>
+                  <div class="ms-like-response-empty-text">点击 <span>发送</span> 获取响应内容</div>
                 </div>
+              </div>
+              <template v-else>
+                <div class="ms-like-response-tabs">
+                  <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'body' }]" @click="responsePreviewTab = 'body'">Body</button>
+                  <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'header' }]" @click="responsePreviewTab = 'header'">Header</button>
+                  <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'console' }]" @click="responsePreviewTab = 'console'">控制台</button>
+                  <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'actualRequest' }]" @click="responsePreviewTab = 'actualRequest'">实际请求</button>
+                </div>
+
+                <div class="ms-like-response-body">
                   <MonacoCodeEditor
-                    v-if="!showResponseEmptyState && responsePreviewTab === 'body'"
+                    v-if="responsePreviewTab === 'body'"
                     :model-value="responseBodyPreview"
                     :language="responseBodyLanguage"
                     :read-only="true"
@@ -3067,7 +3069,7 @@ function formatTimeLabel(value?: string | null) {
                     height="360px"
                   />
                   <MonacoCodeEditor
-                    v-else-if="!showResponseEmptyState && responsePreviewTab === 'headers'"
+                    v-else-if="responsePreviewTab === 'header'"
                     :model-value="responseHeadersPreview"
                     language="json"
                     :read-only="true"
@@ -3075,62 +3077,26 @@ function formatTimeLabel(value?: string | null) {
                     :fit-content="true"
                     height="360px"
                   />
-                  <div v-else-if="!showResponseEmptyState && responsePreviewTab === 'processors'" class="result-list">
-                  <div class="result-summary">通过 {{ currentProcessorSummary.passed }} / {{ currentProcessorSummary.total }}</div>
-                  <div v-for="(item, index) in currentProcessorResults" :key="`processor-preview-${index}`" class="result-item processor-result-item">
-                    <el-tag size="small" :type="item.success ? 'success' : 'danger'">{{ item.success ? 'PASS' : 'FAIL' }}</el-tag>
-                    <div class="processor-result-copy">
-                        <div class="result-title">{{ item.stage === 'PRE' ? '前置' : '后置' }} / {{ item.name }}</div>
-                      <div class="result-meta">{{ item.processorType }} · {{ item.durationMs }} ms · {{ item.message }}</div>
-                      <div v-if="Object.keys(item.outputVariables || {}).length" class="processor-variable-list">
-                        <span v-for="(value, key) in item.outputVariables" :key="`${item.name}-${key}`" class="processor-variable-pill">{{ key }}={{ value }}</span>
-                      </div>
-                      <pre v-if="item.logs?.length" class="processor-log-preview">{{ item.logs.join('\n') }}</pre>
-                    </div>
-                  </div>
+                  <MonacoCodeEditor
+                    v-else-if="responsePreviewTab === 'console'"
+                    :model-value="responseConsolePreview"
+                    language="text"
+                    :read-only="true"
+                    :show-format-button="false"
+                    :fit-content="true"
+                    height="360px"
+                  />
+                  <MonacoCodeEditor
+                    v-else-if="responsePreviewTab === 'actualRequest'"
+                    :model-value="actualRequestPreview"
+                    language="json"
+                    :read-only="true"
+                    :show-format-button="false"
+                    :fit-content="true"
+                    height="360px"
+                  />
                 </div>
-                <div v-else-if="!showResponseEmptyState && responsePreviewTab === 'assertions'" class="result-list">
-                  <div class="result-summary">通过 {{ currentAssertionSummary.passed }} / {{ currentAssertionSummary.total }}</div>
-                  <div v-for="(item, index) in currentAssertionResults" :key="`assertion-preview-${index}`" class="result-item">
-                    <el-tag size="small" :type="item.success ? 'success' : 'danger'">{{ item.success ? 'PASS' : 'FAIL' }}</el-tag>
-                    <div>
-                      <div class="result-title">{{ item.name || item.type }} · {{ item.subject || '默认项' }}</div>
-                      <div class="result-meta">
-                        <span v-if="item.condition">{{ item.condition }}</span>
-                        <span v-if="item.expectedValue !== undefined"> · 期望 {{ item.expectedValue || '空值' }}</span>
-                        <span v-if="item.actualValue !== undefined"> · 实际 {{ item.actualValue || '空值' }}</span>
-                      </div>
-                      <div class="result-meta">{{ item.message }}</div>
-                    </div>
-                  </div>
-                </div>
-                <div v-else-if="!showResponseEmptyState && responsePreviewTab === 'extractions'" class="result-list">
-                  <div class="result-summary">成功提取 {{ currentExtractionSummary.passed }} / {{ currentExtractionSummary.total }}</div>
-                  <div v-for="(item, index) in currentExtractionResults" :key="`extract-preview-${index}`" class="result-item">
-                    <el-tag size="small" :type="item.success ? 'success' : 'danger'">{{ item.success ? 'OK' : 'FAIL' }}</el-tag>
-                    <div>
-                      <div class="result-title">{{ item.name }}</div>
-                      <div class="result-meta">{{ item.value || item.message }}</div>
-                    </div>
-                  </div>
-                </div>
-                <div v-else-if="!showResponseEmptyState" class="result-list">
-                  <div class="result-summary">最近 8 条 API 报告</div>
-                  <button
-                    v-for="item in reportHistory"
-                    :key="`history-${item.id}`"
-                    type="button"
-                    class="history-row"
-                    @click="loadReportPreview(item.id)"
-                  >
-                    <div>
-                      <div class="result-title">{{ item.reportName }}</div>
-                      <div class="result-meta">{{ item.failureSummary || item.workspaceName }}</div>
-                    </div>
-                    <el-tag size="small" :type="resultTagType(item.result)">{{ item.result }}</el-tag>
-                  </button>
-                </div>
-              </div>
+              </template>
             </div>
           </section>
         </div>
@@ -3636,7 +3602,6 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-tree-toolbar,
 .ms-like-request-row,
 .ms-like-response-header,
-.ms-like-response-actions,
 .ms-like-response-metrics {
   display: flex;
   align-items: center;
@@ -4521,6 +4486,57 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-response-body {
   min-height: 0;
   overflow: visible;
+}
+
+.ms-like-response-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  padding: 12px 0 4px;
+}
+
+.ms-like-response-empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.ms-like-response-empty-visual {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ms-like-response-empty-window {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 10px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-fill-color-lighter);
+}
+
+.ms-like-response-empty-window span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--el-text-color-secondary);
+  opacity: 0.6;
+}
+
+.ms-like-response-empty-text {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.ms-like-response-empty-text span {
+  color: #165dff;
+  font-weight: 500;
 }
 
 .workspace-sidebar,

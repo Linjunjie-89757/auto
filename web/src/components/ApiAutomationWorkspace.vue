@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import type { Directive } from 'vue'
 import {
   Fold,
   Folder,
@@ -80,6 +81,27 @@ const DEFINITION_TREE_UNASSIGNED_KEY = 'definition-unassigned'
 
 const { workspaceCode, isAllScope } = useWorkspace()
 const { canWriteWorkspace } = useWorkspaceAccess()
+
+const vOverflowTitle: Directive<HTMLElement, string> = {
+  mounted(element, binding) {
+    setOverflowTitle(element, binding.value)
+  },
+  updated(element, binding) {
+    setOverflowTitle(element, binding.value)
+  },
+}
+
+function setOverflowTitle(element: HTMLElement, value?: string) {
+  requestAnimationFrame(() => {
+    const text = value || element.textContent?.trim() || ''
+    if (text && element.scrollWidth > element.clientWidth) {
+      element.setAttribute('title', text)
+    }
+    else {
+      element.removeAttribute('title')
+    }
+  })
+}
 
 const loading = ref(false)
 const saving = ref(false)
@@ -2488,10 +2510,10 @@ function formatTimeLabel(value?: string | null) {
                       </span>
                       <template v-if="data.type === 'request'">
                         <span :class="['ms-like-method', `method-${(data.method || 'GET').toLowerCase()}`]">{{ data.method }}</span>
-                        <span class="ms-like-tree-item-name">{{ data.label }}</span>
+                        <span v-overflow-title="data.label" class="ms-like-tree-item-name">{{ data.label }}</span>
                       </template>
                       <template v-else>
-                        <span class="ms-like-directory-label">{{ data.label }}</span>
+                        <span v-overflow-title="data.label" class="ms-like-directory-label">{{ data.label }}</span>
                         <span class="ms-like-directory-count">{{ data.count }}</span>
                       </template>
                     </div>

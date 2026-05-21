@@ -25,6 +25,7 @@ import type {
   ApiKeyValue,
   ApiProcessorConfig,
   ApiProcessorExtractorConfig,
+  ApiDebugDefinitionPayload,
   ApiRunPayload,
   ApiRunStepResult,
   ApiScenarioDetail,
@@ -85,6 +86,7 @@ const saving = ref(false)
 const reportDrawerVisible = ref(false)
 const bugDialogVisible = ref(false)
 const definitionSaveDialogVisible = ref(false)
+const definitionSaveDialogDebugAfterSave = ref(false)
 const batchAddDrawerVisible = ref(false)
 const activeTab = ref<'definitions' | 'scenarios' | 'execution' | 'reports' | 'settings'>('definitions')
 const activeRequestTab = ref<'params' | 'headers' | 'body' | 'auth' | 'pre' | 'post' | 'tests' | 'settings'>('params')
@@ -259,6 +261,9 @@ const bugForm = reactive<CreateBugPayload & { workspaceCode: string; reportId: n
 
 const writableWorkspaces = computed(() => workspaces.value.filter(item => !item.allScope && canWriteWorkspace(item.code)))
 const canWriteDefinition = computed(() => canWriteTarget(definitionForm.workspaceCode))
+const canDebugDefinition = computed(() => canWriteDefinition.value
+  && !!definitionForm.requestConfig.method?.trim()
+  && !!definitionForm.requestConfig.path?.trim())
 const canWriteScenario = computed(() => canWriteTarget(scenarioForm.workspaceCode))
 const canWriteEnvironment = computed(() => canWriteTarget(environmentForm.workspaceCode))
 const canWriteVariableSet = computed(() => canWriteTarget(variableSetForm.workspaceCode))
@@ -1084,6 +1089,16 @@ function hydrateDefinitionKeyValueRows(detail: ApiDefinitionDetail) {
   syncKeyValueRows(detail.requestConfig.queryParams, queryParamDefaults())
   syncKeyValueRows(detail.requestConfig.headers, headerParamDefaults())
   syncKeyValueRows(detail.requestConfig.body.formItems, bodyFormParamDefaults())
+  detail.requestConfig.body.rawText = detail.requestConfig.body.rawText || ''
+  detail.requestConfig.body.jsonText = detail.requestConfig.body.type === 'RAW_JSON'
+    ? (detail.requestConfig.body.rawText || '')
+    : (detail.requestConfig.body.jsonText || '')
+  detail.requestConfig.body.xmlText = detail.requestConfig.body.type === 'RAW_XML'
+    ? (detail.requestConfig.body.rawText || '')
+    : (detail.requestConfig.body.xmlText || '')
+  detail.requestConfig.body.plainText = detail.requestConfig.body.type === 'RAW_TEXT'
+    ? (detail.requestConfig.body.rawText || '')
+    : (detail.requestConfig.body.plainText || '')
   detail.requestConfig.authConfig = normalizeAuthConfig(detail.requestConfig.authConfig)
   detail.preProcessors = normalizeProcessorList(detail.preProcessors || [], 'pre')
   detail.postProcessors = normalizePostProcessorList(detail)
@@ -1924,7 +1939,44 @@ function syncDefinitionSaveForm() {
   definitionSaveForm.workspaceCode = definitionForm.workspaceCode || selectedDefinitionWorkspaceCode.value || defaultEditableWorkspaceCode()
   definitionSaveForm.name = definitionForm.name.trim()
   definitionSaveForm.path = definitionForm.requestConfig.path.trim()
-  definitionSaveForm.directoryName = (definitionForm.directoryName || selectedDefinitionModulePath.value || '').trim()
+  definitionSaveForm.directoryName = resolveDefinitionDirectoryName(definitionSaveForm.workspaceCode)
+}
+
+function resolveDefinitionDirectoryName(targetWorkspaceCode?: string) {
+  const workspace = (targetWorkspaceCode || definitionForm.workspaceCode || selectedDefinitionWorkspaceCode.value || '').trim()
+  const selectedPath = selectedDefinitionWorkspaceCode.value === workspace
+    ? (selectedDefinitionModulePath.value || '').trim()
+    : ''
+  const currentPath = (definitionForm.directoryName || '').trim()
+  if (!definitionForm.id && selectedPath) {
+    return selectedPath
+  }
+  return currentPath || selectedPath
+}
+
+function buildDefinitionMutationPayload() {
+  const targetWorkspaceCode = isAllScope.value ? definitionForm.workspaceCode || writableWorkspaces.value[0]?.code : workspaceCode.value
+  return {
+    workspaceCode: targetWorkspaceCode,
+    name: definitionForm.name.trim(),
+    directoryName: (definitionForm.directoryName || '').trim() || null,
+    description: definitionForm.description,
+    tags: definitionForm.tags,
+    requestConfig: {
+      ...definitionForm.requestConfig,
+      path: definitionForm.requestConfig.path.trim(),
+      queryParams: prepareKeyValueRowsForPayload(definitionForm.requestConfig.queryParams),
+      headers: prepareKeyValueRowsForPayload(definitionForm.requestConfig.headers),
+      body: {
+        ...definitionForm.requestConfig.body,
+        formItems: prepareKeyValueRowsForPayload(definitionForm.requestConfig.body.formItems),
+      },
+    },
+    assertions: definitionForm.assertions,
+    extractors: definitionForm.extractors,
+    preProcessors: definitionForm.preProcessors,
+    postProcessors: definitionForm.postProcessors,
+  }
 }
 
 async function persistDefinition(options?: { debugAfterSave?: boolean }) {
@@ -1933,27 +1985,11 @@ async function persistDefinition(options?: { debugAfterSave?: boolean }) {
   try {
     definitionForm.name = definitionForm.name.trim()
     definitionForm.requestConfig.path = definitionForm.requestConfig.path.trim()
-    definitionForm.directoryName = (definitionForm.directoryName || '').trim()
-    const payload = {
-      workspaceCode: isAllScope.value ? definitionForm.workspaceCode || writableWorkspaces.value[0]?.code : workspaceCode.value,
-      name: definitionForm.name,
-      directoryName: (definitionForm.directoryName || selectedDefinitionModulePath.value || '').trim() || null,
-      description: definitionForm.description,
-      tags: definitionForm.tags,
-      requestConfig: {
-        ...definitionForm.requestConfig,
-        queryParams: prepareKeyValueRowsForPayload(definitionForm.requestConfig.queryParams),
-        headers: prepareKeyValueRowsForPayload(definitionForm.requestConfig.headers),
-        body: {
-          ...definitionForm.requestConfig.body,
-          formItems: prepareKeyValueRowsForPayload(definitionForm.requestConfig.body.formItems),
-        },
-      },
-      assertions: definitionForm.assertions,
-      extractors: definitionForm.extractors,
-      preProcessors: definitionForm.preProcessors,
-      postProcessors: definitionForm.postProcessors,
-    }
+    syncActiveBodyText()
+    definitionForm.directoryName = resolveDefinitionDirectoryName(
+      isAllScope.value ? definitionForm.workspaceCode || writableWorkspaces.value[0]?.code : workspaceCode.value,
+    )
+    const payload = buildDefinitionMutationPayload()
     const detail = isUpdate
       ? await platformApi.updateApiDefinition(workspaceCode.value, definitionForm.id, payload)
       : await platformApi.createApiDefinition(workspaceCode.value, payload)
@@ -1974,12 +2010,13 @@ async function persistDefinition(options?: { debugAfterSave?: boolean }) {
   }
 }
 
-function openDefinitionSaveDialog() {
+function openDefinitionSaveDialog(debugAfterSave = false) {
+  definitionSaveDialogDebugAfterSave.value = debugAfterSave
   syncDefinitionSaveForm()
   definitionSaveDialogVisible.value = true
 }
 
-async function confirmDefinitionSaveDialog(options?: { debugAfterSave?: boolean }) {
+async function confirmDefinitionSaveDialog() {
   definitionSaveForm.workspaceCode = definitionSaveForm.workspaceCode.trim()
   definitionSaveForm.name = definitionSaveForm.name.trim()
   definitionSaveForm.path = definitionSaveForm.path.trim()
@@ -1997,7 +2034,10 @@ async function confirmDefinitionSaveDialog(options?: { debugAfterSave?: boolean 
   definitionForm.path = definitionSaveForm.path
   definitionForm.workspaceCode = definitionSaveForm.workspaceCode
   definitionForm.directoryName = definitionSaveForm.directoryName
-  await persistDefinition(options)
+  await persistDefinition({ debugAfterSave: definitionSaveDialogDebugAfterSave.value })
+  if (!definitionSaveDialogVisible.value) {
+    definitionSaveDialogDebugAfterSave.value = false
+  }
 }
 
 function moveScenarioStep(index: number, delta: number) {
@@ -2047,14 +2087,20 @@ async function removeDefinition() {
 }
 
 async function debugDefinition() {
-  if (!definitionForm.id) {
-    ElMessage.warning('请先保存接口')
+  if (!canDebugDefinition.value) {
+    ElMessage.warning('请补全请求方法和请求 URL')
     return
   }
   saving.value = true
   try {
-    const response = await platformApi.debugApiDefinition(workspaceCode.value, definitionForm.id, runOptions)
-    ElMessage.success(response.result === 'SUCCESS' ? '调试成功' : '调试失败')
+    syncActiveBodyText()
+    const response = await platformApi.debugApiDefinitionDraft(workspaceCode.value, {
+      ...buildDefinitionMutationPayload(),
+      definitionId: definitionForm.id || null,
+      environmentId: runOptions.environmentId,
+      variableSetId: runOptions.variableSetId,
+    } satisfies ApiDebugDefinitionPayload)
+    ElMessage.success(response.result === 'SUCCESS' ? '发送成功' : '发送失败')
     await refreshData()
     await loadReportPreview(response.reportId)
     activeTab.value = 'definitions'
@@ -2085,7 +2131,7 @@ async function saveAndDebugDefinition() {
     await persistDefinition({ debugAfterSave: true })
     return
   }
-  openDefinitionSaveDialog()
+  openDefinitionSaveDialog(true)
 }
 
 async function saveScenario() {
@@ -2515,8 +2561,8 @@ function formatTimeLabel(value?: string | null) {
                 </el-select>
                 <el-input v-model="definitionForm.requestConfig.path" class="request-url-input" placeholder="&#35831;&#36755;&#20837;&#21253;&#21547; http/https &#30340;&#23436;&#25972; URL &#25110;&#25509;&#21475;&#36335;&#24452;" data-testid="definition-url-input" />
                 <el-button @click="promptImportCurl">Curl</el-button>
-                <el-button type="primary" :disabled="!definitionForm.id || !canWriteDefinition" :loading="saving" @click="debugDefinition">
-                  &#26381;&#21153;&#31471;&#25191;&#34892;
+                <el-button type="primary" :disabled="!canDebugDefinition" :loading="saving" @click="debugDefinition">
+                  &#21457;&#36865;
                 </el-button>
                 <el-dropdown split-button :disabled="!canWriteDefinition" :loading="saving" data-testid="definition-save-button" @click="saveDefinition">
                   &#20445;&#23384;
@@ -2982,6 +3028,7 @@ function formatTimeLabel(value?: string | null) {
                   :language="responseBodyLanguage"
                   :read-only="true"
                   :show-format-button="false"
+                  :fit-content="true"
                   height="360px"
                 />
                 <MonacoCodeEditor
@@ -2990,6 +3037,7 @@ function formatTimeLabel(value?: string | null) {
                   language="json"
                   :read-only="true"
                   :show-format-button="false"
+                  :fit-content="true"
                   height="360px"
                 />
                 <div v-else-if="responsePreviewTab === 'processors'" class="result-list">
@@ -3944,7 +3992,7 @@ function formatTimeLabel(value?: string | null) {
   display: flex;
   align-items: center;
   gap: 22px;
-  overflow: auto;
+  overflow: visible;
   border-bottom: 1px solid var(--el-border-color-light);
 }
 
@@ -3999,7 +4047,7 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-request-body {
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
   background: #fff;
   padding: 0;
 }
@@ -4437,7 +4485,7 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-response-body {
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
 }
 
 .workspace-sidebar,

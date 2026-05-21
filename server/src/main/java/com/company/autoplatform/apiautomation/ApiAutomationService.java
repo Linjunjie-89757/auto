@@ -460,7 +460,7 @@ public class ApiAutomationService {
         entity.setTagsJson(ApiAutomationJsonSupport.toJson(defaultList(request.tags()), "Failed to serialize tags"));
         entity.setRequestJson(ApiAutomationJsonSupport.toJson(request.requestConfig(), "Failed to serialize request config"));
         entity.setAssertionsJson(ApiAutomationJsonSupport.toJson(defaultList(request.assertions()), "Failed to serialize assertions"));
-        entity.setExtractorsJson(null);
+        entity.setExtractorsJson(ApiAutomationJsonSupport.toJson(defaultList(request.extractors()), "Failed to serialize extractors"));
         entity.setPreprocessorsJson(ApiAutomationJsonSupport.toJson(normalizeProcessors(request.preProcessors(), "PRE"),
                 "Failed to serialize pre-processors"));
         entity.setPostprocessorsJson(ApiAutomationJsonSupport.toJson(normalizePostProcessors(request.postProcessors(), request.extractors()),
@@ -560,7 +560,7 @@ public class ApiAutomationService {
                         new ApiRequestConfigInput(entity.getHttpMethod(), entity.getPath(), 10000, List.of(), List.of(), List.of(),
                                  new ApiRequestBodyInput("NONE", null, List.of(), null, null, null), emptyAuthConfig())),
                 readAssertions(entity.getAssertionsJson()),
-                List.of(),
+                readExtractors(entity.getExtractorsJson()),
                 readPreProcessors(entity),
                 readPostProcessors(entity),
                 entity.getLastRunResult(),

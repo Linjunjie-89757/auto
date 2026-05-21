@@ -10,7 +10,7 @@
         格式化
       </button>
     </div>
-    <div ref="containerRef" class="ms-monaco-editor__body" :style="{ height }"></div>
+    <div ref="containerRef" class="ms-monaco-editor__body" :style="{ height: bodyHeight }"></div>
   </div>
 </template>
 
@@ -31,10 +31,12 @@ const props = withDefaults(defineProps<{
   height?: string
   readOnly?: boolean
   showFormatButton?: boolean
+  fitContent?: boolean
 }>(), {
   height: '500px',
   readOnly: false,
   showFormatButton: true,
+  fitContent: false,
 })
 
 const emit = defineEmits<{
@@ -43,6 +45,7 @@ const emit = defineEmits<{
 }>()
 
 const containerRef = ref<HTMLDivElement | null>(null)
+const bodyHeight = ref(props.height)
 let editor: monaco.editor.IStandaloneCodeEditor | null = null
 let suppressModelSync = false
 
@@ -86,6 +89,14 @@ function tryFormatXml(value: string) {
     .join('\n')
 }
 
+function tryFormatJson(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return ''
+  }
+  return JSON.stringify(JSON.parse(trimmed), null, 2)
+}
+
 async function formatDocument() {
   if (!editor) {
     return
@@ -103,16 +114,39 @@ async function formatDocument() {
     emit('change', formatted)
     return
   }
+  if (props.language === 'json') {
+    try {
+      const formatted = tryFormatJson(value)
+      suppressModelSync = true
+      editor.setValue(formatted)
+      suppressModelSync = false
+      emit('update:modelValue', formatted)
+      emit('change', formatted)
+    }
+    catch {
+      await editor.getAction('editor.action.formatDocument')?.run()
+    }
+    return
+  }
   if (props.language === 'text') {
     return
   }
   await editor.getAction('editor.action.formatDocument')?.run()
 }
 
+function syncEditorHeight() {
+  if (!props.fitContent || !editor) {
+    return
+  }
+  bodyHeight.value = `${Math.max(editor.getContentHeight(), 120)}px`
+  editor.layout()
+}
+
 function createEditor() {
   if (!containerRef.value) {
     return
   }
+  bodyHeight.value = props.height
   editor = monaco.editor.create(containerRef.value, {
     value: props.modelValue,
     language: mapLanguage(props.language),
@@ -142,6 +176,12 @@ function createEditor() {
   })
 
   editor.getModel()?.setEOL(monaco.editor.EndOfLineSequence.LF)
+  if (props.fitContent) {
+    editor.onDidContentSizeChange(() => {
+      syncEditorHeight()
+    })
+    syncEditorHeight()
+  }
   editor.onDidChangeModelContent(() => {
     if (!editor || suppressModelSync) {
       return
@@ -164,6 +204,7 @@ watch(
     suppressModelSync = true
     editor.setValue(value)
     suppressModelSync = false
+    syncEditorHeight()
   },
 )
 
@@ -175,6 +216,7 @@ watch(
       return
     }
     monaco.editor.setModelLanguage(model, mapLanguage(language))
+    syncEditorHeight()
   },
 )
 
@@ -185,6 +227,16 @@ watch(
       readOnly,
       contextmenu: !readOnly,
     })
+    syncEditorHeight()
+  },
+)
+
+watch(
+  () => props.height,
+  (height) => {
+    if (!props.fitContent) {
+      bodyHeight.value = height
+    }
   },
 )
 

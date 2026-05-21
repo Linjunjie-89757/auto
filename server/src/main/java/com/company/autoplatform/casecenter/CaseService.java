@@ -29,7 +29,6 @@ import java.util.stream.Collectors;
 
 @Service
 public class CaseService {
-
     private static final int DEFAULT_PAGE_NO = 1;
     private static final int DEFAULT_PAGE_SIZE = 10;
     private static final Pattern CASE_NO_PATTERN = Pattern.compile("^CASE-(\\d+)$", Pattern.CASE_INSENSITIVE);

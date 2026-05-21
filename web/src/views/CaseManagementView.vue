@@ -90,6 +90,7 @@ const {
   workspaceCode,
   isAllScope,
   users,
+  workspaces,
   writableWorkspaces,
   canWriteWorkspace,
   canCreateCase,
@@ -250,6 +251,7 @@ const caseListToolbar = useListToolbarState({
 const pageSize = caseListToolbar.pageSize
 const hydratingCaseViewMemory = ref(false)
 const caseManageBootstrapped = ref(false)
+let caseLoadSequence = 0
 
 function resolveCaseViewMemoryKey(targetWorkspaceCode: string) {
   return `${CASE_VIEW_MEMORY_KEY}:${targetWorkspaceCode || '__EMPTY__'}`
@@ -293,6 +295,27 @@ function mapDirectoryNode(node: CaseDirectoryNode): TreeNode {
     children: node.children.map(mapDirectoryNode),
   }
 }
+const visibleTreeWorkspaces = computed(() => {
+  if (directoryWorkspaces.value.length) {
+    return directoryWorkspaces.value
+  }
+  const available = workspaces.value.filter(item => !item.allScope)
+  if (isAllScope.value) {
+    return available.map(item => ({
+      workspaceCode: item.code,
+      workspaceName: item.name,
+      children: [],
+    }))
+  }
+  const current = available.find(item => item.code === workspaceCode.value)
+  return current
+    ? [{
+        workspaceCode: current.code,
+        workspaceName: current.name,
+        children: [],
+      }]
+    : []
+})
 const treeData = computed<TreeNode[]>(() => [
   {
     id: ROOT_NODE_ID,
@@ -300,7 +323,7 @@ const treeData = computed<TreeNode[]>(() => [
     workspaceCode: isAllScope.value ? 'ALL' : workspaceCode.value,
     type: 'root',
     directoryId: null,
-    children: directoryWorkspaces.value.map(item => ({
+    children: visibleTreeWorkspaces.value.map(item => ({
       id: `workspace:${item.workspaceCode}`,
       label: item.workspaceName,
       workspaceCode: item.workspaceCode,
@@ -463,11 +486,16 @@ function ensureSelectedNode() {
 }
 function sanitizeExpandedTreeKeys(keys: string[]) {
   const available = new Set(collectExpandableNodeIds(treeData.value))
-  return keys.filter(key => available.has(key))
+  const normalized = keys.filter(key => available.has(key))
+  if (available.has(ROOT_NODE_ID) && !normalized.includes(ROOT_NODE_ID)) {
+    normalized.unshift(ROOT_NODE_ID)
+  }
+  return normalized
 }
 function syncExpandedTreeKeys(expandAll = true, preferredKeys?: string[]) {
   if (preferredKeys) {
-    expandedTreeKeys.value = sanitizeExpandedTreeKeys(preferredKeys)
+    const nextKeys = sanitizeExpandedTreeKeys(preferredKeys)
+    expandedTreeKeys.value = nextKeys.length ? nextKeys : [ROOT_NODE_ID]
   } else {
     expandedTreeKeys.value = expandAll ? [...collectExpandableNodeIds(treeData.value)] : [ROOT_NODE_ID]
   }
@@ -700,6 +728,7 @@ function isTreeNodeExpanded(nodeId: string) {
   return expandedTreeKeys.value.includes(nodeId)
 }
 async function loadCases() {
+  const requestId = ++caseLoadSequence
   loading.value = true
   try {
     const previousExpandedKeys = [...expandedTreeKeys.value]
@@ -711,6 +740,9 @@ async function loadCases() {
         directoryId: activeDirectoryId.value,
       }),
     ])
+    if (requestId !== caseLoadSequence) {
+      return
+    }
     directoryWorkspaces.value = directoryList
     cases.value = casePage.items
     total.value = casePage.total
@@ -723,20 +755,26 @@ async function loadCases() {
     ensureSelectedNodeExpanded()
   }
   catch (error) {
+    if (requestId !== caseLoadSequence) {
+      return
+    }
     ElMessage.error((error as Error).message)
   }
   finally {
-    loading.value = false
+    if (requestId === caseLoadSequence) {
+      loading.value = false
+    }
   }
 }
 async function bootstrap() {
   caseListToolbar.load()
+  caseManageBootstrapped.value = false
   const memory = loadCaseViewMemory(workspaceCode.value)
   hydratingCaseViewMemory.value = true
   try {
     selectedNodeId.value = memory?.selectedNodeId ?? ROOT_NODE_ID
     pageNo.value = memory?.pageNo ?? 1
-    expandedTreeKeys.value = memory?.expandedTreeKeys?.length ? memory.expandedTreeKeys : collectExpandableNodeIds(treeData.value)
+    expandedTreeKeys.value = memory?.expandedTreeKeys?.length ? memory.expandedTreeKeys : [ROOT_NODE_ID]
   } finally {
     hydratingCaseViewMemory.value = false
   }
@@ -1258,6 +1296,9 @@ watch(filteredCases, (rows) => {
 watch(
   () => [selectedNodeId.value, pageNo.value, pageSize.value],
   () => {
+    if (!caseManageBootstrapped.value || hydratingCaseViewMemory.value) {
+      return
+    }
     persistCaseViewMemory()
     void loadCases()
   },
@@ -2487,5 +2528,3 @@ onMounted(bootstrap)
   }
 }
 </style>
-
-

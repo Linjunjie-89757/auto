@@ -127,6 +127,40 @@ function buildError(message: string, status: number) {
   return error
 }
 
+function buildHttpErrorMessage(response: Response, fallback: string) {
+  if (!response.status) {
+    return fallback
+  }
+  const statusText = response.statusText ? ` ${response.statusText}` : ''
+  return `${fallback} (HTTP ${response.status}${statusText})`
+}
+
+async function readApiResponse<T>(response: Response): Promise<ApiResponse<T>> {
+  const body = await response.text()
+  if (!body.trim()) {
+    throw buildError(
+      buildHttpErrorMessage(
+        response,
+        response.ok ? '服务返回空响应，请稍后重试' : '服务返回空错误响应，请检查后端服务是否正常启动',
+      ),
+      response.status,
+    )
+  }
+
+  try {
+    return JSON.parse(body) as ApiResponse<T>
+  }
+  catch {
+    throw buildError(
+      buildHttpErrorMessage(
+        response,
+        response.ok ? '服务返回了无法解析的响应，请稍后重试' : '服务返回了无法解析的错误响应',
+      ),
+      response.status,
+    )
+  }
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { workspaceCode = 'ALL', headers, ...rest } = options
   const mergedHeaders = new Headers(headers)
@@ -143,7 +177,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers: mergedHeaders,
   })
 
-  const payload = await response.json() as ApiResponse<T>
+  const payload = await readApiResponse<T>(response)
   if (!response.ok || !payload.success) {
     throw buildError(payload.message || '请求失败', response.status)
   }

@@ -30,7 +30,6 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/cases")
 public class CaseController {
-
     private final CaseService caseService;
     private final AiCaseService aiCaseService;
 

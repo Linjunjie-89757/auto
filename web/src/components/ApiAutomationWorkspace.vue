@@ -3933,8 +3933,8 @@ function formatTimeLabel(value?: string | null) {
   border: 1px solid #e9d5ff;
   border-bottom: 0;
   border-radius: 8px 8px 0 0;
-  background: #f5ecff;
-  color: var(--el-text-color-primary);
+  background: #ffffff;
+  color: #4b5563;
   padding: 10px 14px;
   font-size: 13px;
 }

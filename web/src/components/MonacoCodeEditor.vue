@@ -17,6 +17,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
+import 'monaco-editor/esm/vs/language/json/monaco.contribution'
+import 'monaco-editor/esm/vs/basic-languages/xml/xml.contribution'
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker'
 import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker'
@@ -24,6 +26,7 @@ import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker'
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
 
 type EditorLanguage = 'json' | 'xml' | 'text'
+type EditorWordWrap = 'off' | 'on' | 'wordWrapColumn' | 'bounded'
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -32,11 +35,13 @@ const props = withDefaults(defineProps<{
   readOnly?: boolean
   showFormatButton?: boolean
   fitContent?: boolean
+  wordWrap?: EditorWordWrap
 }>(), {
   height: '500px',
   readOnly: false,
   showFormatButton: true,
   fitContent: false,
+  wordWrap: 'on',
 })
 
 const emit = defineEmits<{
@@ -54,9 +59,6 @@ const showToolbar = computed(() => props.showFormatButton && !props.readOnly)
 function mapLanguage(language: EditorLanguage) {
   if (language === 'text') {
     return 'plaintext'
-  }
-  if (language === 'xml') {
-    return 'html'
   }
   return language
 }
@@ -89,14 +91,6 @@ function tryFormatXml(value: string) {
     .join('\n')
 }
 
-function tryFormatJson(value: string) {
-  const trimmed = value.trim()
-  if (!trimmed) {
-    return ''
-  }
-  return JSON.stringify(JSON.parse(trimmed), null, 2)
-}
-
 async function formatDocument() {
   if (!editor) {
     return
@@ -115,23 +109,28 @@ async function formatDocument() {
     return
   }
   if (props.language === 'json') {
-    try {
-      const formatted = tryFormatJson(value)
-      suppressModelSync = true
-      editor.setValue(formatted)
-      suppressModelSync = false
-      emit('update:modelValue', formatted)
-      emit('change', formatted)
+    if (props.readOnly) {
+      editor.updateOptions({ readOnly: false })
     }
-    catch {
-      await editor.getAction('editor.action.formatDocument')?.run()
+    await editor.getAction('editor.action.formatDocument')?.run()
+    if (props.readOnly) {
+      editor.updateOptions({ readOnly: true })
     }
+    const formatted = editor.getValue()
+    emit('update:modelValue', formatted)
+    emit('change', formatted)
     return
   }
   if (props.language === 'text') {
     return
   }
+  if (props.readOnly) {
+    editor.updateOptions({ readOnly: false })
+  }
   await editor.getAction('editor.action.formatDocument')?.run()
+  if (props.readOnly) {
+    editor.updateOptions({ readOnly: true })
+  }
 }
 
 function syncEditorHeight() {
@@ -155,12 +154,11 @@ function createEditor() {
     automaticLayout: true,
     minimap: { enabled: false },
     contextmenu: !props.readOnly,
-    fontSize: 13,
-    lineHeight: 20,
     lineNumbersMinChars: 3,
     lineDecorationsWidth: 0,
     tabSize: 2,
     scrollBeyondLastLine: false,
+    wordWrap: props.wordWrap,
     roundedSelection: false,
     renderLineHighlight: 'line',
     scrollbar: {
@@ -181,6 +179,9 @@ function createEditor() {
       syncEditorHeight()
     })
     syncEditorHeight()
+  }
+  if (props.readOnly) {
+    void formatDocument()
   }
   editor.onDidChangeModelContent(() => {
     if (!editor || suppressModelSync) {
@@ -274,8 +275,10 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .ms-monaco-editor {
-  border: 1px solid #e8eaf2;
-  border-radius: 8px;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
   background: #fff;
   overflow: hidden;
 }
@@ -283,29 +286,28 @@ onBeforeUnmount(() => {
 .ms-monaco-editor__toolbar {
   display: flex;
   justify-content: flex-end;
-  padding: 10px 12px;
+  padding: 0 0 8px;
   background: #fff;
-  border-bottom: 1px solid #f1f3f8;
 }
 
 .ms-monaco-editor__format {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid #e7e9f0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid #e5e6eb;
   border-radius: 4px;
   background: #fff;
-  color: #4b5563;
+  color: #1d2129;
   font-size: 12px;
   cursor: pointer;
 }
 
 .ms-monaco-editor__format:hover {
-  border-color: #d6c3ef;
-  color: #7c3aed;
-  background: #fcfbff;
+  border-color: #c9cdd4;
+  color: #165dff;
+  background: #f7f8fa;
 }
 
 .ms-monaco-editor__body {
@@ -315,25 +317,5 @@ onBeforeUnmount(() => {
 .ms-monaco-editor__body :deep(.monaco-editor),
 .ms-monaco-editor__body :deep(.overflow-guard) {
   border-radius: 0;
-}
-
-.ms-monaco-editor__body :deep(.monaco-editor .margin),
-.ms-monaco-editor__body :deep(.monaco-editor .monaco-editor-background),
-.ms-monaco-editor__body :deep(.monaco-editor .inputarea.ime-input) {
-  background: #fff;
-}
-
-.ms-monaco-editor__body :deep(.monaco-editor .line-numbers) {
-  color: #2f7cc0;
-}
-
-.ms-monaco-editor__body :deep(.monaco-editor .current-line) {
-  border: 0;
-  background: rgba(246, 248, 252, 0.75);
-}
-
-.ms-monaco-editor__body :deep(.monaco-editor .margin-view-overlays .current-line-margin) {
-  border: 0;
-  background: rgba(246, 248, 252, 0.75);
 }
 </style>

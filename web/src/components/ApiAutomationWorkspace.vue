@@ -4011,8 +4011,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-top-tab.active {
-  color: #7c3aed;
-  font-weight: 600;
+  color: #165dff;
 }
 
 .ms-like-top-tab.active::after {
@@ -4022,7 +4021,7 @@ function formatTimeLabel(value?: string | null) {
   right: 0;
   bottom: -1px;
   height: 2px;
-  background: #7c3aed;
+  background: #165dff;
 }
 
 .ms-like-tab-badge {

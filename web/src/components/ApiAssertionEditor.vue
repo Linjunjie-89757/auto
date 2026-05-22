@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUpdated, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { MagicStick } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import ApiFastExtractionDrawer from './ApiFastExtractionDrawer.vue'
 import MonacoCodeEditor from './MonacoCodeEditor.vue'
@@ -28,7 +29,6 @@ const assertions = computed({
   set: value => emit('update:modelValue', value),
 })
 
-const rootRef = ref<HTMLElement | null>(null)
 const activeAssertionId = defineModel<string | null>('activeId', { default: null })
 
 const assertionOptions: Array<{ label: string, value: ApiAssertionType }> = [
@@ -60,7 +60,7 @@ const conditionOptions: Array<{ label: string, value: ApiAssertionCondition }> =
   { label: '长度大于等于', value: 'LENGTH_GT_OR_EQUALS' },
   { label: '长度小于', value: 'LENGTH_LT' },
   { label: '长度小于等于', value: 'LENGTH_LT_OR_EQUALS' },
-  { label: '不检查', value: 'UNCHECKED' },
+  { label: '不校验', value: 'UNCHECKED' },
 ]
 
 const activeAssertion = computed(() => assertions.value.find(item => item.id === activeAssertionId.value) ?? null)
@@ -381,6 +381,7 @@ const activeFastExtractionConfig = computed<FastExtractionConfig>(() => {
 })
 
 const activeFastExtractionMode = computed(() => activeFastExtractionConfig.value.extractType || 'JSON_PATH')
+const fastExtractionTitle = computed(() => hasResponseBody.value ? '快速提取' : '请先发送获取响应内容')
 
 function handleFastExtractionApply(config: FastExtractionConfig, matchResult: string[]) {
   const target = activeBodyTarget.value
@@ -406,45 +407,10 @@ function handleFastExtractionApply(config: FastExtractionConfig, matchResult: st
   fastExtractionVisible.value = false
 }
 
-function syncFastExtractionTriggers() {
-  nextTick(() => {
-    const root = rootRef.value
-    if (!root) {
-      return
-    }
-    const inputs = root.querySelectorAll<HTMLInputElement>('[data-testid^="assertion-body-expression-"]')
-    inputs.forEach((input, index) => {
-      const wrapper = input.closest('.el-input')?.querySelector<HTMLElement>('.el-input__wrapper')
-      if (!wrapper) {
-        return
-      }
-      let trigger = wrapper.querySelector<HTMLElement>('.fast-extraction-dom-trigger')
-      if (!trigger) {
-        trigger = document.createElement('span')
-        trigger.className = 'fast-extraction-trigger fast-extraction-dom-trigger'
-        wrapper.appendChild(trigger)
-      }
-      trigger.innerHTML = '<i class="el-icon"><svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M480 64a32 32 0 0 1 64 0v384h384a32 32 0 0 1 0 64H544v384a32 32 0 0 1-64 0V512H96a32 32 0 0 1 0-64h384V64zm176 80a32 32 0 0 1 45.248 0l178.752 178.752a32 32 0 0 1-45.248 45.248L656 189.248A32 32 0 0 1 656 144zM323.248 656a32 32 0 0 1 45.248 45.248L189.248 880a32 32 0 1 1-45.248-45.248L323.248 656z"></path></svg></i>'
-      trigger.classList.toggle('disabled', !hasResponseBody.value)
-      trigger.setAttribute('title', hasResponseBody.value ? '快速提取' : '请先发送获取响应内容')
-      trigger.onclick = (event) => {
-        event.stopPropagation()
-        openFastExtraction(index)
-      }
-    })
-  })
-}
-
-onMounted(syncFastExtractionTriggers)
-onUpdated(syncFastExtractionTriggers)
-
-watch([activeAssertionId, hasResponseBody], () => {
-  syncFastExtractionTriggers()
-})
 </script>
 
 <template>
-  <div ref="rootRef" class="assertion-editor" data-testid="api-assertion-editor">
+  <div class="assertion-editor" data-testid="api-assertion-editor">
     <aside class="assertion-sidebar">
       <div class="assertion-toolbar">
         <el-dropdown @command="handleAddCommand">
@@ -475,8 +441,8 @@ watch([activeAssertionId, hasResponseBody], () => {
             </div>
           </div>
           <div class="assertion-list-actions">
-            <button type="button" class="ghost-action" :disabled="index === 0" @click.stop="moveAssertion(item.id || '', -1)">↑</button>
-            <button type="button" class="ghost-action" :disabled="index === assertions.length - 1" @click.stop="moveAssertion(item.id || '', 1)">↓</button>
+            <button type="button" class="ghost-action" :disabled="index === 0" @click.stop="moveAssertion(item.id || '', -1)">上移</button>
+            <button type="button" class="ghost-action" :disabled="index === assertions.length - 1" @click.stop="moveAssertion(item.id || '', 1)">下移</button>
           </div>
         </button>
       </div>
@@ -515,7 +481,7 @@ watch([activeAssertionId, hasResponseBody], () => {
           <div class="assertion-table">
             <div v-for="(item, index) in activeAssertion.assertions" :key="`${activeAssertion.id}-header-${index}`" class="assertion-table-row" :data-testid="`assertion-header-row-${index}`">
               <el-checkbox v-model="item.enabled" />
-              <el-input v-model="item.header" placeholder="响应头名" :data-testid="`assertion-header-name-${index}`" />
+              <el-input v-model="item.header" placeholder="响应头名称" :data-testid="`assertion-header-name-${index}`" />
               <el-select v-model="item.condition">
                 <el-option v-for="option in conditionOptions" :key="option.value" :label="option.label" :value="option.value" />
               </el-select>
@@ -542,7 +508,20 @@ watch([activeAssertionId, hasResponseBody], () => {
           <div class="assertion-table">
             <div v-for="(item, index) in activeBodyGroup(activeAssertion).assertions" :key="`${activeAssertion.id}-body-${activeAssertion.assertionBodyType}-${index}`" class="assertion-table-row assertion-table-row--body" :data-testid="`assertion-body-row-${index}`">
               <el-checkbox v-model="item.enabled" />
-              <el-input v-model="item.expression" placeholder="表达式" :data-testid="`assertion-body-expression-${index}`" />
+              <el-input v-model="item.expression" placeholder="表达式" :data-testid="`assertion-body-expression-${index}`">
+                <template #suffix>
+                  <button
+                    type="button"
+                    :class="['fast-extraction-suffix-button', { disabled: !hasResponseBody }]"
+                    :disabled="!hasResponseBody"
+                    :title="fastExtractionTitle"
+                    aria-label="快速提取"
+                    @click.stop="openFastExtraction(index)"
+                  >
+                    <el-icon><MagicStick /></el-icon>
+                  </button>
+                </template>
+              </el-input>
               <el-select v-model="item.condition">
                 <el-option v-for="option in conditionOptions" :key="option.value" :label="option.label" :value="option.value" />
               </el-select>
@@ -745,30 +724,27 @@ watch([activeAssertionId, hasResponseBody], () => {
   grid-template-columns: auto minmax(200px, 1.3fr) 170px minmax(160px, 1fr) auto auto auto;
 }
 
-.fast-extraction-trigger {
+.fast-extraction-suffix-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: #165dff;
-}
-
-.fast-extraction-trigger.disabled {
-  color: var(--el-text-color-placeholder);
-}
-
-:deep(.fast-extraction-dom-trigger) {
-  margin-left: 8px;
   cursor: pointer;
 }
 
-:deep(.fast-extraction-dom-trigger.disabled) {
+.fast-extraction-suffix-button.disabled {
+  color: var(--el-text-color-placeholder);
   cursor: not-allowed;
 }
 
-:deep(.fast-extraction-dom-trigger .el-icon) {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
+.fast-extraction-suffix-button:focus-visible {
+  outline: 2px solid rgba(22, 93, 255, 0.2);
+  outline-offset: 1px;
 }
 
 .assertion-format-select {
@@ -810,3 +786,6 @@ watch([activeAssertionId, hasResponseBody], () => {
   }
 }
 </style>
+
+
+

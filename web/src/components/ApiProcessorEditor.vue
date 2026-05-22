@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUpdated, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { MagicStick } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import ApiFastExtractionDrawer from './ApiFastExtractionDrawer.vue'
 import MonacoCodeEditor from './MonacoCodeEditor.vue'
@@ -30,7 +31,6 @@ const processors = computed({
   set: value => emit('update:modelValue', value),
 })
 
-const rootRef = ref<HTMLElement | null>(null)
 const activeProcessorId = defineModel<string | null>('activeId', { default: null })
 
 const processorOptions = computed(() => props.stage === 'pre'
@@ -309,6 +309,7 @@ const activeFastExtractionConfig = computed<FastExtractionConfig>(() => {
 })
 
 const activeFastExtractionMode = computed(() => activeFastExtractionConfig.value.extractType || 'JSON_PATH')
+const fastExtractionTitle = computed(() => hasResponseBody.value ? '快速提取' : '请先发送获取响应内容')
 
 function handleFastExtractionApply(config: FastExtractionConfig) {
   const target = activeExtractorTarget.value
@@ -330,48 +331,10 @@ function handleFastExtractionApply(config: FastExtractionConfig) {
   fastExtractionVisible.value = false
 }
 
-function syncFastExtractionTriggers() {
-  nextTick(() => {
-    const root = rootRef.value
-    if (!root) {
-      return
-    }
-    const inputs = root.querySelectorAll<HTMLInputElement>('[data-testid^="processor-extract-expression-"]')
-    inputs.forEach((input, index) => {
-      const wrapper = input.closest('.el-input')?.querySelector<HTMLElement>('.el-input__wrapper')
-      if (!wrapper) {
-        return
-      }
-      let trigger = wrapper.querySelector<HTMLElement>('.fast-extraction-dom-trigger')
-      if (!trigger) {
-        trigger = document.createElement('span')
-        trigger.className = 'fast-extraction-trigger fast-extraction-dom-trigger'
-        wrapper.appendChild(trigger)
-      }
-      trigger.innerHTML = '<i class="el-icon"><svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M480 64a32 32 0 0 1 64 0v384h384a32 32 0 0 1 0 64H544v384a32 32 0 0 1-64 0V512H96a32 32 0 0 1 0-64h384V64zm176 80a32 32 0 0 1 45.248 0l178.752 178.752a32 32 0 0 1-45.248 45.248L656 189.248A32 32 0 0 1 656 144zM323.248 656a32 32 0 0 1 45.248 45.248L189.248 880a32 32 0 1 1-45.248-45.248L323.248 656z"></path></svg></i>'
-      trigger.classList.toggle('disabled', !hasResponseBody.value)
-      trigger.setAttribute('title', hasResponseBody.value ? '快速提取' : '请先发送获取响应内容')
-      trigger.onclick = (event) => {
-        event.stopPropagation()
-        if (!activeProcessor.value || activeProcessor.value.processorType !== 'EXTRACT') {
-          return
-        }
-        openFastExtraction(activeProcessor.value, index)
-      }
-    })
-  })
-}
-
-onMounted(syncFastExtractionTriggers)
-onUpdated(syncFastExtractionTriggers)
-
-watch([activeProcessorId, hasResponseBody], () => {
-  syncFastExtractionTriggers()
-})
 </script>
 
 <template>
-  <div ref="rootRef" class="processor-editor">
+  <div class="processor-editor">
     <aside class="processor-sidebar">
       <div class="processor-toolbar">
         <el-dropdown @command="handleAddProcessorCommand">
@@ -402,8 +365,8 @@ watch([activeProcessorId, hasResponseBody], () => {
             </div>
           </div>
           <div class="processor-list-actions">
-            <button type="button" class="ghost-action" :disabled="index === 0" @click.stop="moveProcessor(item.id, -1)">↑</button>
-            <button type="button" class="ghost-action" :disabled="index === processors.length - 1" @click.stop="moveProcessor(item.id, 1)">↓</button>
+            <button type="button" class="ghost-action" :disabled="index === 0" @click.stop="moveProcessor(item.id, -1)">上移</button>
+            <button type="button" class="ghost-action" :disabled="index === processors.length - 1" @click.stop="moveProcessor(item.id, 1)">下移</button>
           </div>
         </button>
       </div>
@@ -426,8 +389,8 @@ watch([activeProcessorId, hasResponseBody], () => {
         <template v-if="activeProcessor.processorType === 'SCRIPT'">
           <div class="editor-actions">
             <el-tag size="small">JavaScript</el-tag>
-            <el-button size="small" @click="clearScript(activeProcessor)">清空</el-button>
-            <el-button size="small" @click="formatScript(activeProcessor)">格式化</el-button>
+             <el-button size="small" @click="clearScript(activeProcessor)">清空</el-button>
+             <el-button size="small" @click="formatScript(activeProcessor)">格式化</el-button>
           </div>
           <MonacoCodeEditor v-model="activeProcessor.script" language="text" height="360px" />
           <div class="processor-hint">可使用 setVar/getVar/removeVar/log/fail/request/response。</div>
@@ -442,7 +405,7 @@ watch([activeProcessorId, hasResponseBody], () => {
               </el-select>
             </label>
             <label :data-testid="`processor-sql-timeout-${props.stage}`">
-              <span>查询超时(ms)</span>
+              <span>鏌ヨ瓒呮椂(ms)</span>
               <el-input-number v-model="activeProcessor.queryTimeout" :min="1000" :step="1000" :data-testid="`processor-sql-timeout-${props.stage}`" />
             </label>
             <label :data-testid="`processor-sql-variable-names-${props.stage}`">
@@ -458,7 +421,7 @@ watch([activeProcessorId, hasResponseBody], () => {
           <div class="extractor-table compact">
             <div class="extractor-table-header two-cols">
               <span>变量名</span>
-              <span>列名</span>
+              <span>鍒楀悕</span>
               <span></span>
             </div>
             <div v-for="(param, index) in activeProcessor.extractParams || []" :key="`${activeProcessor.id}-sql-${index}`" class="extractor-table-row two-cols" :data-testid="`processor-sql-extract-row-${props.stage}-${index}`">
@@ -487,58 +450,58 @@ watch([activeProcessorId, hasResponseBody], () => {
             >
               <div class="extractor-card-head">
                 <el-checkbox v-model="extractor.enabled" />
-                <el-input v-model="extractor.variableName" placeholder="变量名" :data-testid="`processor-extract-variable-${props.stage}-${index}`" />
+                 <el-input v-model="extractor.variableName" placeholder="变量名" :data-testid="`processor-extract-variable-${props.stage}-${index}`" />
                 <el-select v-model="extractor.variableType" :data-testid="`processor-extract-variable-type-${props.stage}-${index}`">
-                  <el-option label="临时变量" value="TEMPORARY" />
-                  <el-option label="环境变量" value="ENVIRONMENT" />
+                   <el-option label="临时变量" value="TEMPORARY" />
+                   <el-option label="环境变量" value="ENVIRONMENT" />
                 </el-select>
-                <el-button text type="primary" @click="testExtractor(extractor)">测试</el-button>
-                <el-button text type="primary" @click="duplicateExtractorRow(activeProcessor, index)">复制</el-button>
-                <el-button text type="danger" @click="removeExtractorRow(activeProcessor, index)">删除</el-button>
+                 <el-button text type="primary" @click="testExtractor(extractor)">测试</el-button>
+                 <el-button text type="primary" @click="duplicateExtractorRow(activeProcessor, index)">复制</el-button>
+                 <el-button text type="danger" @click="removeExtractorRow(activeProcessor, index)">删除</el-button>
               </div>
               <div class="processor-form-grid">
                 <label>
-                  <span>提取方式</span>
+                   <span>提取方式</span>
                   <el-select v-model="extractor.extractType" :data-testid="`processor-extract-type-${props.stage}-${index}`">
                     <el-option label="JSONPath" value="JSON_PATH" />
                     <el-option label="XPath" value="X_PATH" />
-                    <el-option label="正则" value="REGEX" />
+                     <el-option label="正则" value="REGEX" />
                   </el-select>
                 </label>
                 <label>
-                  <span>提取范围</span>
+                   <span>提取范围</span>
                   <el-select v-model="extractor.extractScope" :data-testid="`processor-extract-scope-${props.stage}-${index}`">
-                    <el-option label="响应体" value="BODY" />
-                    <el-option label="反转义响应体" value="UNESCAPED_BODY" />
-                    <el-option label="文档响应体" value="BODY_AS_DOCUMENT" />
+                     <el-option label="响应体" value="BODY" />
+                     <el-option label="反转义响应体" value="UNESCAPED_BODY" />
+                     <el-option label="文档响应体" value="BODY_AS_DOCUMENT" />
                     <el-option label="URL" value="URL" />
-                    <el-option label="请求头" value="REQUEST_HEADERS" />
-                    <el-option label="响应头" value="RESPONSE_HEADERS" />
-                    <el-option label="响应码" value="RESPONSE_CODE" />
-                    <el-option label="响应消息" value="RESPONSE_MESSAGE" />
+                     <el-option label="请求头" value="REQUEST_HEADERS" />
+                     <el-option label="响应头" value="RESPONSE_HEADERS" />
+                     <el-option label="响应码" value="RESPONSE_CODE" />
+                     <el-option label="响应消息" value="RESPONSE_MESSAGE" />
                   </el-select>
                 </label>
                 <label>
-                  <span>匹配规则</span>
+                   <span>匹配规则</span>
                   <el-select v-model="extractor.resultMatchingRule" :data-testid="`processor-extract-match-rule-${props.stage}-${index}`">
-                    <el-option label="随机" value="RANDOM" />
-                    <el-option label="指定" value="SPECIFIC" />
-                    <el-option label="全部" value="ALL" />
+                     <el-option label="随机" value="RANDOM" />
+                     <el-option label="指定" value="SPECIFIC" />
+                     <el-option label="全部" value="ALL" />
                   </el-select>
                 </label>
                 <label>
-                  <span>指定序号</span>
+                   <span>指定序号</span>
                   <el-input-number v-model="extractor.resultMatchingRuleNum" :min="1" :step="1" :data-testid="`processor-extract-match-num-${props.stage}-${index}`" />
                 </label>
                 <label>
-                  <span>正则分组</span>
+                   <span>正则分组</span>
                   <el-select v-model="extractor.expressionMatchingRule" :data-testid="`processor-extract-regex-rule-${props.stage}-${index}`">
-                    <el-option label="完整匹配" value="EXPRESSION" />
-                    <el-option label="分组 1" value="GROUP" />
+                     <el-option label="完整匹配" value="EXPRESSION" />
+                     <el-option label="分组 1" value="GROUP" />
                   </el-select>
                 </label>
                 <label>
-                  <span>响应格式</span>
+                   <span>响应格式</span>
                   <el-select v-model="extractor.responseFormat" :data-testid="`processor-extract-response-format-${props.stage}-${index}`">
                     <el-option label="JSON" value="JSON" />
                     <el-option label="XML" value="XML" />
@@ -546,10 +509,23 @@ watch([activeProcessorId, hasResponseBody], () => {
                   </el-select>
                 </label>
               </div>
-              <el-input v-model="extractor.expression" placeholder="提取表达式" :data-testid="`processor-extract-expression-${props.stage}-${index}`" />
+              <el-input v-model="extractor.expression" placeholder="提取表达式" :data-testid="`processor-extract-expression-${props.stage}-${index}`">
+                <template #suffix>
+                  <button
+                    type="button"
+                    :class="['fast-extraction-suffix-button', { disabled: !hasResponseBody }]"
+                    :disabled="!hasResponseBody"
+                    :title="fastExtractionTitle"
+                    aria-label="快速提取"
+                    @click.stop="openFastExtraction(activeProcessor, index)"
+                  >
+                    <el-icon><MagicStick /></el-icon>
+                  </button>
+                </template>
+              </el-input>
               <el-input v-model="extractor.description" placeholder="描述" :data-testid="`processor-extract-description-${props.stage}-${index}`" />
             </div>
-            <button type="button" class="add-row-button" @click="addExtractorRow(activeProcessor)">+ 添加提取行</button>
+            <button type="button" class="add-row-button" @click="addExtractorRow(activeProcessor)">+ 添加提取项</button>
           </div>
         </template>
       </template>
@@ -760,30 +736,27 @@ watch([activeProcessorId, hasResponseBody], () => {
   width: 140px;
 }
 
-.fast-extraction-trigger {
+.fast-extraction-suffix-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: #165dff;
-}
-
-.fast-extraction-trigger.disabled {
-  color: var(--el-text-color-placeholder);
-}
-
-:deep(.fast-extraction-dom-trigger) {
-  margin-left: 8px;
   cursor: pointer;
 }
 
-:deep(.fast-extraction-dom-trigger.disabled) {
+.fast-extraction-suffix-button.disabled {
+  color: var(--el-text-color-placeholder);
   cursor: not-allowed;
 }
 
-:deep(.fast-extraction-dom-trigger .el-icon) {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
+.fast-extraction-suffix-button:focus-visible {
+  outline: 2px solid rgba(22, 93, 255, 0.2);
+  outline-offset: 1px;
 }
 
 .add-row-button {
@@ -810,3 +783,6 @@ watch([activeProcessorId, hasResponseBody], () => {
   }
 }
 </style>
+
+
+

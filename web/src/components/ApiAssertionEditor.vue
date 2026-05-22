@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, nextTick, onMounted, onUpdated, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import ApiFastExtractionDrawer from './ApiFastExtractionDrawer.vue'
 import MonacoCodeEditor from './MonacoCodeEditor.vue'
 import type {
   ApiAssertionConfig,
@@ -10,6 +11,8 @@ import type {
   ApiAssertionType,
   ApiResponseSnapshot,
 } from '../types/api'
+import type { FastExtractionConfig } from '../utils/apiFastExtraction'
+import { testFastExtraction } from '../utils/apiFastExtraction'
 
 const props = defineProps<{
   modelValue: ApiAssertionConfig[]
@@ -25,6 +28,7 @@ const assertions = computed({
   set: value => emit('update:modelValue', value),
 })
 
+const rootRef = ref<HTMLElement | null>(null)
 const activeAssertionId = defineModel<string | null>('activeId', { default: null })
 
 const assertionOptions: Array<{ label: string, value: ApiAssertionType }> = [
@@ -336,47 +340,111 @@ function testBodyExpression(assertion: ApiAssertionConfig, item: ApiAssertionIte
 
 function extractPreviewValues(assertion: ApiAssertionConfig, item: ApiAssertionItemConfig, response: ApiResponseSnapshot) {
   const source = response.body ?? ''
-  const expression = item.expression || ''
-  if (assertion.assertionBodyType === 'REGEX') {
-    return [...source.matchAll(new RegExp(expression, 'gs'))].map(match => match[0])
-  }
-  if (assertion.assertionBodyType === 'X_PATH') {
-    const group = activeBodyGroup(assertion)
-    const doc = new DOMParser().parseFromString(source, group.responseFormat === 'HTML' ? 'text/html' : 'text/xml')
-    const result = doc.evaluate(expression, doc, null, XPathResult.ANY_TYPE, null)
-    const values: string[] = []
-    let node = result.iterateNext()
-    while (node) {
-      values.push(node.textContent ?? '')
-      node = result.iterateNext()
-    }
-    return values.length ? values : [String(doc.evaluate(expression, doc, null, XPathResult.STRING_TYPE, null).stringValue)]
-  }
-  return [readSimpleJsonPath(JSON.parse(source || '{}'), expression)]
+  return testFastExtraction(source, {
+    expression: item.expression || '',
+    extractType: assertion.assertionBodyType || 'JSON_PATH',
+    responseFormat: activeBodyGroup(assertion).responseFormat || 'XML',
+  })
 }
 
-function readSimpleJsonPath(value: unknown, expression: string) {
-  let current: any = value
-  let normalized = expression.trim().replace(/^\$\.?/, '')
-  if (!normalized) {
-    return JSON.stringify(current)
+const fastExtractionVisible = ref(false)
+const activeBodyTarget = ref<{ assertionId: string, index: number } | null>(null)
+const hasResponseBody = computed(() => !!props.latestResponse?.body?.trim())
+
+function openFastExtraction(index: number) {
+  if (!hasResponseBody.value || !activeAssertion.value?.id) {
+    return
   }
-  for (const segment of normalized.split('.')) {
-    const match = segment.match(/^([\w-]+)(?:\[(\d+)])?$/)
-    if (!match) {
-      return ''
-    }
-    current = current?.[match[1]]
-    if (match[2] !== undefined) {
-      current = current?.[Number(match[2])]
-    }
+  activeBodyTarget.value = {
+    assertionId: activeAssertion.value.id,
+    index,
   }
-  return typeof current === 'string' ? current : JSON.stringify(current ?? '')
+  fastExtractionVisible.value = true
 }
+
+const activeFastExtractionConfig = computed<FastExtractionConfig>(() => {
+  const target = activeBodyTarget.value
+  if (!target) {
+    return { expression: '$', extractType: 'JSON_PATH', responseFormat: 'XML' }
+  }
+  const assertion = assertions.value.find(item => item.id === target.assertionId)
+  if (!assertion) {
+    return { expression: '$', extractType: 'JSON_PATH', responseFormat: 'XML' }
+  }
+  const group = activeBodyGroup(assertion)
+  const item = group.assertions[target.index]
+  return {
+    expression: item?.expression || defaultExpression(assertion.assertionBodyType || 'JSON_PATH'),
+    extractType: assertion.assertionBodyType || 'JSON_PATH',
+    responseFormat: group.responseFormat || 'XML',
+  }
+})
+
+const activeFastExtractionMode = computed(() => activeFastExtractionConfig.value.extractType || 'JSON_PATH')
+
+function handleFastExtractionApply(config: FastExtractionConfig, matchResult: string[]) {
+  const target = activeBodyTarget.value
+  if (!target) {
+    return
+  }
+  const assertion = assertions.value.find(item => item.id === target.assertionId)
+  if (!assertion) {
+    return
+  }
+  const group = activeBodyGroup(assertion)
+  const item = group.assertions[target.index]
+  if (!item) {
+    return
+  }
+  item.expression = config.expression || item.expression
+  if (assertion.assertionBodyType === 'X_PATH' && (config.responseFormat === 'XML' || config.responseFormat === 'HTML')) {
+    group.responseFormat = config.responseFormat
+  }
+  if (matchResult.length && assertion.assertionBodyType !== 'X_PATH') {
+    item.expectedValue = matchResult[0]
+  }
+  fastExtractionVisible.value = false
+}
+
+function syncFastExtractionTriggers() {
+  nextTick(() => {
+    const root = rootRef.value
+    if (!root) {
+      return
+    }
+    const inputs = root.querySelectorAll<HTMLInputElement>('[data-testid^="assertion-body-expression-"]')
+    inputs.forEach((input, index) => {
+      const wrapper = input.closest('.el-input')?.querySelector<HTMLElement>('.el-input__wrapper')
+      if (!wrapper) {
+        return
+      }
+      let trigger = wrapper.querySelector<HTMLElement>('.fast-extraction-dom-trigger')
+      if (!trigger) {
+        trigger = document.createElement('span')
+        trigger.className = 'fast-extraction-trigger fast-extraction-dom-trigger'
+        wrapper.appendChild(trigger)
+      }
+      trigger.innerHTML = '<i class="el-icon"><svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M480 64a32 32 0 0 1 64 0v384h384a32 32 0 0 1 0 64H544v384a32 32 0 0 1-64 0V512H96a32 32 0 0 1 0-64h384V64zm176 80a32 32 0 0 1 45.248 0l178.752 178.752a32 32 0 0 1-45.248 45.248L656 189.248A32 32 0 0 1 656 144zM323.248 656a32 32 0 0 1 45.248 45.248L189.248 880a32 32 0 1 1-45.248-45.248L323.248 656z"></path></svg></i>'
+      trigger.classList.toggle('disabled', !hasResponseBody.value)
+      trigger.setAttribute('title', hasResponseBody.value ? '快速提取' : '请先发送获取响应内容')
+      trigger.onclick = (event) => {
+        event.stopPropagation()
+        openFastExtraction(index)
+      }
+    })
+  })
+}
+
+onMounted(syncFastExtractionTriggers)
+onUpdated(syncFastExtractionTriggers)
+
+watch([activeAssertionId, hasResponseBody], () => {
+  syncFastExtractionTriggers()
+})
 </script>
 
 <template>
-  <div class="assertion-editor" data-testid="api-assertion-editor">
+  <div ref="rootRef" class="assertion-editor" data-testid="api-assertion-editor">
     <aside class="assertion-sidebar">
       <div class="assertion-toolbar">
         <el-dropdown @command="handleAddCommand">
@@ -530,6 +598,14 @@ function readSimpleJsonPath(value: unknown, expression: string) {
 
       <div v-else class="assertion-empty">请选择一个断言进行编辑</div>
     </section>
+    <ApiFastExtractionDrawer
+      v-model:visible="fastExtractionVisible"
+      :mode="activeFastExtractionMode"
+      :config="activeFastExtractionConfig"
+      :response="props.latestResponse?.body || ''"
+      :show-more-setting="false"
+      @apply="handleFastExtractionApply"
+    />
   </div>
 </template>
 
@@ -667,6 +743,32 @@ function readSimpleJsonPath(value: unknown, expression: string) {
 
 .assertion-table-row--body {
   grid-template-columns: auto minmax(200px, 1.3fr) 170px minmax(160px, 1fr) auto auto auto;
+}
+
+.fast-extraction-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #165dff;
+}
+
+.fast-extraction-trigger.disabled {
+  color: var(--el-text-color-placeholder);
+}
+
+:deep(.fast-extraction-dom-trigger) {
+  margin-left: 8px;
+  cursor: pointer;
+}
+
+:deep(.fast-extraction-dom-trigger.disabled) {
+  cursor: not-allowed;
+}
+
+:deep(.fast-extraction-dom-trigger .el-icon) {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
 }
 
 .assertion-format-select {

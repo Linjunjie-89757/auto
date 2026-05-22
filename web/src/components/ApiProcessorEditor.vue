@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, nextTick, onMounted, onUpdated, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import ApiFastExtractionDrawer from './ApiFastExtractionDrawer.vue'
 import MonacoCodeEditor from './MonacoCodeEditor.vue'
 import type {
   ApiExtractProcessorConfig,
@@ -10,6 +11,8 @@ import type {
   ApiSqlProcessorConfig,
   DbConnectionItem,
 } from '../types/api'
+import type { FastExtractionConfig } from '../utils/apiFastExtraction'
+import { testFastExtraction } from '../utils/apiFastExtraction'
 
 const props = defineProps<{
   modelValue: ApiProcessorConfig[]
@@ -27,6 +30,7 @@ const processors = computed({
   set: value => emit('update:modelValue', value),
 })
 
+const rootRef = ref<HTMLElement | null>(null)
 const activeProcessorId = defineModel<string | null>('activeId', { default: null })
 
 const processorOptions = computed(() => props.stage === 'pre'
@@ -250,47 +254,17 @@ function testExtractor(extractor: ApiProcessorExtractorConfig) {
 
 function extractPreviewValues(extractor: ApiProcessorExtractorConfig, response: ApiResponseSnapshot) {
   const scope = extractor.extractScope || legacyScope(extractor.sourceType)
-  const type = extractor.extractType || legacyType(extractor.sourceType)
-  const expression = extractor.expression || ''
   const source = scope === 'RESPONSE_HEADERS'
     ? JSON.stringify(response.headers ?? {})
     : scope === 'RESPONSE_CODE'
       ? String(response.statusCode ?? '')
       : response.body ?? ''
-  if (type === 'REGEX') {
-    return [...source.matchAll(new RegExp(expression, 'gs'))].map(match => extractor.expressionMatchingRule === 'GROUP' && match[1] ? match[1] : match[0])
-  }
-  if (type === 'X_PATH') {
-    const doc = new DOMParser().parseFromString(source, extractor.responseFormat === 'HTML' ? 'text/html' : 'text/xml')
-    const result = doc.evaluate(expression, doc, null, XPathResult.ANY_TYPE, null)
-    const values: string[] = []
-    let node = result.iterateNext()
-    while (node) {
-      values.push(node.textContent ?? '')
-      node = result.iterateNext()
-    }
-    return values.length ? values : [String(doc.evaluate(expression, doc, null, XPathResult.STRING_TYPE, null).stringValue)]
-  }
-  return [readSimpleJsonPath(JSON.parse(source || '{}'), expression)]
-}
-
-function readSimpleJsonPath(value: unknown, expression: string) {
-  let current: any = value
-  let normalized = expression.trim().replace(/^\$\.?/, '')
-  if (!normalized) {
-    return JSON.stringify(current)
-  }
-  for (const segment of normalized.split('.')) {
-    const match = segment.match(/^([\w-]+)(?:\[(\d+)])?$/)
-    if (!match) {
-      return ''
-    }
-    current = current?.[match[1]]
-    if (match[2] !== undefined) {
-      current = current?.[Number(match[2])]
-    }
-  }
-  return typeof current === 'string' ? current : JSON.stringify(current ?? '')
+  return testFastExtraction(source, {
+    expression: extractor.expression || '',
+    extractType: extractor.extractType || legacyType(extractor.sourceType),
+    expressionMatchingRule: extractor.expressionMatchingRule || 'EXPRESSION',
+    responseFormat: extractor.responseFormat || 'XML',
+  })
 }
 
 function legacyScope(sourceType?: string) {
@@ -306,10 +280,98 @@ function legacyScope(sourceType?: string) {
 function legacyType(sourceType?: string) {
   return sourceType === 'BODY_JSONPATH' || !sourceType ? 'JSON_PATH' : 'REGEX'
 }
+
+const fastExtractionVisible = ref(false)
+const activeExtractorTarget = ref<{ processorId: string, index: number } | null>(null)
+const hasResponseBody = computed(() => !!props.latestResponse?.body?.trim())
+
+function openFastExtraction(processor: ApiExtractProcessorConfig, index: number) {
+  if (!hasResponseBody.value) {
+    return
+  }
+  activeExtractorTarget.value = {
+    processorId: processor.id,
+    index,
+  }
+  fastExtractionVisible.value = true
+}
+
+const activeFastExtractionConfig = computed<FastExtractionConfig>(() => {
+  const target = activeExtractorTarget.value
+  if (!target) {
+    return emptyExtractor()
+  }
+  const processor = processors.value.find(item => item.id === target.processorId)
+  if (!processor || processor.processorType !== 'EXTRACT') {
+    return emptyExtractor()
+  }
+  return processor.extractors[target.index] || emptyExtractor()
+})
+
+const activeFastExtractionMode = computed(() => activeFastExtractionConfig.value.extractType || 'JSON_PATH')
+
+function handleFastExtractionApply(config: FastExtractionConfig) {
+  const target = activeExtractorTarget.value
+  if (!target) {
+    return
+  }
+  const processor = processors.value.find(item => item.id === target.processorId)
+  if (!processor || processor.processorType !== 'EXTRACT') {
+    return
+  }
+  const extractor = processor.extractors[target.index]
+  if (!extractor) {
+    return
+  }
+  extractor.expression = config.expression || extractor.expression
+  extractor.extractType = config.extractType || extractor.extractType
+  extractor.expressionMatchingRule = config.expressionMatchingRule || extractor.expressionMatchingRule
+  extractor.responseFormat = config.responseFormat || extractor.responseFormat
+  fastExtractionVisible.value = false
+}
+
+function syncFastExtractionTriggers() {
+  nextTick(() => {
+    const root = rootRef.value
+    if (!root) {
+      return
+    }
+    const inputs = root.querySelectorAll<HTMLInputElement>('[data-testid^="processor-extract-expression-"]')
+    inputs.forEach((input, index) => {
+      const wrapper = input.closest('.el-input')?.querySelector<HTMLElement>('.el-input__wrapper')
+      if (!wrapper) {
+        return
+      }
+      let trigger = wrapper.querySelector<HTMLElement>('.fast-extraction-dom-trigger')
+      if (!trigger) {
+        trigger = document.createElement('span')
+        trigger.className = 'fast-extraction-trigger fast-extraction-dom-trigger'
+        wrapper.appendChild(trigger)
+      }
+      trigger.innerHTML = '<i class="el-icon"><svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M480 64a32 32 0 0 1 64 0v384h384a32 32 0 0 1 0 64H544v384a32 32 0 0 1-64 0V512H96a32 32 0 0 1 0-64h384V64zm176 80a32 32 0 0 1 45.248 0l178.752 178.752a32 32 0 0 1-45.248 45.248L656 189.248A32 32 0 0 1 656 144zM323.248 656a32 32 0 0 1 45.248 45.248L189.248 880a32 32 0 1 1-45.248-45.248L323.248 656z"></path></svg></i>'
+      trigger.classList.toggle('disabled', !hasResponseBody.value)
+      trigger.setAttribute('title', hasResponseBody.value ? '快速提取' : '请先发送获取响应内容')
+      trigger.onclick = (event) => {
+        event.stopPropagation()
+        if (!activeProcessor.value || activeProcessor.value.processorType !== 'EXTRACT') {
+          return
+        }
+        openFastExtraction(activeProcessor.value, index)
+      }
+    })
+  })
+}
+
+onMounted(syncFastExtractionTriggers)
+onUpdated(syncFastExtractionTriggers)
+
+watch([activeProcessorId, hasResponseBody], () => {
+  syncFastExtractionTriggers()
+})
 </script>
 
 <template>
-  <div class="processor-editor">
+  <div ref="rootRef" class="processor-editor">
     <aside class="processor-sidebar">
       <div class="processor-toolbar">
         <el-dropdown @command="handleAddProcessorCommand">
@@ -494,6 +556,14 @@ function legacyType(sourceType?: string) {
 
       <div v-else class="processor-empty">请选择一个处理器进行编辑</div>
     </section>
+    <ApiFastExtractionDrawer
+      v-model:visible="fastExtractionVisible"
+      :mode="activeFastExtractionMode"
+      :config="activeFastExtractionConfig"
+      :response="props.latestResponse?.body || ''"
+      :show-more-setting="true"
+      @apply="handleFastExtractionApply"
+    />
   </div>
 </template>
 
@@ -669,6 +739,7 @@ function legacyType(sourceType?: string) {
 }
 
 .extractor-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -687,6 +758,32 @@ function legacyType(sourceType?: string) {
 
 .extractor-card-head :deep(.el-select) {
   width: 140px;
+}
+
+.fast-extraction-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #165dff;
+}
+
+.fast-extraction-trigger.disabled {
+  color: var(--el-text-color-placeholder);
+}
+
+:deep(.fast-extraction-dom-trigger) {
+  margin-left: 8px;
+  cursor: pointer;
+}
+
+:deep(.fast-extraction-dom-trigger.disabled) {
+  cursor: not-allowed;
+}
+
+:deep(.fast-extraction-dom-trigger .el-icon) {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
 }
 
 .add-row-button {

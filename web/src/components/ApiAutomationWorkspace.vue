@@ -51,6 +51,9 @@ type RequestEditorTab = {
   draft: ApiDefinitionDetail
   savedFingerprint: string
   isDirty: boolean
+  debugReportId: number | null
+  debugFailureSummary: string
+  debugStepResults: ApiRunStepResult[]
 }
 
 const requestMethodOptions = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'TRACE'] as const
@@ -656,10 +659,11 @@ const apiTasks = computed(() => tasks.value.filter(item => item.engineType === '
 const apiTaskMap = computed(() => new Map(apiTasks.value.map(item => [item.id, item])))
 const apiReports = computed(() => reports.value.filter(item => apiTaskMap.value.has(item.taskId)))
 const currentResponseStep = computed(() => {
-  if (!reportStepResults.value.length) {
+  const steps = activeRequestEditorTab.value?.debugStepResults ?? []
+  if (!steps.length) {
     return null
   }
-  return reportStepResults.value.find(item => !item.success) ?? reportStepResults.value[reportStepResults.value.length - 1]
+  return steps.find(item => !item.success) ?? steps[steps.length - 1]
 })
 const currentResponseStatusCode = computed(() => currentResponseStep.value?.response?.statusCode ?? null)
 const currentResponseDuration = computed(() => currentResponseStep.value?.durationMs ?? null)
@@ -673,7 +677,7 @@ const currentResponseHeaders = computed(() => currentResponseStep.value?.respons
 const currentAssertionResults = computed(() => currentResponseStep.value?.assertionResults ?? [])
 const currentExtractionResults = computed(() => currentResponseStep.value?.extractionResults ?? [])
 const currentProcessorResults = computed(() => currentResponseStep.value?.processorResults ?? [])
-const currentDebugError = computed(() => currentResponseStep.value?.errorMessage || reportDetail.value?.failureSummary || '')
+const currentDebugError = computed(() => currentResponseStep.value?.errorMessage || activeRequestEditorTab.value?.debugFailureSummary || '')
 const showResponseEmptyState = computed(() => !currentResponseStep.value && !currentDebugError.value)
 const queryEnabledCount = computed(() =>
   definitionForm.requestConfig.queryParams.filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false).length,
@@ -1409,6 +1413,9 @@ function makeRequestEditorTab(detail?: ApiDefinitionDetail) {
     draft,
     savedFingerprint,
     isDirty: false,
+    debugReportId: null,
+    debugFailureSummary: '',
+    debugStepResults: [],
   } satisfies RequestEditorTab
 }
 
@@ -1508,6 +1515,9 @@ function openOrReuseDraftRequest(detail: ApiDefinitionDetail) {
     current.activeTab = resolveDefaultRequestTab(draft)
     current.savedFingerprint = fingerprintDefinitionDetail(draft)
     current.isDirty = false
+    current.debugReportId = null
+    current.debugFailureSummary = ''
+    current.debugStepResults = []
     activateRequestEditorTab(current.key)
     return
   }
@@ -1533,6 +1543,9 @@ async function closeRequestEditorTab(key: string) {
       current.activeTab = resolveDefaultRequestTab(emptyDetail)
       current.savedFingerprint = fingerprintDefinitionDetail(emptyDetail)
       current.isDirty = false
+      current.debugReportId = null
+      current.debugFailureSummary = ''
+      current.debugStepResults = []
       activateRequestEditorTab(current.key)
     }
     return
@@ -2179,9 +2192,14 @@ async function debugDefinition() {
       environmentId: runOptions.environmentId,
       variableSetId: runOptions.variableSetId,
     } satisfies ApiDebugDefinitionPayload)
-    ElMessage.success(response.result === 'SUCCESS' ? '发送成功' : '发送失败')
+    const current = activeRequestEditorTab.value
+    if (current) {
+      current.debugReportId = response.reportId
+      current.debugFailureSummary = response.failureSummary || ''
+      current.debugStepResults = response.stepResults || []
+    }
+    ElMessage.success(response.result === 'SUCCESS' ? '????' : '????')
     await refreshData()
-    await loadReportPreview(response.reportId)
     activeTab.value = 'definitions'
     responsePreviewTab.value = 'body'
   }

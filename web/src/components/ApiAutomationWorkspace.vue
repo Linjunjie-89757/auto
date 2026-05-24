@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import type { Directive } from 'vue'
 import {
+  Close,
   Fold,
   Folder,
   FolderOpened,
@@ -3408,7 +3409,9 @@ function formatTimeLabel(value?: string | null) {
                 </span>
                 <span class="ms-like-editor-tab-label">{{ item.title }}</span>
                 <span v-if="item.isDirty" class="ms-like-editor-tab-dot"></span>
-                <span v-if="requestEditorTabs.length > 1" class="ms-like-editor-tab-close" @click.stop="closeRequestEditorTab(item.key)">脳</span>
+                <span v-if="requestEditorTabs.length > 1" class="ms-like-editor-tab-close" @click.stop="closeRequestEditorTab(item.key)">
+                  <el-icon><Close /></el-icon>
+                </span>
               </button>
               <button type="button" class="ms-like-tab-add" @click="openNewRequestTab()">+</button>
             </div>
@@ -5521,8 +5524,22 @@ function formatTimeLabel(value?: string | null) {
   font-size: 13px;
 }
 
-.ms-like-editor-tab.active {
+.ms-like-editor-tab.active,
+.ms-like-editor-tab:hover {
   background: #f3e8ff;
+  color: #7c3aed;
+}
+
+.ms-like-editor-tab.active .ms-like-editor-tab-close {
+  opacity: 0.42;
+  background: transparent;
+  color: #667085;
+}
+
+.ms-like-editor-tab:hover .ms-like-editor-tab-close {
+  opacity: 1;
+  background: rgba(15, 23, 42, 0.08);
+  color: #344054;
 }
 
 .ms-like-editor-tab-label {
@@ -5541,9 +5558,28 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-editor-tab-close {
-  color: #9ca3af;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: 6px;
+  border-radius: 999px;
+  color: #667085;
+  opacity: 0;
+  flex: 0 0 auto;
+  transition: opacity 0.16s ease, background-color 0.16s ease, color 0.16s ease;
+}
+
+.ms-like-editor-tab-close:hover {
+  background: rgba(124, 58, 237, 0.14);
+  color: #7c3aed;
+  opacity: 1;
+}
+
+.ms-like-editor-tab-close :deep(.el-icon) {
   font-size: 14px;
-  line-height: 1;
+  font-weight: 700;
 }
 
 .ms-like-tab-add {

@@ -2021,7 +2021,7 @@ function openCaseDraftFromDefinition(options?: { fromSavedDefinition?: boolean }
 
 async function runCaseItem(id: number) {
   await openCaseEditor(id)
-  await debugActiveEditor()
+  await debugCaseDrawer()
 }
 
 async function duplicateCaseItem(id: number) {

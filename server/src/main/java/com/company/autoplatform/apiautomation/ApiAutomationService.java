@@ -77,11 +77,14 @@ public class ApiAutomationService {
 
     private static final String API_ENV_TYPE = "API";
     private static final String API_VARIABLE_SET_TYPE = "API_VARIABLE_SET";
+    private static final String SCENARIO_RESOURCE_TYPE_DEFINITION = "DEFINITION";
+    private static final String SCENARIO_RESOURCE_TYPE_CASE = "CASE";
     private static final Set<String> SUCCESS_RESULTS = Set.of("SUCCESS", "FAILED");
     private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\{\\{\\s*([\\w.-]+)\\s*}}");
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final ApiDefinitionMapper definitionMapper;
+    private final ApiDefinitionCaseMapper caseMapper;
     private final ApiScenarioMapper scenarioMapper;
     private final ApiRunStepResultMapper runStepResultMapper;
     private final EnvConfigMapper envConfigMapper;
@@ -96,6 +99,7 @@ public class ApiAutomationService {
 
     public ApiAutomationService(
             ApiDefinitionMapper definitionMapper,
+            ApiDefinitionCaseMapper caseMapper,
             ApiScenarioMapper scenarioMapper,
             ApiRunStepResultMapper runStepResultMapper,
             EnvConfigMapper envConfigMapper,
@@ -108,6 +112,7 @@ public class ApiAutomationService {
             ApiAutomationScriptRunner scriptRunner
     ) {
         this.definitionMapper = definitionMapper;
+        this.caseMapper = caseMapper;
         this.scenarioMapper = scenarioMapper;
         this.runStepResultMapper = runStepResultMapper;
         this.envConfigMapper = envConfigMapper;
@@ -140,6 +145,32 @@ public class ApiAutomationService {
         return toDefinitionDetail(entity);
     }
 
+    public PageResponse<ApiDefinitionCaseItem> listCases(String workspaceCode, Long definitionId, String keyword) {
+        LambdaQueryWrapper<ApiDefinitionCaseEntity> query = new LambdaQueryWrapper<>();
+        applyWorkspaceScope(query, ApiDefinitionCaseEntity::getWorkspaceId, workspaceCode);
+        if (definitionId != null) {
+            query.eq(ApiDefinitionCaseEntity::getDefinitionId, definitionId);
+        }
+        String trimmedKeyword = blankToNull(keyword);
+        if (trimmedKeyword != null) {
+            query.and(wrapper -> wrapper
+                    .like(ApiDefinitionCaseEntity::getCaseName, trimmedKeyword)
+                    .or()
+                    .like(ApiDefinitionCaseEntity::getDescription, trimmedKeyword));
+        }
+        List<ApiDefinitionCaseItem> items = caseMapper.selectList(query.orderByDesc(ApiDefinitionCaseEntity::getUpdatedAt))
+                .stream()
+                .map(this::toCaseItem)
+                .toList();
+        return new PageResponse<>(items, items.size());
+    }
+
+    public ApiDefinitionCaseDetail getCase(Long id, String workspaceCode) {
+        ApiDefinitionCaseEntity entity = requireCase(id);
+        validateReadable(entity.getWorkspaceId(), workspaceCode, "Current workspace cannot access the case");
+        return toCaseDetail(entity);
+    }
+
     public ApiDefinitionDetail createDefinition(String headerWorkspaceCode, SaveApiDefinitionRequest request) {
         WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
                 workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode()));
@@ -165,16 +196,60 @@ public class ApiAutomationService {
         return toDefinitionDetail(entity);
     }
 
+    public ApiDefinitionCaseDetail createCase(String headerWorkspaceCode, SaveApiDefinitionCaseRequest request) {
+        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
+                workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode()));
+        ApiDefinitionEntity definition = requireDefinition(request.definitionId());
+        ensureDefinitionInWorkspace(definition, workspace.getId(), "Case definition must belong to the same workspace");
+        ApiDefinitionCaseEntity entity = new ApiDefinitionCaseEntity();
+        fillCaseEntity(entity, workspace, definition, request);
+        entity.setCreatedAt(LocalDateTime.now());
+        entity.setUpdatedAt(LocalDateTime.now());
+        caseMapper.insert(entity);
+        return toCaseDetail(entity);
+    }
+
+    public ApiDefinitionCaseDetail updateCase(Long id, String headerWorkspaceCode, SaveApiDefinitionCaseRequest request) {
+        ApiDefinitionCaseEntity entity = requireCase(id);
+        validateReadable(entity.getWorkspaceId(), headerWorkspaceCode, "Current workspace cannot edit the case");
+        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
+                workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode()));
+        if (!entity.getWorkspaceId().equals(workspace.getId())) {
+            throw new BadRequestException("Cannot move a case to another workspace");
+        }
+        ApiDefinitionEntity definition = requireDefinition(request.definitionId());
+        ensureDefinitionInWorkspace(definition, workspace.getId(), "Case definition must belong to the same workspace");
+        fillCaseEntity(entity, workspace, definition, request);
+        entity.setUpdatedAt(LocalDateTime.now());
+        caseMapper.updateById(entity);
+        return toCaseDetail(entity);
+    }
+
     public void deleteDefinition(Long id, String workspaceCode) {
         ApiDefinitionEntity entity = requireDefinition(id);
         validateReadable(entity.getWorkspaceId(), workspaceCode, "Current workspace cannot delete the definition");
         workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
-        long scenarioCount = scenarioMapper.selectCount(new LambdaQueryWrapper<ApiScenarioEntity>()
-                .like(ApiScenarioEntity::getStepsJson, "\"definitionId\":" + id));
+        long caseCount = caseMapper.selectCount(new LambdaQueryWrapper<ApiDefinitionCaseEntity>()
+                .eq(ApiDefinitionCaseEntity::getDefinitionId, id));
+        if (caseCount > 0) {
+            throw new BadRequestException("This definition is still referenced by cases");
+        }
+        long scenarioCount = countScenarioReferences(entity.getWorkspaceId(), SCENARIO_RESOURCE_TYPE_DEFINITION, id);
         if (scenarioCount > 0) {
             throw new BadRequestException("This definition is still referenced by scenarios");
         }
         definitionMapper.deleteById(id);
+    }
+
+    public void deleteCase(Long id, String workspaceCode) {
+        ApiDefinitionCaseEntity entity = requireCase(id);
+        validateReadable(entity.getWorkspaceId(), workspaceCode, "Current workspace cannot delete the case");
+        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
+        long scenarioCount = countScenarioReferences(entity.getWorkspaceId(), SCENARIO_RESOURCE_TYPE_CASE, id);
+        if (scenarioCount > 0) {
+            throw new BadRequestException("This case is still referenced by scenarios");
+        }
+        caseMapper.deleteById(id);
     }
 
     public PageResponse<ApiScenarioItem> listScenarios(String workspaceCode) {
@@ -324,6 +399,27 @@ public class ApiAutomationService {
         );
     }
 
+    public ApiRunResponse runCase(Long id, String workspaceCode, ApiRunRequest request) {
+        ApiDefinitionCaseEntity apiCase = requireCase(id);
+        validateReadable(apiCase.getWorkspaceId(), workspaceCode, "Current workspace cannot run the case");
+        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(apiCase.getWorkspaceId()).getWorkspaceCode());
+
+        ExecutionContext context = buildExecutionContext(apiCase.getWorkspaceId(), request.environmentId(), request.variableSetId());
+        RunEnvelope envelope = createRunEnvelope(apiCase.getWorkspaceId(), "API", "接口用例调试", apiCase.getCaseName());
+        RunStepComputation step = executeCase(apiCase, apiCase.getCaseName(), 1, context.variables(), context.environment());
+        persistStep(envelope.report(), apiCase.getWorkspaceId(), step);
+        finalizeRunCase(apiCase, step.success(), envelope.task(), envelope.report(), step);
+        return new ApiRunResponse(
+                envelope.task().getId(),
+                envelope.report().getId(),
+                envelope.task().getTaskName(),
+                envelope.report().getReportName(),
+                envelope.report().getResult(),
+                envelope.report().getFailureSummary(),
+                List.of(step.response())
+        );
+    }
+
     public ApiRunResponse debugRunDefinitionDraft(String workspaceCode, ApiDebugDefinitionRequest request) {
         WorkspaceEntity workspace = workspaceService.requireWorkspace(
                 blankToFallback(request.workspaceCode(), workspaceCode)
@@ -383,6 +479,66 @@ public class ApiAutomationService {
         );
     }
 
+    public ApiRunResponse debugRunCaseDraft(String workspaceCode, ApiDebugCaseRequest request) {
+        WorkspaceEntity workspace = workspaceService.requireWorkspace(
+                blankToFallback(request.workspaceCode(), workspaceCode)
+        );
+        validateReadable(workspace.getId(), workspaceCode, "Current workspace cannot run the case");
+        workspaceService.requireWritableWorkspace(workspace.getWorkspaceCode());
+
+        if (request.caseId() != null) {
+            ApiDefinitionCaseEntity apiCase = requireCase(request.caseId());
+            if (!apiCase.getWorkspaceId().equals(workspace.getId())) {
+                throw new BadRequestException("Case does not belong to the selected workspace");
+            }
+        }
+        if (request.definitionId() == null) {
+            throw new BadRequestException("Definition id cannot be blank");
+        }
+        ApiDefinitionEntity definition = requireDefinition(request.definitionId());
+        if (!definition.getWorkspaceId().equals(workspace.getId())) {
+            throw new BadRequestException("Definition does not belong to the selected workspace");
+        }
+
+        ApiRequestConfigInput config = request.requestConfig();
+        String method = Optional.ofNullable(config.method()).orElse("").trim().toUpperCase();
+        String path = Optional.ofNullable(config.path()).orElse("").trim();
+        if (method.isEmpty() || path.isEmpty()) {
+            throw new BadRequestException("Method and path cannot be blank");
+        }
+
+        ApiDefinitionCaseEntity draftCase = new ApiDefinitionCaseEntity();
+        draftCase.setWorkspaceId(workspace.getId());
+        draftCase.setDefinitionId(definition.getId());
+        draftCase.setCaseName(blankToFallback(request.name(), "未命名用例"));
+        draftCase.setRequestJson(ApiAutomationJsonSupport.toJson(request.requestConfig(), "Failed to serialize case request"));
+        draftCase.setAssertionsJson(ApiAutomationJsonSupport.toJson(defaultList(request.assertions()), "Failed to serialize case assertions"));
+        draftCase.setPreprocessorsJson(ApiAutomationJsonSupport.toJson(normalizeProcessors(request.preProcessors(), "PRE"),
+                "Failed to serialize case preprocessors"));
+        draftCase.setPostprocessorsJson(ApiAutomationJsonSupport.toJson(normalizeProcessors(request.postProcessors(), "POST"),
+                "Failed to serialize case postprocessors"));
+
+        ExecutionContext context = buildExecutionContext(workspace.getId(), request.environmentId(), request.variableSetId());
+        RunEnvelope envelope = createRunEnvelope(workspace.getId(), "API", "接口用例调试", draftCase.getCaseName());
+        RunStepComputation step = executeCase(draftCase, draftCase.getCaseName(), 1, context.variables(), context.environment());
+        persistStep(envelope.report(), workspace.getId(), step);
+        finalizeRunTaskAndReport(
+                envelope.task(),
+                envelope.report(),
+                step.success() ? "SUCCESS" : "FAILED",
+                step.response().errorMessage()
+        );
+        return new ApiRunResponse(
+                envelope.task().getId(),
+                envelope.report().getId(),
+                envelope.task().getTaskName(),
+                envelope.report().getReportName(),
+                envelope.report().getResult(),
+                envelope.report().getFailureSummary(),
+                List.of(step.response())
+        );
+    }
+
     public ApiRunResponse runScenario(Long id, String workspaceCode, ApiRunRequest request) {
         ApiScenarioEntity scenario = requireScenario(id);
         validateReadable(scenario.getWorkspaceId(), workspaceCode, "Current workspace cannot run the scenario");
@@ -401,15 +557,12 @@ public class ApiAutomationService {
             if (Boolean.FALSE.equals(step.enabled())) {
                 continue;
             }
-            ApiDefinitionEntity definition = requireDefinition(step.definitionId());
-            validateReadable(definition.getWorkspaceId(), workspaceService.requireWorkspaceById(scenario.getWorkspaceId()).getWorkspaceCode(),
-                    "Scenario contains an inaccessible definition");
-            RunStepComputation computation = executeDefinition(
-                    definition,
-                    blankToFallback(step.stepName(), definition.getDefinitionName()),
+            RunStepComputation computation = executeScenarioStep(
+                    step,
                     stepOrder,
                     context.variables(),
-                    context.environment()
+                    context.environment(),
+                    workspaceService.requireWorkspaceById(scenario.getWorkspaceId()).getWorkspaceCode()
             );
             persistStep(envelope.report(), scenario.getWorkspaceId(), computation);
             responses.add(computation.response());
@@ -467,16 +620,24 @@ public class ApiAutomationService {
                 "Failed to serialize post-processors"));
     }
 
+    private void fillCaseEntity(ApiDefinitionCaseEntity entity, WorkspaceEntity workspace, ApiDefinitionEntity definition, SaveApiDefinitionCaseRequest request) {
+        entity.setWorkspaceId(workspace.getId());
+        entity.setDefinitionId(definition.getId());
+        entity.setCaseName(request.name().trim());
+        entity.setDescription(blankToNull(request.description()));
+        entity.setTagsJson(ApiAutomationJsonSupport.toJson(defaultList(request.tags()), "Failed to serialize case tags"));
+        entity.setRequestJson(ApiAutomationJsonSupport.toJson(request.requestConfig(), "Failed to serialize case request config"));
+        entity.setAssertionsJson(ApiAutomationJsonSupport.toJson(defaultList(request.assertions()), "Failed to serialize case assertions"));
+        entity.setPreprocessorsJson(ApiAutomationJsonSupport.toJson(normalizeProcessors(request.preProcessors(), "PRE"),
+                "Failed to serialize case pre-processors"));
+        entity.setPostprocessorsJson(ApiAutomationJsonSupport.toJson(normalizeProcessors(request.postProcessors(), "POST"),
+                "Failed to serialize case post-processors"));
+    }
+
     private void fillScenarioEntity(ApiScenarioEntity entity, WorkspaceEntity workspace, SaveApiScenarioRequest request) {
-        List<ApiScenarioStepInput> steps = defaultList(request.steps());
+        List<ApiScenarioStepInput> steps = normalizeScenarioSteps(defaultList(request.steps()), workspace.getId());
         if (steps.isEmpty()) {
             throw new BadRequestException("Scenario must contain at least one step");
-        }
-        for (ApiScenarioStepInput step : steps) {
-            ApiDefinitionEntity definition = requireDefinition(step.definitionId());
-            if (!definition.getWorkspaceId().equals(workspace.getId())) {
-                throw new BadRequestException("Scenario steps must belong to the same workspace");
-            }
         }
         if (request.defaultEnvironmentId() != null) {
             EnvConfigEntity environment = requireEnvironment(request.defaultEnvironmentId());
@@ -563,6 +724,54 @@ public class ApiAutomationService {
                 readExtractors(entity.getExtractorsJson()),
                 readPreProcessors(entity),
                 readPostProcessors(entity),
+                entity.getLastRunResult(),
+                entity.getLastRunAt(),
+                entity.getCreatedAt(),
+                entity.getUpdatedAt()
+        );
+    }
+
+    private ApiDefinitionCaseItem toCaseItem(ApiDefinitionCaseEntity entity) {
+        WorkspaceEntity workspace = workspaceService.requireWorkspaceById(entity.getWorkspaceId());
+        ApiDefinitionEntity definition = requireDefinition(entity.getDefinitionId());
+        ApiRequestConfigInput requestConfig = readStoredRequestConfig(entity.getRequestJson(), definition.getHttpMethod(), definition.getPath());
+        return new ApiDefinitionCaseItem(
+                entity.getId(),
+                workspace.getWorkspaceCode(),
+                workspace.getWorkspaceName(),
+                definition.getId(),
+                definition.getDefinitionName(),
+                entity.getCaseName(),
+                requestConfig.method(),
+                requestConfig.path(),
+                entity.getDescription(),
+                readTags(entity.getTagsJson()),
+                entity.getLastRunResult(),
+                entity.getLastRunAt(),
+                entity.getUpdatedAt()
+        );
+    }
+
+    private ApiDefinitionCaseDetail toCaseDetail(ApiDefinitionCaseEntity entity) {
+        WorkspaceEntity workspace = workspaceService.requireWorkspaceById(entity.getWorkspaceId());
+        ApiDefinitionEntity definition = requireDefinition(entity.getDefinitionId());
+        ApiRequestConfigInput requestConfig = readStoredRequestConfig(entity.getRequestJson(), definition.getHttpMethod(), definition.getPath());
+        return new ApiDefinitionCaseDetail(
+                entity.getId(),
+                workspace.getWorkspaceCode(),
+                workspace.getWorkspaceName(),
+                definition.getId(),
+                definition.getDefinitionName(),
+                entity.getCaseName(),
+                requestConfig.method(),
+                requestConfig.path(),
+                entity.getDescription(),
+                readTags(entity.getTagsJson()),
+                requestConfig,
+                readAssertions(entity.getAssertionsJson()),
+                List.of(),
+                readProcessorsJson(entity.getPreprocessorsJson()),
+                readProcessorsJson(entity.getPostprocessorsJson()),
                 entity.getLastRunResult(),
                 entity.getLastRunAt(),
                 entity.getCreatedAt(),
@@ -827,6 +1036,61 @@ public class ApiAutomationService {
             );
             return new RunStepComputation(false, result);
         }
+    }
+
+    private RunStepComputation executeCase(
+            ApiDefinitionCaseEntity apiCase,
+            String stepName,
+            int stepOrder,
+            Map<String, String> variables,
+            ResolvedEnvironment environment
+    ) {
+        ApiDefinitionEntity definition = requireDefinition(apiCase.getDefinitionId());
+        ensureDefinitionInWorkspace(definition, apiCase.getWorkspaceId(), "Case definition must belong to the same workspace");
+        ApiDefinitionEntity runtimeDefinition = new ApiDefinitionEntity();
+        ApiRequestConfigInput requestConfig = readStoredRequestConfig(apiCase.getRequestJson(), definition.getHttpMethod(), definition.getPath());
+        runtimeDefinition.setId(definition.getId());
+        runtimeDefinition.setWorkspaceId(apiCase.getWorkspaceId());
+        runtimeDefinition.setDefinitionName(apiCase.getCaseName());
+        runtimeDefinition.setHttpMethod(requestConfig.method());
+        runtimeDefinition.setPath(requestConfig.path());
+        runtimeDefinition.setRequestJson(apiCase.getRequestJson());
+        runtimeDefinition.setAssertionsJson(apiCase.getAssertionsJson());
+        runtimeDefinition.setPreprocessorsJson(apiCase.getPreprocessorsJson());
+        runtimeDefinition.setPostprocessorsJson(apiCase.getPostprocessorsJson());
+        runtimeDefinition.setExtractorsJson("[]");
+        return executeDefinition(runtimeDefinition, stepName, stepOrder, variables, environment);
+    }
+
+    private RunStepComputation executeScenarioStep(
+            ApiScenarioStepInput step,
+            int stepOrder,
+            Map<String, String> variables,
+            ResolvedEnvironment environment,
+            String workspaceCode
+    ) {
+        String resourceType = normalizeScenarioResourceType(step);
+        Long resourceId = normalizeScenarioResourceId(step);
+        if (SCENARIO_RESOURCE_TYPE_CASE.equals(resourceType)) {
+            ApiDefinitionCaseEntity apiCase = requireCase(resourceId);
+            validateReadable(apiCase.getWorkspaceId(), workspaceCode, "Scenario contains an inaccessible case");
+            return executeCase(
+                    apiCase,
+                    blankToFallback(step.stepName(), apiCase.getCaseName()),
+                    stepOrder,
+                    variables,
+                    environment
+            );
+        }
+        ApiDefinitionEntity definition = requireDefinition(resourceId);
+        validateReadable(definition.getWorkspaceId(), workspaceCode, "Scenario contains an inaccessible definition");
+        return executeDefinition(
+                definition,
+                blankToFallback(step.stepName(), definition.getDefinitionName()),
+                stepOrder,
+                variables,
+                environment
+        );
     }
 
     private ResolvedRequest resolveRequest(ApiRequestConfigInput config, ResolvedEnvironment environment, Map<String, String> variables) {
@@ -1906,6 +2170,15 @@ public class ApiAutomationService {
         finalizeRunTaskAndReport(task, report, result, step.response().errorMessage());
     }
 
+    private void finalizeRunCase(ApiDefinitionCaseEntity apiCase, boolean success, TaskEntity task, ReportEntity report, RunStepComputation step) {
+        String result = success ? "SUCCESS" : "FAILED";
+        apiCase.setLastRunResult(result);
+        apiCase.setLastRunAt(LocalDateTime.now());
+        apiCase.setUpdatedAt(LocalDateTime.now());
+        caseMapper.updateById(apiCase);
+        finalizeRunTaskAndReport(task, report, result, step.response().errorMessage());
+    }
+
     private void finalizeRunScenario(ApiScenarioEntity scenario, boolean success, String failureSummary, TaskEntity task, ReportEntity report) {
         String result = success ? "SUCCESS" : "FAILED";
         scenario.setLastRunResult(result);
@@ -2246,9 +2519,46 @@ public class ApiAutomationService {
         ));
     }
 
-    private List<ApiScenarioStepInput> readScenarioSteps(String json) {
+    private List<ApiProcessorInput> readProcessorsJson(String json) {
         return ApiAutomationJsonSupport.readList(json, new TypeReference<>() {
         }, List.of());
+    }
+
+    private List<ApiScenarioStepInput> readScenarioSteps(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(json);
+            if (root == null || !root.isArray()) {
+                return List.of();
+            }
+            List<ApiScenarioStepInput> steps = new ArrayList<>();
+            for (JsonNode node : root) {
+                String stepName = blankToNull(node.path("stepName").asText(null));
+                Boolean enabled = node.hasNonNull("enabled") ? node.get("enabled").asBoolean() : Boolean.TRUE;
+                if (node.hasNonNull("resourceType") && node.hasNonNull("resourceId")) {
+                    steps.add(new ApiScenarioStepInput(
+                            stepName,
+                            normalizeScenarioResourceType(node.get("resourceType").asText()),
+                            node.get("resourceId").asLong(),
+                            enabled
+                    ));
+                    continue;
+                }
+                if (node.hasNonNull("definitionId")) {
+                    steps.add(new ApiScenarioStepInput(
+                            stepName,
+                            SCENARIO_RESOURCE_TYPE_DEFINITION,
+                            node.get("definitionId").asLong(),
+                            enabled
+                    ));
+                }
+            }
+            return steps;
+        } catch (IOException exception) {
+            throw new BadRequestException("Failed to parse scenario steps");
+        }
     }
 
     private List<ApiVariableItem> readVariables(String json) {
@@ -2426,6 +2736,14 @@ public class ApiAutomationService {
         return entity;
     }
 
+    private ApiDefinitionCaseEntity requireCase(Long id) {
+        ApiDefinitionCaseEntity entity = caseMapper.selectById(id);
+        if (entity == null) {
+            throw new NotFoundException("API case not found");
+        }
+        return entity;
+    }
+
     private ApiScenarioEntity requireScenario(Long id) {
         ApiScenarioEntity entity = scenarioMapper.selectById(id);
         if (entity == null) {
@@ -2468,6 +2786,70 @@ public class ApiAutomationService {
 
     private String blankToFallback(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value.trim();
+    }
+
+    private void ensureDefinitionInWorkspace(ApiDefinitionEntity definition, Long workspaceId, String message) {
+        if (!definition.getWorkspaceId().equals(workspaceId)) {
+            throw new BadRequestException(message);
+        }
+    }
+
+    private ApiRequestConfigInput readStoredRequestConfig(String json, String methodFallback, String pathFallback) {
+        return ApiAutomationJsonSupport.read(json, ApiRequestConfigInput.class,
+                new ApiRequestConfigInput(methodFallback, pathFallback, 10000, List.of(), List.of(), List.of(),
+                        new ApiRequestBodyInput("NONE", null, List.of(), null, null, null), emptyAuthConfig()));
+    }
+
+    private List<ApiScenarioStepInput> normalizeScenarioSteps(List<ApiScenarioStepInput> steps, Long workspaceId) {
+        List<ApiScenarioStepInput> normalized = new ArrayList<>();
+        for (ApiScenarioStepInput step : steps) {
+            String resourceType = normalizeScenarioResourceType(step);
+            Long resourceId = normalizeScenarioResourceId(step);
+            if (SCENARIO_RESOURCE_TYPE_CASE.equals(resourceType)) {
+                ApiDefinitionCaseEntity apiCase = requireCase(resourceId);
+                if (!apiCase.getWorkspaceId().equals(workspaceId)) {
+                    throw new BadRequestException("Scenario steps must belong to the same workspace");
+                }
+                normalized.add(new ApiScenarioStepInput(blankToNull(step.stepName()), resourceType, resourceId, !Boolean.FALSE.equals(step.enabled())));
+                continue;
+            }
+            ApiDefinitionEntity definition = requireDefinition(resourceId);
+            if (!definition.getWorkspaceId().equals(workspaceId)) {
+                throw new BadRequestException("Scenario steps must belong to the same workspace");
+            }
+            normalized.add(new ApiScenarioStepInput(blankToNull(step.stepName()), SCENARIO_RESOURCE_TYPE_DEFINITION, resourceId, !Boolean.FALSE.equals(step.enabled())));
+        }
+        return normalized;
+    }
+
+    private long countScenarioReferences(Long workspaceId, String resourceType, Long resourceId) {
+        return scenarioMapper.selectList(new LambdaQueryWrapper<ApiScenarioEntity>()
+                        .eq(ApiScenarioEntity::getWorkspaceId, workspaceId))
+                .stream()
+                .filter(entity -> readScenarioSteps(entity.getStepsJson()).stream().anyMatch(step ->
+                        resourceType.equals(normalizeScenarioResourceType(step))
+                                && resourceId.equals(normalizeScenarioResourceId(step))))
+                .count();
+    }
+
+    private String normalizeScenarioResourceType(ApiScenarioStepInput step) {
+        return normalizeScenarioResourceType(step.resourceType());
+    }
+
+    private String normalizeScenarioResourceType(String resourceType) {
+        String normalized = Optional.ofNullable(resourceType).orElse(SCENARIO_RESOURCE_TYPE_DEFINITION).trim().toUpperCase(Locale.ROOT);
+        if (!SCENARIO_RESOURCE_TYPE_DEFINITION.equals(normalized) && !SCENARIO_RESOURCE_TYPE_CASE.equals(normalized)) {
+            throw new BadRequestException("Unsupported scenario resource type");
+        }
+        return normalized;
+    }
+
+    private Long normalizeScenarioResourceId(ApiScenarioStepInput step) {
+        Long resourceId = step.resourceId();
+        if (resourceId == null) {
+            throw new BadRequestException("Scenario step resource cannot be blank");
+        }
+        return resourceId;
     }
 
     private String firstNonBlank(String first, String fallback) {

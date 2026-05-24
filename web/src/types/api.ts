@@ -643,9 +643,37 @@ export interface ApiDefinitionDetail extends ApiDefinitionItem {
   createdAt: string | null
 }
 
+export interface ApiDefinitionCaseItem {
+  id: number
+  workspaceCode: string
+  workspaceName: string
+  definitionId: number
+  definitionName: string
+  name: string
+  method: string
+  path: string
+  description: string | null
+  tags: string[]
+  lastRunResult: string | null
+  lastRunAt: string | null
+  updatedAt: string | null
+}
+
+export interface ApiDefinitionCaseDetail extends ApiDefinitionCaseItem {
+  requestConfig: ApiRequestConfig
+  assertions: ApiAssertionConfig[]
+  extractors: ApiExtractorConfig[]
+  preProcessors: ApiProcessorConfig[]
+  postProcessors: ApiProcessorConfig[]
+  createdAt: string | null
+}
+
+export type ApiScenarioStepResourceType = 'DEFINITION' | 'CASE'
+
 export interface ApiScenarioStep {
   stepName: string
-  definitionId: number
+  resourceType: ApiScenarioStepResourceType
+  resourceId: number
   enabled?: boolean
 }
 
@@ -783,6 +811,18 @@ export interface SaveApiDefinitionPayload {
   postProcessors: ApiProcessorConfig[]
 }
 
+export interface SaveApiDefinitionCasePayload {
+  workspaceCode?: string
+  definitionId: number
+  name: string
+  description?: string | null
+  tags: string[]
+  requestConfig: ApiRequestConfig
+  assertions: ApiAssertionConfig[]
+  preProcessors: ApiProcessorConfig[]
+  postProcessors: ApiProcessorConfig[]
+}
+
 export interface SaveApiScenarioPayload {
   workspaceCode?: string
   name: string
@@ -826,6 +866,19 @@ export interface ApiDebugDefinitionPayload {
   requestConfig: ApiRequestConfig
   assertions: ApiAssertionConfig[]
   extractors: ApiExtractorConfig[]
+  preProcessors: ApiProcessorConfig[]
+  postProcessors: ApiProcessorConfig[]
+  environmentId?: number | null
+  variableSetId?: number | null
+}
+
+export interface ApiDebugCasePayload {
+  workspaceCode?: string
+  caseId?: number | null
+  definitionId: number
+  name?: string
+  requestConfig: ApiRequestConfig
+  assertions: ApiAssertionConfig[]
   preProcessors: ApiProcessorConfig[]
   postProcessors: ApiProcessorConfig[]
   environmentId?: number | null

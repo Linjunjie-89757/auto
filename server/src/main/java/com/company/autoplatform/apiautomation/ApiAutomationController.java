@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -85,6 +86,67 @@ public class ApiAutomationController {
             @Valid @RequestBody ApiDebugDefinitionRequest request
     ) {
         return ApiResponse.ok(apiAutomationService.debugRunDefinitionDraft(workspaceCode, request));
+    }
+
+    @GetMapping("/cases")
+    public ApiResponse<PageResponse<ApiDefinitionCaseItem>> listCases(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestParam(required = false) Long definitionId,
+            @RequestParam(required = false) String keyword
+    ) {
+        return ApiResponse.ok(apiAutomationService.listCases(workspaceCode, definitionId, keyword));
+    }
+
+    @GetMapping("/cases/{id}")
+    public ApiResponse<ApiDefinitionCaseDetail> getCase(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(apiAutomationService.getCase(id, workspaceCode));
+    }
+
+    @PostMapping("/cases")
+    public ApiResponse<ApiDefinitionCaseDetail> createCase(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody SaveApiDefinitionCaseRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.createCase(workspaceCode, request), "API case created");
+    }
+
+    @PutMapping("/cases/{id}")
+    public ApiResponse<ApiDefinitionCaseDetail> updateCase(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody SaveApiDefinitionCaseRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.updateCase(id, workspaceCode, request), "API case updated");
+    }
+
+    @DeleteMapping("/cases/{id}")
+    public ApiResponse<Void> deleteCase(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        apiAutomationService.deleteCase(id, workspaceCode);
+        return ApiResponse.ok(null, "API case deleted");
+    }
+
+    @PostMapping("/cases/{id}/run")
+    public ApiResponse<ApiRunResponse> runCase(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestBody(required = false) ApiRunRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.runCase(id, workspaceCode,
+                request == null ? new ApiRunRequest(null, null, null) : request));
+    }
+
+    @PostMapping("/cases/debug-run")
+    public ApiResponse<ApiRunResponse> debugRunCaseDraft(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody ApiDebugCaseRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.debugRunCaseDraft(workspaceCode, request));
     }
 
     @GetMapping("/scenarios")

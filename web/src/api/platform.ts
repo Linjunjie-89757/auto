@@ -1,5 +1,8 @@
 import type {
+  ApiDebugCasePayload,
   ApiDebugDefinitionPayload,
+  ApiDefinitionCaseDetail,
+  ApiDefinitionCaseItem,
   ApiResponse,
   ApiDefinitionDetail,
   ApiDefinitionItem,
@@ -70,6 +73,7 @@ import type {
   UpdateReportContentPayload,
   UpdateUserPayload,
   ResetPasswordResponse,
+  SaveApiDefinitionCasePayload,
   SaveApiDefinitionPayload,
   SaveApiEnvironmentPayload,
   SaveApiScenarioPayload,
@@ -625,6 +629,54 @@ export const platformApi = {
   },
   debugApiDefinitionDraft(workspaceCode: string, payload: ApiDebugDefinitionPayload) {
     return request<ApiRunResponse>('/automation/api/definitions/debug-run', {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  getApiDefinitionCases(workspaceCode: string, params?: { definitionId?: number, keyword?: string }) {
+    const query = new URLSearchParams()
+    if (params?.definitionId != null) {
+      query.set('definitionId', String(params.definitionId))
+    }
+    if (params?.keyword) {
+      query.set('keyword', params.keyword)
+    }
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return request<PageResponse<ApiDefinitionCaseItem>>(`/automation/api/cases${suffix}`, { workspaceCode })
+  },
+  getApiDefinitionCaseDetail(workspaceCode: string, id: number) {
+    return request<ApiDefinitionCaseDetail>(`/automation/api/cases/${id}`, { workspaceCode })
+  },
+  createApiDefinitionCase(workspaceCode: string, payload: SaveApiDefinitionCasePayload) {
+    return request<ApiDefinitionCaseDetail>('/automation/api/cases', {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  updateApiDefinitionCase(workspaceCode: string, id: number, payload: SaveApiDefinitionCasePayload) {
+    return request<ApiDefinitionCaseDetail>(`/automation/api/cases/${id}`, {
+      method: 'PUT',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  deleteApiDefinitionCase(workspaceCode: string, id: number) {
+    return request<void>(`/automation/api/cases/${id}`, {
+      method: 'DELETE',
+      workspaceCode,
+    })
+  },
+  runApiDefinitionCase(workspaceCode: string, id: number, payload: ApiRunPayload) {
+    return request<ApiRunResponse>(`/automation/api/cases/${id}/run`, {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  debugApiDefinitionCaseDraft(workspaceCode: string, payload: ApiDebugCasePayload) {
+    return request<ApiRunResponse>('/automation/api/cases/debug-run', {
       method: 'POST',
       workspaceCode,
       body: JSON.stringify(payload),

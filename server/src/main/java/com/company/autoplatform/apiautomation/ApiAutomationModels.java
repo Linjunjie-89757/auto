@@ -210,9 +210,63 @@ public final class ApiAutomationModels {
     ) {
     }
 
+    public record SaveApiDefinitionCaseRequest(
+            String workspaceCode,
+            @NotNull(message = "Definition id cannot be blank") Long definitionId,
+            @NotBlank(message = "Case name cannot be blank") String name,
+            String description,
+            List<String> tags,
+            @Valid @NotNull(message = "Request config cannot be blank") ApiRequestConfigInput requestConfig,
+            List<ApiAssertionInput> assertions,
+            List<ApiProcessorInput> preProcessors,
+            List<ApiProcessorInput> postProcessors
+    ) {
+    }
+
+    public record ApiDefinitionCaseItem(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            Long definitionId,
+            String definitionName,
+            String name,
+            String method,
+            String path,
+            String description,
+            List<String> tags,
+            String lastRunResult,
+            LocalDateTime lastRunAt,
+            LocalDateTime updatedAt
+    ) {
+    }
+
+    public record ApiDefinitionCaseDetail(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            Long definitionId,
+            String definitionName,
+            String name,
+            String method,
+            String path,
+            String description,
+            List<String> tags,
+            ApiRequestConfigInput requestConfig,
+            List<ApiAssertionInput> assertions,
+            List<ApiExtractorInput> extractors,
+            List<ApiProcessorInput> preProcessors,
+            List<ApiProcessorInput> postProcessors,
+            String lastRunResult,
+            LocalDateTime lastRunAt,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt
+    ) {
+    }
+
     public record ApiScenarioStepInput(
             String stepName,
-            @NotNull(message = "Definition id cannot be blank") Long definitionId,
+            String resourceType,
+            Long resourceId,
             Boolean enabled
     ) {
     }
@@ -332,6 +386,20 @@ public final class ApiAutomationModels {
             @Valid @NotNull(message = "Request config cannot be blank") ApiRequestConfigInput requestConfig,
             List<ApiAssertionInput> assertions,
             List<ApiExtractorInput> extractors,
+            List<ApiProcessorInput> preProcessors,
+            List<ApiProcessorInput> postProcessors,
+            Long environmentId,
+            Long variableSetId
+    ) {
+    }
+
+    public record ApiDebugCaseRequest(
+            String workspaceCode,
+            Long caseId,
+            Long definitionId,
+            String name,
+            @Valid @NotNull(message = "Request config cannot be blank") ApiRequestConfigInput requestConfig,
+            List<ApiAssertionInput> assertions,
             List<ApiProcessorInput> preProcessors,
             List<ApiProcessorInput> postProcessors,
             Long environmentId,

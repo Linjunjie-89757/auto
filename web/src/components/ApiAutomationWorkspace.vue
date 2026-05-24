@@ -1,7 +1,8 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import type { Directive } from 'vue'
 import {
+  Close,
   Fold,
   Folder,
   FolderOpened,
@@ -18,6 +19,9 @@ import type {
   ApiAssertionConfig,
   ApiAuthConfig,
   ApiAuthCredential,
+  ApiDebugCasePayload,
+  ApiDefinitionCaseDetail,
+  ApiDefinitionCaseItem,
   ApiDefinitionDetail,
   ApiDefinitionItem,
   DbConnectionItem,
@@ -42,13 +46,22 @@ import type {
   WorkspaceItem,
 } from '../types/api'
 
+type RequestEditorResourceType = 'definition' | 'case'
+type ApiRequestEditorDetail = ApiDefinitionDetail & {
+  resourceType: RequestEditorResourceType
+  definitionId: number | null
+  definitionName: string | null
+}
+
 type RequestEditorTab = {
   key: string
+  resourceType: RequestEditorResourceType
+  resourceId: number | null
   definitionId: number | null
   title: string
   method: string
   activeTab: RequestContentTab
-  draft: ApiDefinitionDetail
+  draft: ApiRequestEditorDetail
   savedFingerprint: string
   isDirty: boolean
   debugReportId: number | null
@@ -79,7 +92,7 @@ type DefinitionDirectoryTreeNode = {
 
 type BatchAddMode = 'query' | 'cookie' | 'header' | 'body-form' | 'assertion' | 'extractor'
 type SortableParamGroup = 'query' | 'header' | 'body-form'
-type RequestContentTab = 'params' | 'headers' | 'body' | 'auth' | 'pre' | 'post' | 'tests' | 'settings'
+type RequestContentTab = 'params' | 'headers' | 'body' | 'auth' | 'pre' | 'post' | 'tests' | 'settings' | 'cases'
 
 const DEFINITION_TREE_ROOT_KEY = 'definition-root'
 const DEFINITION_TREE_UNASSIGNED_KEY = 'definition-unassigned'
@@ -129,6 +142,7 @@ const activePostProcessorId = ref<string | null>(null)
 const activeAssertionId = ref<string | null>(null)
 
 const definitions = ref<ApiDefinitionItem[]>([])
+const apiCases = ref<ApiDefinitionCaseItem[]>([])
 const scenarios = ref<ApiScenarioItem[]>([])
 const environments = ref<ApiEnvironmentItem[]>([])
 const variableSets = ref<ApiVariableSetItem[]>([])
@@ -147,6 +161,7 @@ const selectedVariableSetId = ref<number | null>(null)
 const selectedReportId = ref<number | null>(null)
 const requestEditorTabs = ref<RequestEditorTab[]>([])
 const activeRequestEditorKey = ref('')
+const caseDrawerSourceEditorKey = ref('')
 const requestEditorSyncing = ref(false)
 const selectedDefinitionTreeKey = ref(DEFINITION_TREE_ROOT_KEY)
 const definitionTreeRenderKey = ref(0)
@@ -169,8 +184,11 @@ const scenarioFilters = reactive({
   directory: '',
 })
 
-const definitionForm = reactive<ApiDefinitionDetail>({
+const definitionForm = reactive<ApiRequestEditorDetail>({
   id: 0,
+  resourceType: 'definition',
+  definitionId: 0,
+  definitionName: '',
   workspaceCode: '',
   workspaceName: '',
   name: '',
@@ -306,11 +324,27 @@ const currentDefinitionWorkspaceLabel = computed(() => {
 const currentEnvironmentName = computed(() => environments.value.find(item => item.id === runOptions.environmentId)?.name ?? '未选择环境')
 const currentVariableSetName = computed(() => variableSets.value.find(item => item.id === runOptions.variableSetId)?.name ?? '未选择变量集')
 const activeRequestEditorTab = computed(() => requestEditorTabs.value.find(item => item.key === activeRequestEditorKey.value) ?? null)
+const currentDefinitionCases = computed(() => {
+  const definitionId = activeRequestEditorTab.value?.definitionId
+  if (!definitionId || activeRequestEditorTab.value?.resourceType !== 'definition') {
+    return []
+  }
+  return apiCases.value.filter(item => item.definitionId === definitionId)
+})
+const isCaseDrawerMode = computed(() => activeRequestEditorTab.value?.resourceType === 'case')
+const caseDrawerTitle = computed(() => definitionForm.name || '新建用例')
+const caseDrawerSubtitle = computed(() => definitionForm.definitionName || '接口用例')
+const showCaseListContent = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && activeRequestTab.value === 'cases')
+const visibleRequestEditorTabs = computed(() => requestEditorTabs.value.filter(item => item.resourceType === 'definition'))
 
 const scenarioDirectoryOptions = computed(() => uniqueNonEmpty(scenarios.value.map(item => item.directoryName)))
 const activeOwnerOptions = computed(() => users.value.filter(item => item.status === 1))
 const definitionOptions = computed(() => definitions.value.map(item => ({
   label: `${item.method} ${item.name}`,
+  value: item.id,
+})))
+const caseOptions = computed(() => apiCases.value.map(item => ({
+  label: `${item.name} (${item.method} ${item.path})`,
   value: item.id,
 })))
 const draftDefinitionDirectories = computed(() => requestEditorTabs.value
@@ -1281,7 +1315,7 @@ function emptyProcessor(type: ApiProcessorConfig['processorType'], stage: 'pre' 
 }
 
 function emptyScenarioStep(): ApiScenarioStep {
-  return { stepName: '', definitionId: 0, enabled: true }
+  return { stepName: '', resourceType: 'CASE', resourceId: 0, enabled: true }
 }
 
 function emptyVariable(): ApiVariableItem {
@@ -1333,11 +1367,31 @@ const batchAddExamples = computed(() => {
   }
 })
 
-function cloneDefinitionDetail(detail: ApiDefinitionDetail): ApiDefinitionDetail {
-  return JSON.parse(JSON.stringify(detail)) as ApiDefinitionDetail
+function toEditorDetailFromDefinition(detail: ApiDefinitionDetail): ApiRequestEditorDetail {
+  return {
+    ...JSON.parse(JSON.stringify(detail)) as ApiDefinitionDetail,
+    resourceType: 'definition',
+    definitionId: detail.id || 0,
+    definitionName: detail.name || '',
+  }
 }
 
-function fingerprintDefinitionDetail(detail: ApiDefinitionDetail) {
+function toEditorDetailFromCase(detail: ApiDefinitionCaseDetail): ApiRequestEditorDetail {
+  return {
+    ...JSON.parse(JSON.stringify(detail)) as ApiDefinitionCaseDetail,
+    directoryName: '',
+    extractors: Array.isArray(detail.extractors) ? detail.extractors : [],
+    resourceType: 'case',
+    definitionId: detail.definitionId,
+    definitionName: detail.definitionName,
+  }
+}
+
+function cloneEditorDetail(detail: ApiRequestEditorDetail): ApiRequestEditorDetail {
+  return JSON.parse(JSON.stringify(detail)) as ApiRequestEditorDetail
+}
+
+function fingerprintDefinitionDetail(detail: ApiRequestEditorDetail) {
   return JSON.stringify(detail)
 }
 
@@ -1345,7 +1399,7 @@ function hasEnabledKeyValueRows(rows: ApiKeyValue[]) {
   return rows.some(item => !isKeyValueRowEmpty(item) && item.enabled !== false)
 }
 
-function resolveDefaultRequestTab(detail: ApiDefinitionDetail): RequestContentTab {
+function resolveDefaultRequestTab(detail: ApiRequestEditorDetail): RequestContentTab {
   if (detail.requestConfig.body.type !== 'NONE') {
     return 'body'
   }
@@ -1358,9 +1412,12 @@ function resolveDefaultRequestTab(detail: ApiDefinitionDetail): RequestContentTa
   return 'body'
 }
 
-function buildEmptyDefinitionDetail(): ApiDefinitionDetail {
+function buildEmptyDefinitionDetail(): ApiRequestEditorDetail {
   return {
     id: 0,
+    resourceType: 'definition',
+    definitionId: 0,
+    definitionName: '',
     workspaceCode: selectedDefinitionWorkspaceCode.value,
     workspaceName: '',
     name: '',
@@ -1390,8 +1447,8 @@ function buildEmptyDefinitionDetail(): ApiDefinitionDetail {
   }
 }
 
-function makeRequestEditorTab(detail?: ApiDefinitionDetail) {
-  const draft = cloneDefinitionDetail(detail ?? buildEmptyDefinitionDetail())
+function makeRequestEditorTab(detail?: ApiRequestEditorDetail) {
+  const draft = cloneEditorDetail(detail ?? buildEmptyDefinitionDetail())
   hydrateDefinitionKeyValueRows(draft)
   if (draft.requestConfig.body.type === 'RAW_JSON') {
     draft.requestConfig.body.jsonText = draft.requestConfig.body.rawText || ''
@@ -1406,7 +1463,9 @@ function makeRequestEditorTab(detail?: ApiDefinitionDetail) {
   const key = `request-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   return {
     key,
-    definitionId: draft.id || null,
+    resourceType: draft.resourceType,
+    resourceId: draft.id || null,
+    definitionId: draft.definitionId || draft.id || null,
     title: draft.name || '\u65b0\u5efa\u8bf7\u6c42',
     method: draft.requestConfig.method || draft.method || 'GET',
     activeTab: resolveDefaultRequestTab(draft),
@@ -1424,10 +1483,14 @@ function syncActiveRequestEditorTab() {
   if (!current || requestEditorSyncing.value) {
     return
   }
-  const snapshot = cloneDefinitionDetail(definitionForm)
+  const snapshot = cloneEditorDetail(definitionForm)
   current.draft = snapshot
-  current.definitionId = definitionForm.id || null
-  current.title = definitionForm.name || '\u65b0\u5efa\u8bf7\u6c42'
+  current.resourceType = definitionForm.resourceType
+  current.resourceId = definitionForm.id || null
+  current.definitionId = definitionForm.resourceType === 'case'
+    ? (definitionForm.definitionId || null)
+    : (definitionForm.id || null)
+  current.title = definitionForm.name || (definitionForm.resourceType === 'case' ? '新建用例' : '\u65b0\u5efa\u8bf7\u6c42')
   current.method = definitionForm.requestConfig.method || definitionForm.method || 'GET'
   current.activeTab = activeRequestTab.value
   current.isDirty = current.savedFingerprint !== fingerprintDefinitionDetail(snapshot)
@@ -1441,19 +1504,25 @@ function setActiveRequestContentTab(tab: RequestContentTab) {
   }
 }
 
-function applyDefinitionToEditor(detail: ApiDefinitionDetail, options?: { markSaved?: boolean }) {
+function applyEditorDetailToForm(detail: ApiRequestEditorDetail, options?: { markSaved?: boolean }) {
   requestEditorSyncing.value = true
-  const cloned = cloneDefinitionDetail(detail)
+  const cloned = cloneEditorDetail(detail)
   hydrateDefinitionKeyValueRows(cloned)
   Object.assign(definitionForm, cloned)
-  selectedDefinitionId.value = detail.id || null
-  syncDefinitionTreeSelection(detail)
+  if (cloned.resourceType === 'definition') {
+    selectedDefinitionId.value = cloned.id || null
+    syncDefinitionTreeSelection(cloned)
+  }
   const current = activeRequestEditorTab.value
   if (current) {
-    current.draft = cloneDefinitionDetail(cloned)
-    current.definitionId = detail.id || null
-    current.title = detail.name || '\u65b0\u5efa\u8bf7\u6c42'
-    current.method = detail.requestConfig.method || detail.method || 'GET'
+    current.resourceType = cloned.resourceType
+    current.resourceId = cloned.id || null
+    current.draft = cloneEditorDetail(cloned)
+    current.definitionId = cloned.resourceType === 'case'
+      ? (cloned.definitionId || null)
+      : (cloned.id || null)
+    current.title = cloned.name || (cloned.resourceType === 'case' ? '新建用例' : '\u65b0\u5efa\u8bf7\u6c42')
+    current.method = cloned.requestConfig.method || cloned.method || 'GET'
     current.activeTab = current.activeTab || resolveDefaultRequestTab(cloned)
     if (options?.markSaved) {
       current.savedFingerprint = fingerprintDefinitionDetail(cloned)
@@ -1472,10 +1541,10 @@ function activateRequestEditorTab(key: string) {
   }
   activeRequestEditorKey.value = key
   activeRequestTab.value = target.activeTab || resolveDefaultRequestTab(target.draft)
-  applyDefinitionToEditor(target.draft)
+  applyEditorDetailToForm(target.draft)
 }
 
-function openNewRequestTab(detail?: ApiDefinitionDetail) {
+function openNewRequestTab(detail?: ApiRequestEditorDetail) {
   const tab = makeRequestEditorTab(detail)
   requestEditorTabs.value.push(tab)
   activateRequestEditorTab(tab.key)
@@ -1503,15 +1572,19 @@ function syncDefinitionTreeSelection(detail: Pick<ApiDefinitionDetail, 'id' | 'w
   selectedDefinitionTreeKey.value = `definition-request:${detail.id}`
 }
 
-function openOrReuseDraftRequest(detail: ApiDefinitionDetail) {
+function openOrReuseDraftRequest(detail: ApiRequestEditorDetail) {
   const current = activeRequestEditorTab.value
-  if (current && current.definitionId == null && !current.isDirty) {
-    const draft = cloneDefinitionDetail(detail)
+  if (current && current.resourceType === 'definition' && current.resourceId == null && !current.isDirty) {
+    const draft = cloneEditorDetail(detail)
     hydrateDefinitionKeyValueRows(draft)
     current.draft = draft
-    current.definitionId = null
-    current.title = detail.name || '\u65b0\u5efa\u8bf7\u6c42'
-    current.method = detail.requestConfig.method || detail.method || 'GET'
+    current.resourceType = draft.resourceType
+    current.resourceId = draft.id || null
+    current.definitionId = draft.resourceType === 'case'
+      ? (draft.definitionId || null)
+      : (draft.id || null)
+    current.title = draft.name || (draft.resourceType === 'case' ? '新建用例' : '\u65b0\u5efa\u8bf7\u6c42')
+    current.method = draft.requestConfig.method || draft.method || 'GET'
     current.activeTab = resolveDefaultRequestTab(draft)
     current.savedFingerprint = fingerprintDefinitionDetail(draft)
     current.isDirty = false
@@ -1537,6 +1610,8 @@ async function closeRequestEditorTab(key: string) {
     if (current) {
       const emptyDetail = buildEmptyDefinitionDetail()
       current.draft = emptyDetail
+      current.resourceType = 'definition'
+      current.resourceId = null
       current.definitionId = null
       current.title = '\u65b0\u5efa\u8bf7\u6c42'
       current.method = 'GET'
@@ -1555,10 +1630,85 @@ async function closeRequestEditorTab(key: string) {
     return
   }
   requestEditorTabs.value.splice(index, 1)
+  if (caseDrawerSourceEditorKey.value === key) {
+    caseDrawerSourceEditorKey.value = ''
+  }
   const fallback = requestEditorTabs.value[Math.max(0, index - 1)] ?? requestEditorTabs.value[0]
   if (fallback) {
     activateRequestEditorTab(fallback.key)
   }
+}
+
+async function closeCaseDrawer() {
+  const activeCaseTab = activeRequestEditorTab.value
+  if (!activeCaseTab || activeCaseTab.resourceType !== 'case') {
+    return
+  }
+  const fallbackKey = caseDrawerSourceEditorKey.value
+  await closeRequestEditorTab(activeCaseTab.key)
+  if (fallbackKey) {
+    const fallback = requestEditorTabs.value.find(item => item.key === fallbackKey)
+    if (fallback) {
+      activateRequestEditorTab(fallback.key)
+    }
+  }
+  caseDrawerSourceEditorKey.value = ''
+}
+
+function buildCaseDraftFromCurrentDefinition(options?: { fromSavedDefinition?: boolean }) {
+  const snapshot = cloneEditorDetail(definitionForm)
+  snapshot.resourceType = 'case'
+  snapshot.id = 0
+  snapshot.lastRunResult = null
+  snapshot.lastRunAt = null
+  snapshot.createdAt = null
+  snapshot.updatedAt = null
+  snapshot.definitionId = definitionForm.resourceType === 'definition'
+    ? (definitionForm.id || 0)
+    : (definitionForm.definitionId || 0)
+  snapshot.definitionName = definitionForm.resourceType === 'definition'
+    ? (definitionForm.name || '')
+    : (definitionForm.definitionName || '')
+  snapshot.extractors = []
+  snapshot.name = options?.fromSavedDefinition && snapshot.definitionName
+    ? `${snapshot.definitionName} 用例`
+    : (snapshot.name ? `${snapshot.name} 用例` : '新建用例')
+  return snapshot
+}
+
+async function openCaseEditor(id: number) {
+  const loadedTab = requestEditorTabs.value.find(item => item.resourceType === 'case' && item.resourceId === id)
+  if (!loadedTab) {
+    const detail = await platformApi.getApiDefinitionCaseDetail(workspaceCode.value, id)
+    const tab = makeRequestEditorTab(toEditorDetailFromCase(detail))
+    requestEditorTabs.value.push(tab)
+  }
+  caseDrawerSourceEditorKey.value = activeRequestEditorKey.value
+  const target = requestEditorTabs.value.find(item => item.resourceType === 'case' && item.resourceId === id)
+  if (target) {
+    activateRequestEditorTab(target.key)
+  }
+}
+
+function openCaseDraftFromDefinition(options?: { fromSavedDefinition?: boolean }) {
+  const detail = buildCaseDraftFromCurrentDefinition(options)
+  const tab = makeRequestEditorTab(detail)
+  requestEditorTabs.value.push(tab)
+  caseDrawerSourceEditorKey.value = activeRequestEditorKey.value
+  activateRequestEditorTab(tab.key)
+}
+
+async function removeCase(id?: number | null) {
+  if (!id) {
+    await closeRequestEditorTab(activeRequestEditorKey.value)
+    return
+  }
+  await ElMessageBox.confirm('删除后不可恢复，确认删除当前用例吗？', '删除用例', { type: 'warning' })
+  await platformApi.deleteApiDefinitionCase(workspaceCode.value, id)
+  ElMessage.success('用例已删除')
+  const closingKey = activeRequestEditorKey.value
+  await refreshData()
+  await closeRequestEditorTab(closingKey)
 }
 
 function canWriteTarget(targetWorkspaceCode?: string | null) {
@@ -1629,6 +1779,7 @@ async function bootstrap() {
   try {
     const [
       definitionPage,
+      casePage,
       scenarioPage,
       envPage,
       variablePage,
@@ -1639,6 +1790,7 @@ async function bootstrap() {
       workspaceList,
     ] = await Promise.all([
       platformApi.getApiDefinitions(workspaceCode.value),
+      platformApi.getApiDefinitionCases(workspaceCode.value),
       platformApi.getApiScenarios(workspaceCode.value),
       platformApi.getApiEnvironments(workspaceCode.value),
       platformApi.getApiVariableSets(workspaceCode.value),
@@ -1649,6 +1801,7 @@ async function bootstrap() {
       platformApi.getSwitchableWorkspaces(),
     ])
     definitions.value = definitionPage.items
+    apiCases.value = casePage.items
     scenarios.value = scenarioPage.items
     environments.value = envPage.items
     variableSets.value = variablePage.items
@@ -1679,14 +1832,14 @@ async function refreshData() {
 }
 
 async function selectDefinition(id: number) {
-  const loadedTab = requestEditorTabs.value.find(item => item.definitionId === id)
+  const loadedTab = requestEditorTabs.value.find(item => item.resourceType === 'definition' && item.resourceId === id)
   if (loadedTab) {
     activateRequestEditorTab(loadedTab.key)
     return
   }
   selectedDefinitionId.value = id
   const detail = await platformApi.getApiDefinitionDetail(workspaceCode.value, id)
-  openNewRequestTab(detail)
+  openNewRequestTab(toEditorDetailFromDefinition(detail))
 }
 
 async function selectScenario(id: number) {
@@ -1697,6 +1850,12 @@ async function selectScenario(id: number) {
 
 function assignScenario(detail: ApiScenarioDetail) {
   Object.assign(scenarioForm, JSON.parse(JSON.stringify(detail)))
+  scenarioForm.steps = (scenarioForm.steps || []).map(step => ({
+    stepName: step.stepName || '',
+    resourceType: step.resourceType || 'DEFINITION',
+    resourceId: step.resourceId || 0,
+    enabled: step.enabled !== false,
+  }))
 }
 
 function addDefinitionRow(target: ApiKeyValue[]) {
@@ -1743,7 +1902,7 @@ function normalizeBooleanLike(value: string) {
   if (['true', '1', 'yes', 'y', 'on', '启用', '开启'].includes(normalized)) {
     return true
   }
-  if (['false', '0', 'no', 'n', 'off', '禁用', '关闭'].includes(normalized)) {
+  if (['false', '0', 'no', 'n', 'off', '绂佺敤', '鍏抽棴'].includes(normalized)) {
     return false
   }
   return null
@@ -2071,6 +2230,43 @@ function buildDefinitionMutationPayload() {
   }
 }
 
+function buildCaseMutationPayload(definitionId: number) {
+  const targetWorkspaceCode = isAllScope.value ? definitionForm.workspaceCode || writableWorkspaces.value[0]?.code : workspaceCode.value
+  return {
+    workspaceCode: targetWorkspaceCode,
+    definitionId,
+    name: definitionForm.name.trim(),
+    description: definitionForm.description,
+    tags: definitionForm.tags,
+    requestConfig: {
+      ...definitionForm.requestConfig,
+      path: definitionForm.requestConfig.path.trim(),
+      queryParams: prepareKeyValueRowsForPayload(definitionForm.requestConfig.queryParams),
+      headers: prepareKeyValueRowsForPayload(definitionForm.requestConfig.headers),
+      body: {
+        ...definitionForm.requestConfig.body,
+        formItems: prepareKeyValueRowsForPayload(definitionForm.requestConfig.body.formItems),
+      },
+    },
+    assertions: definitionForm.assertions,
+    preProcessors: definitionForm.preProcessors,
+    postProcessors: definitionForm.postProcessors,
+  }
+}
+
+async function ensureCaseDefinitionSaved() {
+  if (definitionForm.definitionId) {
+    return definitionForm.definitionId
+  }
+  const payload = buildDefinitionMutationPayload()
+  payload.name = (definitionForm.definitionName || definitionForm.name || '').trim()
+    || `${definitionForm.requestConfig.method || 'GET'} ${definitionForm.requestConfig.path.trim()}`
+  const detail = await platformApi.createApiDefinition(workspaceCode.value, payload)
+  definitionForm.definitionId = detail.id
+  definitionForm.definitionName = detail.name
+  return detail.id
+}
+
 async function persistDefinition(options?: { debugAfterSave?: boolean }) {
   const isUpdate = !!definitionForm.id
   saving.value = true
@@ -2088,10 +2284,41 @@ async function persistDefinition(options?: { debugAfterSave?: boolean }) {
     ElMessage.success(isUpdate ? '更新成功' : '保存成功')
     definitionSaveDialogVisible.value = false
     await refreshData()
-    const latestDetail = await platformApi.getApiDefinitionDetail(workspaceCode.value, detail.id)
-    applyDefinitionToEditor(latestDetail, { markSaved: true })
+    const latestDetail = toEditorDetailFromDefinition(await platformApi.getApiDefinitionDetail(workspaceCode.value, detail.id))
+    applyEditorDetailToForm(latestDetail, { markSaved: true })
     if (options?.debugAfterSave) {
       await debugDefinition()
+    }
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    saving.value = false
+  }
+}
+
+async function persistCase(options?: { debugAfterSave?: boolean }) {
+  const isUpdate = !!definitionForm.id
+  saving.value = true
+  try {
+    definitionForm.name = definitionForm.name.trim()
+    definitionForm.requestConfig.path = definitionForm.requestConfig.path.trim()
+    syncActiveBodyText()
+    definitionForm.directoryName = resolveDefinitionDirectoryName(
+      isAllScope.value ? definitionForm.workspaceCode || writableWorkspaces.value[0]?.code : workspaceCode.value,
+    )
+    const definitionId = await ensureCaseDefinitionSaved()
+    const payload = buildCaseMutationPayload(definitionId)
+    const detail = isUpdate
+      ? await platformApi.updateApiDefinitionCase(workspaceCode.value, definitionForm.id, payload)
+      : await platformApi.createApiDefinitionCase(workspaceCode.value, payload)
+    ElMessage.success(isUpdate ? '用例已更新' : '用例已保存')
+    await refreshData()
+    const latestDetail = toEditorDetailFromCase(await platformApi.getApiDefinitionCaseDetail(workspaceCode.value, detail.id))
+    applyEditorDetailToForm(latestDetail, { markSaved: true })
+    if (options?.debugAfterSave) {
+      await debugCase()
     }
   }
   catch (error) {
@@ -2198,7 +2425,7 @@ async function debugDefinition() {
       current.debugFailureSummary = response.failureSummary || ''
       current.debugStepResults = response.stepResults || []
     }
-    ElMessage.success(response.result === 'SUCCESS' ? '????' : '????')
+    ElMessage.success(response.result === 'SUCCESS' ? '发送成功' : '发送完成')
     await refreshData()
     activeTab.value = 'definitions'
     responsePreviewTab.value = 'body'
@@ -2231,6 +2458,110 @@ async function saveAndDebugDefinition() {
   openDefinitionSaveDialog(true)
 }
 
+async function saveCase() {
+  try {
+    ensureScopedTargetWorkspace(definitionForm.workspaceCode)
+  }
+  catch (error) {
+    ElMessage.warning((error as Error).message)
+    return
+  }
+  if (!definitionForm.name.trim() || !definitionForm.requestConfig.path.trim()) {
+    ElMessage.warning('请补全用例名称和请求 URL')
+    return
+  }
+  definitionForm.path = definitionForm.requestConfig.path.trim()
+  await persistCase()
+}
+
+async function debugCase() {
+  if (!canDebugDefinition.value) {
+    ElMessage.warning('请补全请求方法和请求 URL')
+    return
+  }
+  saving.value = true
+  try {
+    syncActiveBodyText()
+    const response = definitionForm.definitionId
+      ? await platformApi.debugApiDefinitionCaseDraft(workspaceCode.value, {
+          ...buildCaseMutationPayload(definitionForm.definitionId),
+          caseId: definitionForm.id || null,
+          environmentId: runOptions.environmentId,
+          variableSetId: runOptions.variableSetId,
+        } satisfies ApiDebugCasePayload)
+      : await platformApi.debugApiDefinitionDraft(workspaceCode.value, {
+          ...buildDefinitionMutationPayload(),
+          definitionId: null,
+          environmentId: runOptions.environmentId,
+          variableSetId: runOptions.variableSetId,
+        } satisfies ApiDebugDefinitionPayload)
+    const current = activeRequestEditorTab.value
+    if (current) {
+      current.debugReportId = response.reportId
+      current.debugFailureSummary = response.failureSummary || ''
+      current.debugStepResults = response.stepResults || []
+    }
+    ElMessage.success(response.result === 'SUCCESS' ? '发送成功' : '发送完成')
+    await refreshData()
+    activeTab.value = 'definitions'
+    responsePreviewTab.value = 'body'
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    saving.value = false
+  }
+}
+
+async function saveAndDebugCase() {
+  try {
+    ensureScopedTargetWorkspace(definitionForm.workspaceCode)
+  }
+  catch (error) {
+    ElMessage.warning((error as Error).message)
+    return
+  }
+  if (!definitionForm.name.trim() || !definitionForm.requestConfig.path.trim()) {
+    ElMessage.warning('请补全用例名称和请求 URL')
+    return
+  }
+  definitionForm.path = definitionForm.requestConfig.path.trim()
+  await persistCase({ debugAfterSave: true })
+}
+
+async function saveActiveEditor() {
+  if (activeRequestEditorTab.value?.resourceType === 'case') {
+    await saveCase()
+    return
+  }
+  await saveDefinition()
+}
+
+async function debugActiveEditor() {
+  if (activeRequestEditorTab.value?.resourceType === 'case') {
+    await debugCase()
+    return
+  }
+  await debugDefinition()
+}
+
+async function saveAndDebugActiveEditor() {
+  if (activeRequestEditorTab.value?.resourceType === 'case') {
+    await saveAndDebugCase()
+    return
+  }
+  await saveAndDebugDefinition()
+}
+
+async function removeActiveEditor() {
+  if (activeRequestEditorTab.value?.resourceType === 'case') {
+    await removeCase(definitionForm.id || null)
+    return
+  }
+  await removeDefinition()
+}
+
 async function saveScenario() {
   try {
     ensureScopedTargetWorkspace(scenarioForm.workspaceCode)
@@ -2243,8 +2574,8 @@ async function saveScenario() {
     ElMessage.warning('请补全场景名称并至少添加一个步骤')
     return
   }
-  if (scenarioForm.steps.some(step => !step.definitionId)) {
-    ElMessage.warning('请为每个步骤选择接口')
+  if (scenarioForm.steps.some(step => !step.resourceId)) {
+    ElMessage.warning('请为每个步骤选择接口或用例')
     return
   }
   saving.value = true
@@ -2259,7 +2590,12 @@ async function saveScenario() {
       variableSetId: scenarioForm.variableSetId,
       continueOnFailure: scenarioForm.continueOnFailure,
       relatedCaseId: scenarioForm.relatedCaseId,
-      steps: scenarioForm.steps,
+      steps: scenarioForm.steps.map(step => ({
+        stepName: step.stepName,
+        resourceType: step.resourceType,
+        resourceId: step.resourceId,
+        enabled: step.enabled !== false,
+      })),
     }
     const detail = scenarioForm.id
       ? await platformApi.updateApiScenario(workspaceCode.value, scenarioForm.id, payload)
@@ -2494,13 +2830,16 @@ function fillFromDefinition(item: ApiDefinitionItem) {
 
 async function runDefinitionItem(id: number) {
   await selectDefinition(id)
-  await debugDefinition()
+  await debugActiveEditor()
 }
 
 function duplicateDefinition() {
-  const snapshot = JSON.parse(JSON.stringify(definitionForm)) as ApiDefinitionDetail
+  const snapshot = cloneEditorDetail(definitionForm)
   const duplicated = Object.assign(buildEmptyDefinitionDetail(), snapshot, {
+    resourceType: 'definition',
     id: 0,
+    definitionId: 0,
+    definitionName: '',
     name: snapshot.name ? `${snapshot.name} - 副本` : '',
     lastRunResult: null,
     lastRunAt: null,
@@ -2512,7 +2851,7 @@ function duplicateDefinition() {
 }
 
 function promptImportCurl() {
-  ElMessage.info('下一步可以继续接入 Curl 导入，这版先把专业工作台形态落地')
+  ElMessage.info('下一步可以继续接入 Curl 导入，这一版先把工作台主体落稳')
 }
 
 function updateTagInput(target: { tags: string[] }, value: string) {
@@ -2553,7 +2892,7 @@ function formatTimeLabel(value?: string | null) {
         <div class="ms-like-layout shell-card">
           <aside class="ms-like-sidebar">
             <div class="ms-like-sidebar-tools">
-              <el-input v-model="definitionFilters.keyword" placeholder="请输入模块请求名称" clearable />
+              <el-input v-model="definitionFilters.keyword" placeholder="请输入模块或请求名称" clearable />
               <el-button v-if="canCreateInCurrentScope" type="primary" @click="openNewRequestTab()">新建请求</el-button>
             </div>
             <div class="ms-like-directory-shell">
@@ -2618,10 +2957,20 @@ function formatTimeLabel(value?: string | null) {
             </div>
           </aside>
 
-          <section class="ms-like-main">
-            <div class="ms-like-tab-strip">
+          <section :class="['ms-like-main', { 'is-case-drawer-mode': isCaseDrawerMode }]">
+            <div v-if="isCaseDrawerMode" class="case-drawer-top">
+              <div class="case-drawer-header">
+                <div class="case-drawer-title">{{ caseDrawerTitle }}</div>
+                <div class="case-drawer-subtitle">{{ caseDrawerSubtitle }}</div>
+              </div>
+              <el-button text class="case-drawer-close" @click="closeCaseDrawer">
+                <el-icon><Close /></el-icon>
+              </el-button>
+            </div>
+
+            <div v-else class="ms-like-tab-strip">
               <button
-                v-for="item in requestEditorTabs"
+                v-for="item in visibleRequestEditorTabs"
                 :key="item.key"
                 type="button"
                 :class="['ms-like-editor-tab', { active: item.key === activeRequestEditorKey }]"
@@ -2632,7 +2981,7 @@ function formatTimeLabel(value?: string | null) {
                 </span>
                 <span class="ms-like-editor-tab-label">{{ item.title }}</span>
                 <span v-if="item.isDirty" class="ms-like-editor-tab-dot"></span>
-                <span v-if="requestEditorTabs.length > 1" class="ms-like-editor-tab-close" @click.stop="closeRequestEditorTab(item.key)">×</span>
+                <span v-if="requestEditorTabs.length > 1" class="ms-like-editor-tab-close" @click.stop="closeRequestEditorTab(item.key)">脳</span>
               </button>
               <button type="button" class="ms-like-tab-add" @click="openNewRequestTab()">+</button>
             </div>
@@ -2659,16 +3008,16 @@ function formatTimeLabel(value?: string | null) {
                 </el-select>
                 <el-input v-model="definitionForm.requestConfig.path" class="request-url-input" placeholder="&#35831;&#36755;&#20837;&#21253;&#21547; http/https &#30340;&#23436;&#25972; URL &#25110;&#25509;&#21475;&#36335;&#24452;" data-testid="definition-url-input" />
                 <el-button @click="promptImportCurl">Curl</el-button>
-                <el-button type="primary" :disabled="!canDebugDefinition" :loading="saving" @click="debugDefinition">
+                <el-button type="primary" :disabled="!canDebugDefinition" :loading="saving" @click="debugActiveEditor">
                   &#21457;&#36865;
                 </el-button>
-                <el-dropdown split-button :disabled="!canWriteDefinition" :loading="saving" data-testid="definition-save-button" @click="saveDefinition">
+                <el-dropdown split-button :disabled="!canWriteDefinition" :loading="saving" data-testid="definition-save-button" @click="saveActiveEditor">
                   &#20445;&#23384;
                   <template #dropdown>
                     <el-dropdown-menu>
-                      <el-dropdown-item @click="saveAndDebugDefinition">&#20445;&#23384;&#24182;&#25191;&#34892;</el-dropdown-item>
-                      <el-dropdown-item @click="duplicateDefinition">&#22797;&#21046;&#25509;&#21475;</el-dropdown-item>
-                      <el-dropdown-item :disabled="!definitionForm.id" @click="removeDefinition">&#21024;&#38500;&#25509;&#21475;</el-dropdown-item>
+                      <el-dropdown-item @click="saveAndDebugActiveEditor">&#20445;&#23384;&#24182;&#25191;&#34892;</el-dropdown-item>
+                      <el-dropdown-item v-if="activeRequestEditorTab?.resourceType === 'definition'" @click="duplicateDefinition">&#22797;&#21046;&#25509;&#21475;</el-dropdown-item>
+                      <el-dropdown-item @click="removeActiveEditor">{{ activeRequestEditorTab?.resourceType === 'case' ? '删除用例' : '删除接口' }}</el-dropdown-item>
                     </el-dropdown-menu>
                   </template>
                 </el-dropdown>
@@ -2686,9 +3035,33 @@ function formatTimeLabel(value?: string | null) {
                 <button data-testid="request-tab-post" :class="['ms-like-top-tab', { active: activeRequestTab === 'post' }]" @click="setActiveRequestContentTab('post')">后置处理</button>
                 <button data-testid="request-tab-tests" :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="setActiveRequestContentTab('tests')">断言</button>
                 <button :class="['ms-like-top-tab', { active: activeRequestTab === 'settings' }]" @click="setActiveRequestContentTab('settings')">&#35774;&#32622;</button>
+                <button v-if="activeRequestEditorTab?.resourceType === 'definition'" :class="['ms-like-top-tab', { active: activeRequestTab === 'cases' }]" @click="setActiveRequestContentTab('cases')">用例</button>
               </div>
 
-              <div class="ms-like-request-body">
+              <div v-if="showCaseListContent" class="ms-like-request-body">
+                <div class="request-section case-list-panel">
+                  <div class="editor-actions left">
+                    <el-button type="primary" @click="openCaseDraftFromDefinition({ fromSavedDefinition: true })">新建用例</el-button>
+                    <el-button @click="openCaseDraftFromDefinition()">从当前草稿生成用例</el-button>
+                  </div>
+                  <div v-if="!currentDefinitionCases.length" class="empty-hint">当前接口下还没有用例</div>
+                  <div v-else class="asset-list compact">
+                    <div v-for="item in currentDefinitionCases" :key="item.id" class="execution-item">
+                      <div>
+                        <div class="execution-name">{{ item.name }}</div>
+                        <div class="execution-meta">{{ item.method }} {{ item.path }}</div>
+                      </div>
+                      <div class="execution-actions">
+                        <el-tag size="small" :type="resultTagType(item.lastRunResult)">{{ item.lastRunResult || '未运行' }}</el-tag>
+                        <el-button size="small" @click="openCaseEditor(item.id)">编辑</el-button>
+                        <el-button size="small" type="primary" @click="openCaseEditor(item.id)">执行</el-button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-else class="ms-like-request-body">
                 <template v-if="activeRequestTab === 'params'">
                   <div class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--query">
                     <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--query">
@@ -2760,7 +3133,7 @@ function formatTimeLabel(value?: string | null) {
                       />
                       <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(definitionForm.requestConfig.queryParams, index, queryParamDefaults())">删除</button>
                     </div>
-                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.queryParams)">+ 添加一行</button>
+                      <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.queryParams)">+ 添加一行</button>
                   </div>
                 </template>
 
@@ -2820,7 +3193,7 @@ function formatTimeLabel(value?: string | null) {
                       />
                       <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(definitionForm.requestConfig.headers, index, headerParamDefaults())">删除</button>
                     </div>
-                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.headers)">+ 添加一行</button>
+                      <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.headers)">+ 添加一行</button>
                   </div>
                 </template>
 
@@ -3073,11 +3446,9 @@ function formatTimeLabel(value?: string | null) {
                     </div>
                   </div>
                 </template>
-
               </div>
-            </div>
 
-            <div class="ms-like-response-shell">
+            <div v-if="!showCaseListContent" class="ms-like-response-shell">
               <div class="ms-like-response-header">
                 <div class="ms-like-response-title">响应内容</div>
                 <div v-if="!showResponseEmptyState" class="ms-like-response-metrics">
@@ -3155,6 +3526,7 @@ function formatTimeLabel(value?: string | null) {
                 </div>
               </template>
             </div>
+            </div>
           </section>
         </div>
       </el-tab-pane>
@@ -3185,7 +3557,7 @@ function formatTimeLabel(value?: string | null) {
                   <el-tag size="small" :type="resultTagType(item.lastRunResult)">{{ item.lastRunResult || '未运行' }}</el-tag>
                 </div>
                 <div class="asset-item-title">{{ item.name }}</div>
-                <div class="asset-item-meta">{{ item.directoryName || '未分组' }}</div>
+                  <div class="asset-item-meta">{{ item.directoryName || '未分组' }}</div>
               </button>
             </div>
           </section>
@@ -3194,7 +3566,7 @@ function formatTimeLabel(value?: string | null) {
             <div class="editor-header">
               <div>
                 <div class="editor-title">{{ scenarioForm.id ? '场景详情' : '新建场景' }}</div>
-                <div class="editor-subtitle">用顺序步骤编排接口链路，可选择默认环境与变量集。</div>
+                <div class="editor-subtitle">按顺序编排接口链路，可选择默认环境与变量集。</div>
               </div>
               <div class="editor-actions">
                 <el-button :disabled="!canWriteScenario" :loading="saving" @click="saveScenario">保存</el-button>
@@ -3206,7 +3578,7 @@ function formatTimeLabel(value?: string | null) {
             <div class="editor-form">
               <div class="form-grid">
                 <el-input v-model="scenarioForm.name" placeholder="场景名称" />
-                <el-input v-model="scenarioForm.directoryName" placeholder="目录" />
+                <el-input v-model="scenarioForm.directoryName" placeholder="鐩綍" />
                 <el-select v-model="scenarioForm.defaultEnvironmentId" clearable placeholder="默认环境">
                   <el-option v-for="item in environments" :key="item.id" :label="item.name" :value="item.id" />
                 </el-select>
@@ -3230,8 +3602,17 @@ function formatTimeLabel(value?: string | null) {
                 <div v-for="(step, index) in scenarioForm.steps" :key="`step-${index}`" class="scenario-step-row">
                   <div class="step-index">{{ index + 1 }}</div>
                   <el-input v-model="step.stepName" placeholder="步骤名称（可选）" />
-                  <el-select v-model="step.definitionId" placeholder="选择接口">
-                    <el-option v-for="item in definitionOptions" :key="item.value" :label="item.label" :value="item.value" />
+                  <el-select v-model="step.resourceType" placeholder="资源类型">
+                    <el-option label="用例" value="CASE" />
+                    <el-option label="接口" value="DEFINITION" />
+                  </el-select>
+                  <el-select v-model="step.resourceId" :placeholder="step.resourceType === 'CASE' ? '选择用例' : '选择接口'">
+                    <el-option
+                      v-for="item in step.resourceType === 'CASE' ? caseOptions : definitionOptions"
+                      :key="`${step.resourceType}-${item.value}`"
+                      :label="item.label"
+                      :value="item.value"
+                    />
                   </el-select>
                   <el-switch v-model="step.enabled" />
                   <el-button text @click="moveScenarioStep(index, -1)">上移</el-button>
@@ -3389,8 +3770,8 @@ function formatTimeLabel(value?: string | null) {
               <div class="section-title">变量集编辑</div>
               <el-input v-model="variableSetForm.name" placeholder="变量集名称" />
               <el-select v-model="variableSetForm.status">
-                <el-option label="启用" :value="1" />
-                <el-option label="停用" :value="0" />
+                  <el-option label="启用" :value="1" />
+                  <el-option label="停用" :value="0" />
               </el-select>
               <div class="section-subtitle">
                 变量列表
@@ -3413,7 +3794,7 @@ function formatTimeLabel(value?: string | null) {
       </el-tab-pane>
     </el-tabs>
 
-    <el-drawer v-model="batchAddDrawerVisible" :title="batchAddTitle" size="560px" destroy-on-close>
+      <el-drawer v-model="batchAddDrawerVisible" :title="batchAddTitle" size="560px" destroy-on-close>
       <div class="batch-drawer">
         <div class="batch-drawer-hint">
           <div class="batch-drawer-label">格式示例</div>
@@ -3434,9 +3815,9 @@ function formatTimeLabel(value?: string | null) {
           <el-button type="primary" @click="confirmBatchAdd">确认添加</el-button>
         </div>
       </template>
-    </el-drawer>
+      </el-drawer>
 
-    <el-dialog v-model="definitionSaveDialogVisible" title="保存" width="520px" destroy-on-close>
+      <el-dialog v-model="definitionSaveDialogVisible" title="保存" width="520px" destroy-on-close>
       <el-form label-position="top">
         <el-form-item v-if="isAllScope" label="所属空间" required>
           <el-select v-model="definitionSaveForm.workspaceCode" class="full-width" placeholder="请选择空间">
@@ -3494,8 +3875,8 @@ function formatTimeLabel(value?: string | null) {
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="bugDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitReportBug">提交</el-button>
+          <el-button @click="bugDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="saving" @click="submitReportBug">提交</el-button>
       </template>
     </el-dialog>
 
@@ -3981,8 +4362,48 @@ function formatTimeLabel(value?: string | null) {
   background: #fff;
 }
 
+.ms-like-main.is-case-drawer-mode {
+  margin-left: auto;
+  width: min(72vw, 1180px);
+  min-width: 960px;
+  border-left: 1px solid var(--el-border-color-light);
+  box-shadow: -12px 0 32px rgba(15, 23, 42, 0.08);
+}
+
 .ms-like-main > * {
   min-height: 0;
+}
+
+.case-drawer-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--el-border-color-light);
+  background: #fff;
+}
+
+.case-drawer-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.case-drawer-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #101828;
+}
+
+.case-drawer-subtitle {
+  font-size: 12px;
+  color: #667085;
+}
+
+.case-drawer-close {
+  flex: 0 0 auto;
 }
 
 .ms-like-tab-strip {
@@ -4731,7 +5152,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .scenario-step-row {
-  grid-template-columns: 44px 1fr 1fr auto auto auto auto;
+  grid-template-columns: 44px minmax(180px, 1fr) 140px minmax(220px, 1fr) auto auto auto auto;
 }
 
 .step-index {
@@ -4987,6 +5408,11 @@ pre {
 }
 
 @media (max-width: 1480px) {
+  .ms-like-main.is-case-drawer-mode {
+    min-width: 0;
+    width: 100%;
+  }
+
   .ms-like-param-table-grid--query {
       grid-template-columns: 24px 28px minmax(190px, 1.15fr) 112px minmax(220px, 1fr) 72px minmax(170px, 0.95fr) 64px;
   }
@@ -5013,6 +5439,11 @@ pre {
 
   .ms-like-main {
     flex: 1;
+  }
+
+  .ms-like-main.is-case-drawer-mode {
+    width: 100%;
+    min-width: 0;
   }
 
   .ms-like-request-row,
@@ -5062,3 +5493,4 @@ pre {
   }
 }
 </style>
+

@@ -140,8 +140,13 @@ const batchAddDrawerVisible = ref(false)
 const activeTab = ref<'definitions' | 'scenarios' | 'execution' | 'reports' | 'settings'>('definitions')
 const activeRequestTab = ref<RequestContentTab>('body')
 const responsePreviewTab = ref<'body' | 'header' | 'console' | 'actualRequest'>('body')
+const caseDrawerVisible = ref(false)
+const caseDrawerEditorKey = ref('')
+const caseDrawerRequestTab = ref<RequestContentTab>('body')
+const caseDrawerResponsePreviewTab = ref<'body' | 'header' | 'console' | 'actualRequest'>('body')
 const batchAddMode = ref<BatchAddMode>('query')
 const batchAddInput = ref('')
+const batchAddContext = ref<'main' | 'case'>('main')
 const draggingParamGroup = ref<SortableParamGroup | null>(null)
 const draggingParamIndex = ref<number | null>(null)
 const dragOverParamGroup = ref<SortableParamGroup | null>(null)
@@ -248,6 +253,8 @@ const definitionForm = reactive<ApiRequestEditorDetail>({
   postProcessors: [],
 })
 
+const caseDrawerForm = reactive<ApiRequestEditorDetail>(cloneEditorDetail(definitionForm))
+
 const scenarioForm = reactive<ApiScenarioDetail>({
   id: 0,
   workspaceCode: '',
@@ -335,6 +342,12 @@ const currentDefinitionWorkspaceLabel = computed(() => {
 const currentEnvironmentName = computed(() => environments.value.find(item => item.id === runOptions.environmentId)?.name ?? '未选择环境')
 const currentVariableSetName = computed(() => variableSets.value.find(item => item.id === runOptions.variableSetId)?.name ?? '未选择变量集')
 const activeRequestEditorTab = computed(() => requestEditorTabs.value.find(item => item.key === activeRequestEditorKey.value) ?? null)
+const activeCaseDrawerEditorTab = computed(() => {
+  if (!caseDrawerEditorKey.value) {
+    return null
+  }
+  return requestEditorTabs.value.find(item => item.key === caseDrawerEditorKey.value && item.resourceType === 'case') ?? null
+})
 const currentDefinitionCases = computed(() => {
   const definitionId = activeRequestEditorTab.value?.definitionId
   if (!definitionId || activeRequestEditorTab.value?.resourceType !== 'definition') {
@@ -366,11 +379,15 @@ const pagedDefinitionCases = computed(() => {
   return currentDefinitionCases.value.slice(start, start + caseListSettings.pageSize.value)
 })
 const caseListTotalPages = computed(() => Math.max(1, Math.ceil(currentDefinitionCases.value.length / caseListSettings.pageSize.value)))
-const isCaseDrawerMode = computed(() => activeRequestEditorTab.value?.resourceType === 'case')
-const caseDrawerTitle = computed(() => (definitionForm.id ? '编辑用例' : '创建用例'))
-const caseDrawerSubtitle = computed(() => definitionForm.definitionName || '接口用例')
-const caseDrawerMethod = computed(() => definitionForm.requestConfig.method || definitionForm.method || 'GET')
-const caseDrawerPath = computed(() => definitionForm.requestConfig.path || definitionForm.path || '')
+const isCaseDrawerMode = computed(() => caseDrawerVisible.value)
+const caseDrawerTitle = computed(() => (caseDrawerForm.id ? '编辑用例' : '创建用例'))
+const caseDrawerSubtitle = computed(() => caseDrawerForm.definitionName || '接口用例')
+const caseDrawerMethod = computed(() => caseDrawerForm.requestConfig.method || caseDrawerForm.method || 'GET')
+const caseDrawerPath = computed(() => caseDrawerForm.requestConfig.path || caseDrawerForm.path || '')
+const canWriteCaseDrawer = computed(() => canWriteTarget(caseDrawerForm.workspaceCode))
+const canDebugCaseDrawer = computed(() => canWriteCaseDrawer.value
+  && !!caseDrawerForm.requestConfig.method?.trim()
+  && !!caseDrawerForm.requestConfig.path?.trim())
 const showCaseListContent = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && activeRequestTab.value === 'cases')
 const visibleRequestEditorTabs = computed(() => requestEditorTabs.value.filter(item => item.resourceType === 'definition'))
 
@@ -750,6 +767,27 @@ const currentExtractionResults = computed(() => currentResponseStep.value?.extra
 const currentProcessorResults = computed(() => currentResponseStep.value?.processorResults ?? [])
 const currentDebugError = computed(() => currentResponseStep.value?.errorMessage || activeRequestEditorTab.value?.debugFailureSummary || '')
 const showResponseEmptyState = computed(() => !currentResponseStep.value && !currentDebugError.value)
+const caseDrawerResponseStep = computed(() => {
+  const steps = activeCaseDrawerEditorTab.value?.debugStepResults ?? []
+  if (!steps.length) {
+    return null
+  }
+  return steps.find(item => !item.success) ?? steps[steps.length - 1]
+})
+const caseDrawerResponseStatusCode = computed(() => caseDrawerResponseStep.value?.response?.statusCode ?? null)
+const caseDrawerResponseDuration = computed(() => caseDrawerResponseStep.value?.durationMs ?? null)
+const caseDrawerResponseSize = computed(() => {
+  const body = caseDrawerResponseStep.value?.response?.body
+  return body ? `${new Blob([body]).size} B` : '0 B'
+})
+const caseDrawerResponseContentType = computed(() => caseDrawerResponseStep.value?.response?.contentType ?? '')
+const caseDrawerResponseBody = computed(() => caseDrawerResponseStep.value?.response?.body ?? '')
+const caseDrawerResponseHeaders = computed(() => caseDrawerResponseStep.value?.response?.headers ?? {})
+const caseDrawerAssertionResults = computed(() => caseDrawerResponseStep.value?.assertionResults ?? [])
+const caseDrawerExtractionResults = computed(() => caseDrawerResponseStep.value?.extractionResults ?? [])
+const caseDrawerProcessorResults = computed(() => caseDrawerResponseStep.value?.processorResults ?? [])
+const caseDrawerDebugError = computed(() => caseDrawerResponseStep.value?.errorMessage || activeCaseDrawerEditorTab.value?.debugFailureSummary || '')
+const caseDrawerShowResponseEmptyState = computed(() => !caseDrawerResponseStep.value && !caseDrawerDebugError.value)
 const shouldShowResponsePanel = computed(() => {
   if (showCaseListContent.value) {
     return false
@@ -759,6 +797,7 @@ const shouldShowResponsePanel = computed(() => {
   }
   return !showResponseEmptyState.value || !!currentDebugError.value
 })
+const caseDrawerShouldShowResponsePanel = computed(() => !caseDrawerShowResponseEmptyState.value || !!caseDrawerDebugError.value)
 const queryEnabledCount = computed(() =>
   definitionForm.requestConfig.queryParams.filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false).length,
 )
@@ -798,62 +837,81 @@ const bodyFormTableSelectionModel = computed({
   set: (enabled: boolean) => toggleTableSelection(definitionForm.requestConfig.body.formItems, enabled),
 })
 
-function isBodyMode(mode: string) {
-  if (mode === 'json') return definitionForm.requestConfig.body.type === 'RAW_JSON'
-  if (mode === 'xml') return definitionForm.requestConfig.body.type === 'RAW_XML'
-  if (mode === 'raw') return definitionForm.requestConfig.body.type === 'RAW_TEXT'
-  return definitionForm.requestConfig.body.type === mode
+const caseDrawerQueryEnabledCount = computed(() =>
+  caseDrawerForm.requestConfig.queryParams.filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false).length,
+)
+
+const caseDrawerQueryTableSelectionModel = computed({
+  get: () => tableSelectionState(caseDrawerForm.requestConfig.queryParams).checked,
+  set: (enabled: boolean) => toggleTableSelection(caseDrawerForm.requestConfig.queryParams, enabled),
+})
+
+const caseDrawerHeaderTableSelectionModel = computed({
+  get: () => tableSelectionState(caseDrawerForm.requestConfig.headers).checked,
+  set: (enabled: boolean) => toggleTableSelection(caseDrawerForm.requestConfig.headers, enabled),
+})
+
+const caseDrawerBodyFormTableSelectionModel = computed({
+  get: () => tableSelectionState(caseDrawerForm.requestConfig.body.formItems).checked,
+  set: (enabled: boolean) => toggleTableSelection(caseDrawerForm.requestConfig.body.formItems, enabled),
+})
+
+function isBodyMode(mode: string, form: ApiRequestEditorDetail = definitionForm) {
+  if (mode === 'json') return form.requestConfig.body.type === 'RAW_JSON'
+  if (mode === 'xml') return form.requestConfig.body.type === 'RAW_XML'
+  if (mode === 'raw') return form.requestConfig.body.type === 'RAW_TEXT'
+  return form.requestConfig.body.type === mode
 }
 
-function getModeBodyText(type: string) {
-  if (type === 'RAW_JSON') return definitionForm.requestConfig.body.jsonText || ''
-  if (type === 'RAW_XML') return definitionForm.requestConfig.body.xmlText || ''
-  if (type === 'RAW_TEXT') return definitionForm.requestConfig.body.plainText || ''
-  return definitionForm.requestConfig.body.rawText || ''
+function getModeBodyText(type: string, form: ApiRequestEditorDetail = definitionForm) {
+  if (type === 'RAW_JSON') return form.requestConfig.body.jsonText || ''
+  if (type === 'RAW_XML') return form.requestConfig.body.xmlText || ''
+  if (type === 'RAW_TEXT') return form.requestConfig.body.plainText || ''
+  return form.requestConfig.body.rawText || ''
 }
 
-function setModeBodyText(type: string, value: string) {
+function setModeBodyText(type: string, value: string, form: ApiRequestEditorDetail = definitionForm) {
   if (type === 'RAW_JSON') {
-    definitionForm.requestConfig.body.jsonText = value
+    form.requestConfig.body.jsonText = value
   }
   else if (type === 'RAW_XML') {
-    definitionForm.requestConfig.body.xmlText = value
+    form.requestConfig.body.xmlText = value
   }
   else if (type === 'RAW_TEXT') {
-    definitionForm.requestConfig.body.plainText = value
+    form.requestConfig.body.plainText = value
   }
-  definitionForm.requestConfig.body.rawText = value
+  form.requestConfig.body.rawText = value
 }
 
-function syncActiveBodyText() {
-  setModeBodyText(definitionForm.requestConfig.body.type, getModeBodyText(definitionForm.requestConfig.body.type))
+function syncActiveBodyText(form: ApiRequestEditorDetail = definitionForm) {
+  setModeBodyText(form.requestConfig.body.type, getModeBodyText(form.requestConfig.body.type, form), form)
 }
 
-function setBodyMode(mode: 'NONE' | 'FORM_DATA' | 'FORM_URLENCODED' | 'RAW_JSON' | 'RAW_XML' | 'RAW_TEXT' | 'BINARY') {
-  definitionForm.requestConfig.body.type = mode
+function setBodyMode(mode: 'NONE' | 'FORM_DATA' | 'FORM_URLENCODED' | 'RAW_JSON' | 'RAW_XML' | 'RAW_TEXT' | 'BINARY', form: ApiRequestEditorDetail = definitionForm) {
+  form.requestConfig.body.type = mode
   if (mode === 'RAW_JSON') {
-    definitionForm.requestConfig.body.contentType = 'application/json'
+    form.requestConfig.body.contentType = 'application/json'
   }
   if (mode === 'RAW_XML') {
-    definitionForm.requestConfig.body.contentType = 'application/xml'
+    form.requestConfig.body.contentType = 'application/xml'
   }
   if (mode === 'RAW_TEXT') {
-    definitionForm.requestConfig.body.contentType = 'text/plain'
+    form.requestConfig.body.contentType = 'text/plain'
   }
   if (mode === 'BINARY') {
-    definitionForm.requestConfig.body.contentType = 'application/octet-stream'
+    form.requestConfig.body.contentType = 'application/octet-stream'
   }
-  syncActiveBodyText()
+  syncActiveBodyText(form)
 }
 
-function getSortableParamList(group: SortableParamGroup) {
+function getSortableParamList(group: SortableParamGroup, form: ApiRequestEditorDetail = definitionForm) {
   switch (group) {
     case 'query':
-      return definitionForm.requestConfig.queryParams
+      return form.requestConfig.queryParams
     case 'header':
-      return definitionForm.requestConfig.headers
+      return form.requestConfig.headers
     case 'body-form':
-      return definitionForm.requestConfig.body.formItems
+      return form.requestConfig.body.formItems
   }
 }
 
@@ -925,8 +983,20 @@ const activeBodyRawText = computed({
   set: (value: string) => setModeBodyText(definitionForm.requestConfig.body.type, value),
 })
 
+const caseDrawerActiveBodyRawText = computed({
+  get: () => getModeBodyText(caseDrawerForm.requestConfig.body.type, caseDrawerForm),
+  set: (value: string) => setModeBodyText(caseDrawerForm.requestConfig.body.type, value, caseDrawerForm),
+})
+
 const activeBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
   const type = definitionForm.requestConfig.body.type
+  if (type === 'RAW_JSON') return 'json'
+  if (type === 'RAW_XML') return 'xml'
+  return 'text'
+})
+
+const caseDrawerActiveBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
+  const type = caseDrawerForm.requestConfig.body.type
   if (type === 'RAW_JSON') return 'json'
   if (type === 'RAW_XML') return 'xml'
   return 'text'
@@ -952,9 +1022,31 @@ const responseBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
   }
   return 'text'
 })
+const caseDrawerResponseBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
+  const contentType = caseDrawerResponseContentType.value.toLowerCase()
+  const body = caseDrawerResponseBody.value.trim()
+  if (contentType.includes('json')) return 'json'
+  if (contentType.includes('xml') || contentType.includes('html')) return 'xml'
+  if (!body) return 'text'
+  if ((body.startsWith('{') && body.endsWith('}')) || (body.startsWith('[') && body.endsWith(']'))) {
+    try {
+      JSON.parse(body)
+      return 'json'
+    }
+    catch {
+      return 'text'
+    }
+  }
+  if (body.startsWith('<') && body.endsWith('>')) {
+    return 'xml'
+  }
+  return 'text'
+})
 
 const responseBodyPreview = computed(() => currentResponseBody.value || '')
 const responseHeadersPreview = computed(() => JSON.stringify(currentResponseHeaders.value, null, 2))
+const caseDrawerResponseBodyPreview = computed(() => caseDrawerResponseBody.value || '')
+const caseDrawerResponseHeadersPreview = computed(() => JSON.stringify(caseDrawerResponseHeaders.value, null, 2))
 const responseConsolePreview = computed(() => {
   const lines: string[] = []
   if (currentDebugError.value) {
@@ -986,6 +1078,37 @@ const responseConsolePreview = computed(() => {
   })
   return lines.length ? lines.join('\n') : '暂无控制台内容'
 })
+const caseDrawerResponseConsolePreview = computed(() => {
+  const lines: string[] = []
+  if (caseDrawerDebugError.value) {
+    lines.push(`[Error] ${caseDrawerDebugError.value}`)
+  }
+  caseDrawerProcessorResults.value.forEach((item, index) => {
+    lines.push(`[Processor ${index + 1}] ${item.stage} / ${item.name} / ${item.success ? 'PASS' : 'FAIL'} / ${item.durationMs} ms`)
+    if (item.message) {
+      lines.push(`  ${item.message}`)
+    }
+    if (Object.keys(item.outputVariables || {}).length) {
+      lines.push(`  outputVariables: ${JSON.stringify(item.outputVariables)}`)
+    }
+    item.logs?.forEach(log => lines.push(`  ${log}`))
+  })
+  caseDrawerAssertionResults.value.forEach((item, index) => {
+    lines.push(`[Assertion ${index + 1}] ${(item.name || item.type)} / ${item.success ? 'PASS' : 'FAIL'}`)
+    if (item.message) {
+      lines.push(`  ${item.message}`)
+    }
+    if (item.expectedValue !== undefined || item.actualValue !== undefined) {
+      lines.push(`  expected: ${item.expectedValue ?? ''}`)
+      lines.push(`  actual: ${item.actualValue ?? ''}`)
+    }
+  })
+  caseDrawerExtractionResults.value.forEach((item, index) => {
+    lines.push(`[Extraction ${index + 1}] ${item.name} / ${item.success ? 'OK' : 'FAIL'}`)
+    lines.push(`  ${item.value || item.message || ''}`)
+  })
+  return lines.length ? lines.join('\n') : '暂无控制台内容'
+})
 const actualRequestPreview = computed(() => {
   const snapshot = currentResponseStep.value?.request
   if (snapshot) {
@@ -1002,12 +1125,36 @@ const actualRequestPreview = computed(() => {
     body: getModeBodyText(definitionForm.requestConfig.body.type) || null,
   }, null, 2)
 })
-const caseTagsInput = computed({
-  get: () => readTagInput(definitionForm.tags),
-  set: (value: string) => updateTagInput(definitionForm, value),
+const caseDrawerActualRequestPreview = computed(() => {
+  const snapshot = caseDrawerResponseStep.value?.request
+  if (snapshot) {
+    return JSON.stringify(snapshot, null, 2)
+  }
+  return JSON.stringify({
+    method: caseDrawerForm.requestConfig.method || caseDrawerForm.method || 'GET',
+    url: caseDrawerForm.requestConfig.path || caseDrawerForm.path || '',
+    headers: Object.fromEntries(
+      caseDrawerForm.requestConfig.headers
+        .filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false)
+        .map(item => [item.key, item.value]),
+    ),
+    body: getModeBodyText(caseDrawerForm.requestConfig.body.type, caseDrawerForm) || null,
+  }, null, 2)
+})
+const caseDrawerTagsInput = computed({
+  get: () => readTagInput(caseDrawerForm.tags),
+  set: (value: string) => updateTagInput(caseDrawerForm, value),
 })
 
 async function pickBinaryBodyFile() {
+  await pickBinaryBodyFileFor(definitionForm)
+}
+
+async function pickCaseDrawerBinaryBodyFile() {
+  await pickBinaryBodyFileFor(caseDrawerForm)
+}
+
+async function pickBinaryBodyFileFor(form: ApiRequestEditorDetail) {
   const input = document.createElement('input')
   input.type = 'file'
   input.accept = '*/*'
@@ -1024,22 +1171,46 @@ async function pickBinaryBodyFile() {
       const chunk = bytes.subarray(index, index + chunkSize)
       binary += String.fromCharCode(...chunk)
     }
-    definitionForm.requestConfig.body.type = 'BINARY'
-    definitionForm.requestConfig.body.fileName = file.name
-    definitionForm.requestConfig.body.contentType = file.type || 'application/octet-stream'
-    definitionForm.requestConfig.body.binaryBase64 = btoa(binary)
+    form.requestConfig.body.type = 'BINARY'
+    form.requestConfig.body.fileName = file.name
+    form.requestConfig.body.contentType = file.type || 'application/octet-stream'
+    form.requestConfig.body.binaryBase64 = btoa(binary)
   }
   input.click()
 }
 
 function clearBinaryBodyFile() {
-  definitionForm.requestConfig.body.fileName = ''
-  definitionForm.requestConfig.body.binaryBase64 = ''
-  definitionForm.requestConfig.body.contentType = 'application/octet-stream'
+  clearBinaryBodyFileFor(definitionForm)
+}
+
+function clearCaseDrawerBinaryBodyFile() {
+  clearBinaryBodyFileFor(caseDrawerForm)
+}
+
+function clearBinaryBodyFileFor(form: ApiRequestEditorDetail) {
+  form.requestConfig.body.fileName = ''
+  form.requestConfig.body.binaryBase64 = ''
+  form.requestConfig.body.contentType = 'application/octet-stream'
 }
 
 const binaryBodySizeLabel = computed(() => {
   const base64 = definitionForm.requestConfig.body.binaryBase64 || ''
+  if (!base64) {
+    return ''
+  }
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
+  const bytes = Math.max(0, Math.floor(base64.length * 3 / 4) - padding)
+  if (bytes < 1024) {
+    return `${bytes} B`
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+})
+
+const caseDrawerBinaryBodySizeLabel = computed(() => {
+  const base64 = caseDrawerForm.requestConfig.body.binaryBase64 || ''
   if (!base64) {
     return ''
   }
@@ -1060,6 +1231,10 @@ watch(() => workspaceCode.value, () => {
 
 watch(definitionForm, () => {
   syncActiveRequestEditorTab()
+}, { deep: true })
+
+watch(caseDrawerForm, () => {
+  syncCaseDrawerEditorTab()
 }, { deep: true })
 
 watch(filteredDefinitions, (items) => {
@@ -1563,9 +1738,33 @@ function syncActiveRequestEditorTab() {
   current.isDirty = current.savedFingerprint !== fingerprintDefinitionDetail(snapshot)
 }
 
+function syncCaseDrawerEditorTab() {
+  const current = activeCaseDrawerEditorTab.value
+  if (!current || requestEditorSyncing.value || !caseDrawerVisible.value) {
+    return
+  }
+  const snapshot = cloneEditorDetail(caseDrawerForm)
+  current.draft = snapshot
+  current.resourceType = caseDrawerForm.resourceType
+  current.resourceId = caseDrawerForm.id || null
+  current.definitionId = caseDrawerForm.definitionId || null
+  current.title = caseDrawerForm.name || '新建用例'
+  current.method = caseDrawerForm.requestConfig.method || caseDrawerForm.method || 'GET'
+  current.activeTab = caseDrawerRequestTab.value
+  current.isDirty = current.savedFingerprint !== fingerprintDefinitionDetail(snapshot)
+}
+
 function setActiveRequestContentTab(tab: RequestContentTab) {
   activeRequestTab.value = tab
   const current = activeRequestEditorTab.value
+  if (current) {
+    current.activeTab = tab
+  }
+}
+
+function setCaseDrawerRequestContentTab(tab: RequestContentTab) {
+  caseDrawerRequestTab.value = tab
+  const current = activeCaseDrawerEditorTab.value
   if (current) {
     current.activeTab = tab
   }
@@ -1589,6 +1788,30 @@ function applyEditorDetailToForm(detail: ApiRequestEditorDetail, options?: { mar
       ? (cloned.definitionId || null)
       : (cloned.id || null)
     current.title = cloned.name || (cloned.resourceType === 'case' ? '新建用例' : '\u65b0\u5efa\u8bf7\u6c42')
+    current.method = cloned.requestConfig.method || cloned.method || 'GET'
+    current.activeTab = current.activeTab || resolveDefaultRequestTab(cloned)
+    if (options?.markSaved) {
+      current.savedFingerprint = fingerprintDefinitionDetail(cloned)
+      current.isDirty = false
+    }
+  }
+  void nextTick(() => {
+    requestEditorSyncing.value = false
+  })
+}
+
+function applyCaseDrawerDetailToForm(detail: ApiRequestEditorDetail, options?: { markSaved?: boolean }) {
+  requestEditorSyncing.value = true
+  const cloned = cloneEditorDetail(detail)
+  hydrateDefinitionKeyValueRows(cloned)
+  Object.assign(caseDrawerForm, cloned)
+  const current = activeCaseDrawerEditorTab.value
+  if (current) {
+    current.resourceType = cloned.resourceType
+    current.resourceId = cloned.id || null
+    current.draft = cloneEditorDetail(cloned)
+    current.definitionId = cloned.definitionId || null
+    current.title = cloned.name || '新建用例'
     current.method = cloned.requestConfig.method || cloned.method || 'GET'
     current.activeTab = current.activeTab || resolveDefaultRequestTab(cloned)
     if (options?.markSaved) {
@@ -1664,7 +1887,7 @@ function openOrReuseDraftRequest(detail: ApiRequestEditorDetail) {
   openNewRequestTab(detail)
 }
 
-async function closeRequestEditorTab(key: string) {
+async function closeRequestEditorTab(key: string, options?: { activateFallback?: boolean }) {
   const closing = requestEditorTabs.value.find(item => item.key === key)
   if (!closing) {
     return
@@ -1688,7 +1911,9 @@ async function closeRequestEditorTab(key: string) {
       current.debugReportId = null
       current.debugFailureSummary = ''
       current.debugStepResults = []
-      activateRequestEditorTab(current.key)
+      if (options?.activateFallback !== false) {
+        activateRequestEditorTab(current.key)
+      }
     }
     return
   }
@@ -1701,24 +1926,21 @@ async function closeRequestEditorTab(key: string) {
     caseDrawerSourceEditorKey.value = ''
   }
   const fallback = requestEditorTabs.value[Math.max(0, index - 1)] ?? requestEditorTabs.value[0]
-  if (fallback) {
+  if (fallback && options?.activateFallback !== false) {
     activateRequestEditorTab(fallback.key)
   }
 }
 
 async function closeCaseDrawer() {
-  const activeCaseTab = activeRequestEditorTab.value
-  if (!activeCaseTab || activeCaseTab.resourceType !== 'case') {
+  const activeCaseTab = activeCaseDrawerEditorTab.value
+  if (!activeCaseTab) {
     return
   }
-  const fallbackKey = caseDrawerSourceEditorKey.value
-  await closeRequestEditorTab(activeCaseTab.key)
-  if (fallbackKey) {
-    const fallback = requestEditorTabs.value.find(item => item.key === fallbackKey)
-    if (fallback) {
-      activateRequestEditorTab(fallback.key)
-    }
-  }
+  await closeRequestEditorTab(activeCaseTab.key, { activateFallback: false })
+  caseDrawerVisible.value = false
+  caseDrawerEditorKey.value = ''
+  caseDrawerRequestTab.value = 'body'
+  caseDrawerResponsePreviewTab.value = 'body'
   caseDrawerSourceEditorKey.value = ''
 }
 
@@ -1753,7 +1975,11 @@ async function openCaseEditor(id: number) {
   caseDrawerSourceEditorKey.value = activeRequestEditorKey.value
   const target = requestEditorTabs.value.find(item => item.resourceType === 'case' && item.resourceId === id)
   if (target) {
-    activateRequestEditorTab(target.key)
+    caseDrawerEditorKey.value = target.key
+    caseDrawerRequestTab.value = target.activeTab || resolveDefaultRequestTab(target.draft)
+    caseDrawerResponsePreviewTab.value = 'body'
+    applyCaseDrawerDetailToForm(target.draft)
+    caseDrawerVisible.value = true
   }
 }
 
@@ -1762,7 +1988,11 @@ function openCaseDraftFromDefinition(options?: { fromSavedDefinition?: boolean }
   const tab = makeRequestEditorTab(detail)
   requestEditorTabs.value.push(tab)
   caseDrawerSourceEditorKey.value = activeRequestEditorKey.value
-  activateRequestEditorTab(tab.key)
+  caseDrawerEditorKey.value = tab.key
+  caseDrawerRequestTab.value = tab.activeTab || resolveDefaultRequestTab(tab.draft)
+  caseDrawerResponsePreviewTab.value = 'body'
+  applyCaseDrawerDetailToForm(tab.draft)
+  caseDrawerVisible.value = true
 }
 
 async function runCaseItem(id: number) {
@@ -1784,7 +2014,11 @@ async function duplicateCaseItem(id: number) {
   const tab = makeRequestEditorTab(duplicated)
   requestEditorTabs.value.push(tab)
   caseDrawerSourceEditorKey.value = activeRequestEditorKey.value
-  activateRequestEditorTab(tab.key)
+  caseDrawerEditorKey.value = tab.key
+  caseDrawerRequestTab.value = tab.activeTab || resolveDefaultRequestTab(tab.draft)
+  caseDrawerResponsePreviewTab.value = 'body'
+  applyCaseDrawerDetailToForm(tab.draft)
+  caseDrawerVisible.value = true
 }
 
 async function removeCase(id?: number | null) {
@@ -1956,9 +2190,10 @@ function addDefinitionRow(target: ApiKeyValue[]) {
   target.push(emptyKeyValue(defaults))
 }
 
-function openBatchAddDrawer(mode: BatchAddMode) {
+function openBatchAddDrawer(mode: BatchAddMode, context: 'main' | 'case' = 'main') {
   batchAddMode.value = mode
   batchAddInput.value = ''
+  batchAddContext.value = context
   batchAddDrawerVisible.value = true
 }
 
@@ -2113,38 +2348,39 @@ function parseBatchExtractors() {
 }
 
 function confirmBatchAdd() {
+  const targetForm = batchAddContext.value === 'case' ? caseDrawerForm : definitionForm
   let count = 0
   if (batchAddMode.value === 'query') {
     const rows = parseBatchKeyValueInput()
-    definitionForm.requestConfig.queryParams.push(...rows.map(row => normalizeKeyValueRow(row, queryParamDefaults())))
-    syncKeyValueRows(definitionForm.requestConfig.queryParams, queryParamDefaults())
+    targetForm.requestConfig.queryParams.push(...rows.map(row => normalizeKeyValueRow(row, queryParamDefaults())))
+    syncKeyValueRows(targetForm.requestConfig.queryParams, queryParamDefaults())
     count = rows.length
   }
   else if (batchAddMode.value === 'cookie') {
     const rows = parseBatchKeyValueInput()
-    definitionForm.requestConfig.cookies.push(...rows)
+    targetForm.requestConfig.cookies.push(...rows)
     count = rows.length
   }
   else if (batchAddMode.value === 'header') {
     const rows = parseBatchKeyValueInput()
-    definitionForm.requestConfig.headers.push(...rows.map(row => normalizeKeyValueRow(row, headerParamDefaults())))
-    syncKeyValueRows(definitionForm.requestConfig.headers, headerParamDefaults())
+    targetForm.requestConfig.headers.push(...rows.map(row => normalizeKeyValueRow(row, headerParamDefaults())))
+    syncKeyValueRows(targetForm.requestConfig.headers, headerParamDefaults())
     count = rows.length
   }
   else if (batchAddMode.value === 'body-form') {
     const rows = parseBatchKeyValueInput()
-    definitionForm.requestConfig.body.formItems.push(...rows.map(row => normalizeKeyValueRow(row, bodyFormParamDefaults())))
-    syncKeyValueRows(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())
+    targetForm.requestConfig.body.formItems.push(...rows.map(row => normalizeKeyValueRow(row, bodyFormParamDefaults())))
+    syncKeyValueRows(targetForm.requestConfig.body.formItems, bodyFormParamDefaults())
     count = rows.length
   }
   else if (batchAddMode.value === 'assertion') {
     const rows = parseBatchAssertions()
-    definitionForm.assertions.push(...rows)
+    targetForm.assertions.push(...rows)
     count = rows.length
   }
   else if (batchAddMode.value === 'extractor') {
     const rows = parseBatchExtractors()
-    definitionForm.extractors.push(...rows)
+    targetForm.extractors.push(...rows)
     count = rows.length
   }
 
@@ -2154,6 +2390,7 @@ function confirmBatchAdd() {
   }
   batchAddDrawerVisible.value = false
   batchAddInput.value = ''
+  batchAddContext.value = 'main'
   ElMessage.success(`已批量添加 ${count} 条`)
 }
 
@@ -2617,6 +2854,54 @@ async function saveAndDebugCase() {
   }
   definitionForm.path = definitionForm.requestConfig.path.trim()
   await persistCase({ debugAfterSave: true })
+}
+
+async function runInCaseDrawerContext(action: () => Promise<void>) {
+  const drawerTab = activeCaseDrawerEditorTab.value
+  if (!drawerTab) {
+    return
+  }
+  const mainSnapshot = cloneEditorDetail(definitionForm)
+  const mainActiveEditorKey = activeRequestEditorKey.value
+  const mainRequestTab = activeRequestTab.value
+  const mainSelectedDefinitionId = selectedDefinitionId.value
+
+  requestEditorSyncing.value = true
+  activeRequestEditorKey.value = drawerTab.key
+  activeRequestTab.value = caseDrawerRequestTab.value
+  Object.assign(definitionForm, cloneEditorDetail(caseDrawerForm))
+  requestEditorSyncing.value = false
+
+  try {
+    await action()
+    applyCaseDrawerDetailToForm(cloneEditorDetail(definitionForm), { markSaved: true })
+  }
+  finally {
+    requestEditorSyncing.value = true
+    Object.assign(definitionForm, mainSnapshot)
+    activeRequestEditorKey.value = mainActiveEditorKey
+    activeRequestTab.value = mainRequestTab
+    selectedDefinitionId.value = mainSelectedDefinitionId
+    requestEditorSyncing.value = false
+  }
+}
+
+async function saveCaseDrawer() {
+  await runInCaseDrawerContext(async () => {
+    await saveCase()
+  })
+}
+
+async function debugCaseDrawer() {
+  await runInCaseDrawerContext(async () => {
+    await debugCase()
+  })
+}
+
+async function saveAndDebugCaseDrawer() {
+  await runInCaseDrawerContext(async () => {
+    await saveAndDebugCase()
+  })
 }
 
 async function saveActiveEditor() {
@@ -3743,31 +4028,31 @@ function formatTimeLabel(value?: string | null) {
             :summary-name="caseDrawerSubtitle"
             :method="caseDrawerMethod"
             :path="caseDrawerPath"
-            :case-name="definitionForm.name"
-            :priority="definitionForm.casePriority || 'P0'"
+            :case-name="caseDrawerForm.name"
+            :priority="caseDrawerForm.casePriority || 'P0'"
             :priority-options="casePriorityOptions"
-            :status="definitionForm.caseStatus || '进行中'"
+            :status="caseDrawerForm.caseStatus || '进行中'"
             :status-options="caseStatusOptions"
-            :tags-input="caseTagsInput"
-            :can-debug="canDebugDefinition"
-            :can-write="canWriteDefinition"
+            :tags-input="caseDrawerTagsInput"
+            :can-debug="canDebugCaseDrawer"
+            :can-write="canWriteCaseDrawer"
             :saving="saving"
-            :is-edit="!!definitionForm.id"
+            :is-edit="!!caseDrawerForm.id"
             @request-close="closeCaseDrawer"
-            @update:case-name="value => definitionForm.name = value"
-            @update:priority="value => definitionForm.casePriority = value"
-            @update:status="value => definitionForm.caseStatus = value"
-            @update:tags-input="value => caseTagsInput = value"
-            @debug="debugActiveEditor"
-            @create="saveActiveEditor"
-            @create-and-debug="saveAndDebugActiveEditor"
-            @save="saveActiveEditor"
+            @update:case-name="value => caseDrawerForm.name = value"
+            @update:priority="value => caseDrawerForm.casePriority = value"
+            @update:status="value => caseDrawerForm.caseStatus = value"
+            @update:tags-input="value => caseDrawerTagsInput = value"
+            @debug="debugCaseDrawer"
+            @create="saveCaseDrawer"
+            @create-and-debug="saveAndDebugCaseDrawer"
+            @save="saveCaseDrawer"
           >
             <template #request-row>
               <div class="ms-like-request-row is-case-drawer-request-row">
                 <el-select
-                  v-model="definitionForm.requestConfig.method"
-                  :class="['request-method-select', requestMethodClass(definitionForm.requestConfig.method)]"
+                  v-model="caseDrawerForm.requestConfig.method"
+                  :class="['request-method-select', requestMethodClass(caseDrawerForm.requestConfig.method)]"
                   popper-class="request-method-popper"
                 >
                   <el-option
@@ -3779,37 +4064,37 @@ function formatTimeLabel(value?: string | null) {
                     <span :class="['request-method-option', requestMethodClass(method)]">{{ method }}</span>
                   </el-option>
                 </el-select>
-                <el-input v-model="definitionForm.requestConfig.path" class="request-url-input" placeholder="请输入包含 http/https 的完整 URL 或接口路径" />
+                <el-input v-model="caseDrawerForm.requestConfig.path" class="request-url-input" placeholder="请输入包含 http/https 的完整 URL 或接口路径" />
                 <el-button @click="promptImportCurl">Curl</el-button>
               </div>
             </template>
 
             <template #tabs>
               <div class="ms-like-top-tabs case-drawer-top-tabs">
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'headers' }]" @click="setActiveRequestContentTab('headers')">请求头</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'body' }]" @click="setActiveRequestContentTab('body')">请求体</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'params' }]" @click="setActiveRequestContentTab('params')">
+                <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'headers' }]" @click="setCaseDrawerRequestContentTab('headers')">请求头</button>
+                <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'body' }]" @click="setCaseDrawerRequestContentTab('body')">请求体</button>
+                <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'params' }]" @click="setCaseDrawerRequestContentTab('params')">
                   Params
-                  <span v-if="queryEnabledCount" class="ms-like-tab-badge">{{ queryEnabledCount }}</span>
+                  <span v-if="caseDrawerQueryEnabledCount" class="ms-like-tab-badge">{{ caseDrawerQueryEnabledCount }}</span>
                 </button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'auth' }]" @click="setActiveRequestContentTab('auth')">Auth</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'pre' }]" @click="setActiveRequestContentTab('pre')">前置处理</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'post' }]" @click="setActiveRequestContentTab('post')">后置处理</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="setActiveRequestContentTab('tests')">断言</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'settings' }]" @click="setActiveRequestContentTab('settings')">设置</button>
+                <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'auth' }]" @click="setCaseDrawerRequestContentTab('auth')">Auth</button>
+                <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'pre' }]" @click="setCaseDrawerRequestContentTab('pre')">前置处理</button>
+                <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'post' }]" @click="setCaseDrawerRequestContentTab('post')">后置处理</button>
+                <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'tests' }]" @click="setCaseDrawerRequestContentTab('tests')">断言</button>
+                <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'settings' }]" @click="setCaseDrawerRequestContentTab('settings')">设置</button>
               </div>
             </template>
 
             <template #body>
               <div class="ms-like-request-body">
-                <template v-if="activeRequestTab === 'params'">
+                <template v-if="caseDrawerRequestTab === 'params'">
                   <div class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--query">
                     <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--query">
                       <div class="ms-like-drag-cell"></div>
                       <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
                         <el-checkbox
-                          v-model="queryTableSelectionModel"
-                          :indeterminate="tableSelectionState(definitionForm.requestConfig.queryParams).indeterminate"
+                          v-model="caseDrawerQueryTableSelectionModel"
+                          :indeterminate="tableSelectionState(caseDrawerForm.requestConfig.queryParams).indeterminate"
                         />
                       </div>
                       <span class="ms-like-header-input-title">Query 参数</span>
@@ -3817,7 +4102,7 @@ function formatTimeLabel(value?: string | null) {
                       <span>参数值</span>
                       <span>编码</span>
                       <span>描述</span>
-                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('query')">批量添加</button>
+                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('query', 'case')">批量添加</button>
                     </div>
                     <div
                       v-for="(row, index) in definitionForm.requestConfig.queryParams"
@@ -3877,20 +4162,20 @@ function formatTimeLabel(value?: string | null) {
                   </div>
                 </template>
 
-                <template v-else-if="activeRequestTab === 'headers'">
+                <template v-else-if="caseDrawerRequestTab === 'headers'">
                   <div class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--header">
                     <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--header">
                       <div class="ms-like-drag-cell"></div>
                       <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
                         <el-checkbox
-                          v-model="headerTableSelectionModel"
-                          :indeterminate="tableSelectionState(definitionForm.requestConfig.headers).indeterminate"
+                          v-model="caseDrawerHeaderTableSelectionModel"
+                          :indeterminate="tableSelectionState(caseDrawerForm.requestConfig.headers).indeterminate"
                         />
                       </div>
                       <span class="ms-like-header-input-title">参数名称</span>
                       <span>参数值</span>
                       <span>描述</span>
-                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('header')">批量添加</button>
+                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('header', 'case')">批量添加</button>
                     </div>
                     <div
                       v-for="(row, index) in definitionForm.requestConfig.headers"
@@ -3937,32 +4222,32 @@ function formatTimeLabel(value?: string | null) {
                   </div>
                 </template>
 
-                <template v-else-if="activeRequestTab === 'body'">
+                <template v-else-if="caseDrawerRequestTab === 'body'">
                   <div class="request-section">
                     <div class="ms-like-body-type-row">
-                      <button :class="['ms-like-body-chip', { active: isBodyMode('NONE') }]" @click="setBodyMode('NONE')">none</button>
-                      <button :class="['ms-like-body-chip', { active: isBodyMode('FORM_DATA') }]" @click="setBodyMode('FORM_DATA')">form-data</button>
-                      <button :class="['ms-like-body-chip', { active: isBodyMode('FORM_URLENCODED') }]" @click="setBodyMode('FORM_URLENCODED')">x-www-form-urlencoded</button>
-                      <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_JSON') }]" @click="setBodyMode('RAW_JSON')">json</button>
-                      <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_XML') }]" @click="setBodyMode('RAW_XML')">xml</button>
-                      <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_TEXT') }]" @click="setBodyMode('RAW_TEXT')">raw</button>
-                      <button :class="['ms-like-body-chip', { active: isBodyMode('BINARY') }]" @click="setBodyMode('BINARY')">binary</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('NONE', caseDrawerForm) }]" @click="setBodyMode('NONE', caseDrawerForm)">none</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('FORM_DATA', caseDrawerForm) }]" @click="setBodyMode('FORM_DATA', caseDrawerForm)">form-data</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('FORM_URLENCODED', caseDrawerForm) }]" @click="setBodyMode('FORM_URLENCODED', caseDrawerForm)">x-www-form-urlencoded</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_JSON', caseDrawerForm) }]" @click="setBodyMode('RAW_JSON', caseDrawerForm)">json</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_XML', caseDrawerForm) }]" @click="setBodyMode('RAW_XML', caseDrawerForm)">xml</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_TEXT', caseDrawerForm) }]" @click="setBodyMode('RAW_TEXT', caseDrawerForm)">raw</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('BINARY', caseDrawerForm) }]" @click="setBodyMode('BINARY', caseDrawerForm)">binary</button>
                     </div>
                     <div class="ms-like-body-mode-shell">
                       <MonacoCodeEditor
                         v-if="['RAW_JSON', 'RAW_XML', 'RAW_TEXT'].includes(definitionForm.requestConfig.body.type)"
-                        v-model="activeBodyRawText"
-                        :language="activeBodyLanguage"
+                        v-model="caseDrawerActiveBodyRawText"
+                        :language="caseDrawerActiveBodyLanguage"
                         height="300px"
                       />
                       <div v-else-if="definitionForm.requestConfig.body.type === 'BINARY'" class="request-section ms-like-form-panel">
                         <div class="ms-like-form-row">
                           <div class="ms-like-form-label">File</div>
                           <div class="ms-like-form-control ms-like-binary-actions">
-                            <el-button @click="pickBinaryBodyFile">
+                            <el-button @click="pickCaseDrawerBinaryBodyFile">
                               {{ definitionForm.requestConfig.body.fileName ? '重新选择' : '选择文件' }}
                             </el-button>
-                            <el-button :disabled="!definitionForm.requestConfig.body.binaryBase64" @click="clearBinaryBodyFile">清空</el-button>
+                            <el-button :disabled="!definitionForm.requestConfig.body.binaryBase64" @click="clearCaseDrawerBinaryBodyFile">清空</el-button>
                           </div>
                         </div>
                         <div class="ms-like-form-row">
@@ -3970,7 +4255,7 @@ function formatTimeLabel(value?: string | null) {
                           <div class="empty-hint">
                             <template v-if="definitionForm.requestConfig.body.fileName">
                               <span class="binary-file-name">{{ definitionForm.requestConfig.body.fileName }}</span>
-                              <span v-if="binaryBodySizeLabel" class="binary-file-size">{{ binaryBodySizeLabel }}</span>
+                              <span v-if="caseDrawerBinaryBodySizeLabel" class="binary-file-size">{{ caseDrawerBinaryBodySizeLabel }}</span>
                             </template>
                             <template v-else>
                               尚未选择二进制文件
@@ -3986,15 +4271,15 @@ function formatTimeLabel(value?: string | null) {
                           <div class="ms-like-drag-cell"></div>
                           <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
                             <el-checkbox
-                              v-model="bodyFormTableSelectionModel"
-                              :indeterminate="tableSelectionState(definitionForm.requestConfig.body.formItems).indeterminate"
+                              v-model="caseDrawerBodyFormTableSelectionModel"
+                              :indeterminate="tableSelectionState(caseDrawerForm.requestConfig.body.formItems).indeterminate"
                             />
                           </div>
                           <span class="ms-like-header-input-title">参数名称</span>
                           <span>类型</span>
                           <span>参数值</span>
                           <span>描述</span>
-                          <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('body-form')">批量添加</button>
+                          <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('body-form', 'case')">批量添加</button>
                         </div>
                         <div
                           v-for="(row, index) in definitionForm.requestConfig.body.formItems"
@@ -4054,44 +4339,44 @@ function formatTimeLabel(value?: string | null) {
                   </div>
                 </template>
 
-                <template v-else-if="activeRequestTab === 'pre'">
+                <template v-else-if="caseDrawerRequestTab === 'pre'">
                   <div class="request-section" data-testid="pre-processors-section">
                     <ApiProcessorEditor
                       v-model="definitionForm.preProcessors"
                       v-model:active-id="activePreProcessorId"
                       stage="pre"
                       :db-connections="dbConnections"
-                      :latest-response="currentResponseStep?.response ?? null"
+                      :latest-response="caseDrawerResponseStep?.response ?? null"
                     />
                   </div>
                 </template>
 
-                <template v-else-if="activeRequestTab === 'post'">
+                <template v-else-if="caseDrawerRequestTab === 'post'">
                   <div class="request-section" data-testid="post-processors-section">
                     <ApiProcessorEditor
                       v-model="definitionForm.postProcessors"
                       v-model:active-id="activePostProcessorId"
                       stage="post"
                       :db-connections="dbConnections"
-                      :latest-response="currentResponseStep?.response ?? null"
+                      :latest-response="caseDrawerResponseStep?.response ?? null"
                     />
                   </div>
                 </template>
 
-                <template v-else-if="activeRequestTab === 'tests'">
+                <template v-else-if="caseDrawerRequestTab === 'tests'">
                   <div class="request-section" data-testid="assertions-section">
                     <ApiAssertionEditor
                       v-model="definitionForm.assertions"
                       v-model:active-id="activeAssertionId"
-                      :latest-response="currentResponseStep?.response ?? null"
+                      :latest-response="caseDrawerResponseStep?.response ?? null"
                     />
                     <div class="editor-actions left">
-                      <el-button text type="primary" @click="openBatchAddDrawer('assertion')">批量添加</el-button>
+                      <el-button text type="primary" @click="openBatchAddDrawer('assertion', 'case')">批量添加</el-button>
                     </div>
                   </div>
                 </template>
 
-                <template v-else-if="activeRequestTab === 'auth'">
+                <template v-else-if="caseDrawerRequestTab === 'auth'">
                   <div class="request-section">
                     <div class="ms-auth-panel">
                       <div class="ms-auth-panel-title">认证方式</div>
@@ -4190,21 +4475,21 @@ function formatTimeLabel(value?: string | null) {
             </template>
 
             <template #response>
-              <div v-if="shouldShowResponsePanel" class="ms-like-response-shell case-drawer-response-shell">
+              <div v-if="caseDrawerShouldShowResponsePanel" class="ms-like-response-shell case-drawer-response-shell">
                 <div class="ms-like-response-header">
                   <div class="ms-like-response-title">响应内容</div>
-                  <div v-if="!showResponseEmptyState" class="ms-like-response-metrics">
-                    <span>状态 {{ currentResponseStatusCode ?? '-' }}</span>
-                    <span>耗时 {{ currentResponseDuration ?? '-' }}<template v-if="currentResponseDuration !== null"> ms</template></span>
-                    <span>大小 {{ currentResponseSize }}</span>
+                  <div v-if="!caseDrawerShowResponseEmptyState" class="ms-like-response-metrics">
+                    <span>状态 {{ caseDrawerResponseStatusCode ?? '-' }}</span>
+                    <span>耗时 {{ caseDrawerResponseDuration ?? '-' }}<template v-if="caseDrawerResponseDuration !== null"> ms</template></span>
+                    <span>大小 {{ caseDrawerResponseSize }}</span>
                   </div>
                 </div>
 
-                <div v-if="currentDebugError" class="response-error-banner">
-                  {{ currentDebugError }}
+                <div v-if="caseDrawerDebugError" class="response-error-banner">
+                  {{ caseDrawerDebugError }}
                 </div>
 
-                <div v-if="showResponseEmptyState" class="ms-like-response-empty">
+                <div v-if="caseDrawerShowResponseEmptyState" class="ms-like-response-empty">
                   <div class="ms-like-response-empty-card">
                     <div class="ms-like-response-empty-visual">
                       <div class="ms-like-response-empty-window">
@@ -4218,17 +4503,17 @@ function formatTimeLabel(value?: string | null) {
                 </div>
                 <template v-else>
                   <div class="ms-like-response-tabs">
-                    <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'body' }]" @click="responsePreviewTab = 'body'">Body</button>
-                    <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'header' }]" @click="responsePreviewTab = 'header'">Header</button>
-                    <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'console' }]" @click="responsePreviewTab = 'console'">控制台</button>
-                    <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'actualRequest' }]" @click="responsePreviewTab = 'actualRequest'">实际请求</button>
+                    <button :class="['ms-like-top-tab', { active: caseDrawerResponsePreviewTab === 'body' }]" @click="caseDrawerResponsePreviewTab = 'body'">Body</button>
+                    <button :class="['ms-like-top-tab', { active: caseDrawerResponsePreviewTab === 'header' }]" @click="caseDrawerResponsePreviewTab = 'header'">Header</button>
+                    <button :class="['ms-like-top-tab', { active: caseDrawerResponsePreviewTab === 'console' }]" @click="caseDrawerResponsePreviewTab = 'console'">控制台</button>
+                    <button :class="['ms-like-top-tab', { active: caseDrawerResponsePreviewTab === 'actualRequest' }]" @click="caseDrawerResponsePreviewTab = 'actualRequest'">实际请求</button>
                   </div>
 
                   <div class="ms-like-response-body">
                     <MonacoCodeEditor
-                      v-if="responsePreviewTab === 'body'"
-                      :model-value="responseBodyPreview"
-                      :language="responseBodyLanguage"
+                      v-if="caseDrawerResponsePreviewTab === 'body'"
+                      :model-value="caseDrawerResponseBodyPreview"
+                      :language="caseDrawerResponseBodyLanguage"
                       :read-only="true"
                       :show-format-button="false"
                       :fit-content="true"
@@ -4236,8 +4521,8 @@ function formatTimeLabel(value?: string | null) {
                       height="100%"
                     />
                     <MonacoCodeEditor
-                      v-else-if="responsePreviewTab === 'header'"
-                      :model-value="responseHeadersPreview"
+                      v-else-if="caseDrawerResponsePreviewTab === 'header'"
+                      :model-value="caseDrawerResponseHeadersPreview"
                       language="json"
                       :read-only="true"
                       :show-format-button="false"
@@ -4246,8 +4531,8 @@ function formatTimeLabel(value?: string | null) {
                       height="100%"
                     />
                     <MonacoCodeEditor
-                      v-else-if="responsePreviewTab === 'console'"
-                      :model-value="responseConsolePreview"
+                      v-else-if="caseDrawerResponsePreviewTab === 'console'"
+                      :model-value="caseDrawerResponseConsolePreview"
                       language="text"
                       :read-only="true"
                       :show-format-button="false"
@@ -4256,8 +4541,8 @@ function formatTimeLabel(value?: string | null) {
                       height="100%"
                     />
                     <MonacoCodeEditor
-                      v-else-if="responsePreviewTab === 'actualRequest'"
-                      :model-value="actualRequestPreview"
+                      v-else-if="caseDrawerResponsePreviewTab === 'actualRequest'"
+                      :model-value="caseDrawerActualRequestPreview"
                       language="json"
                       :read-only="true"
                       :show-format-button="false"
@@ -6485,4 +6770,5 @@ pre {
   }
 }
 </style>
+
 

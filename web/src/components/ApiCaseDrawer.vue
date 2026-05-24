@@ -90,7 +90,6 @@ function updateTagsInput(value: string | number) {
       <div class="api-case-drawer-scroll">
         <div class="api-case-drawer-summary-card">
           <div class="api-case-drawer-summary-main">
-            <div class="api-case-drawer-summary-name">{{ props.summaryName }}</div>
             <div class="api-case-drawer-summary-meta">
               <span :class="['api-case-drawer-method-tag', `request-method-${props.method.toLowerCase()}`]">{{ props.method }}</span>
               <span class="api-case-drawer-summary-path">{{ props.path || '未设置路径' }}</span>
@@ -110,7 +109,13 @@ function updateTagsInput(value: string | number) {
           <el-button type="primary" :disabled="!props.canDebug" :loading="props.saving" @click="emit('debug')">
             发送
           </el-button>
-          <el-dropdown v-if="!props.isEdit" split-button :disabled="!props.canWrite" :loading="props.saving" @click="emit('create')">
+          <el-dropdown
+            v-if="!props.isEdit"
+            split-button
+            :disabled="!props.canWrite"
+            :loading="props.saving"
+            @click="emit('create')"
+          >
             创建
             <template #dropdown>
               <el-dropdown-menu>
@@ -146,10 +151,15 @@ function updateTagsInput(value: string | number) {
           />
         </div>
 
-        <slot name="request-row" />
-        <slot name="tabs" />
-        <slot name="body" />
-        <slot name="response" />
+        <div class="api-case-drawer-tabs">
+          <slot name="tabs" />
+        </div>
+        <div class="api-case-drawer-body">
+          <slot name="body" />
+        </div>
+        <div class="api-case-drawer-response">
+          <slot name="response" />
+        </div>
       </div>
 
       <div v-if="props.isEdit" class="api-case-drawer-footer">
@@ -163,7 +173,6 @@ function updateTagsInput(value: string | number) {
 <style scoped>
 :global(.api-case-drawer-modal) {
   background: rgba(15, 23, 42, 0.28);
-  backdrop-filter: blur(2px);
 }
 
 .api-case-drawer :deep(.el-drawer) {
@@ -265,17 +274,8 @@ function updateTagsInput(value: string | number) {
 .api-case-drawer-summary-main {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
   min-width: 0;
-}
-
-.api-case-drawer-summary-name {
-  font-size: 15px;
-  font-weight: 600;
-  color: #101828;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .api-case-drawer-summary-meta {
@@ -289,14 +289,15 @@ function updateTagsInput(value: string | number) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 52px;
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 8px;
-  border: 1px solid currentColor;
+  flex: 0 0 auto;
+  min-width: 54px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid #d9dde5;
+  border-radius: 6px;
   background: #fff;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
   line-height: 1;
 }
 
@@ -329,6 +330,19 @@ function updateTagsInput(value: string | number) {
   align-items: center;
 }
 
+.api-case-drawer-tabs,
+.api-case-drawer-body,
+.api-case-drawer-response {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+.api-case-drawer-body,
+.api-case-drawer-response {
+  flex: 0 0 auto;
+}
+
 .api-case-drawer-footer {
   display: flex;
   justify-content: flex-end;
@@ -353,30 +367,42 @@ function updateTagsInput(value: string | number) {
   font-size: 12px;
 }
 
-:deep(.api-case-drawer .request-method-get) {
+.api-case-drawer-method-tag.request-method-get {
   color: #16a34a;
+  border-color: #86efac;
+  background: #f0fdf4;
 }
 
-:deep(.api-case-drawer .request-method-post) {
+.api-case-drawer-method-tag.request-method-post {
   color: #f97316;
+  border-color: #fdba74;
+  background: #fff7ed;
 }
 
-:deep(.api-case-drawer .request-method-put),
-:deep(.api-case-drawer .request-method-options),
-:deep(.api-case-drawer .request-method-head) {
+.api-case-drawer-method-tag.request-method-put,
+.api-case-drawer-method-tag.request-method-options,
+.api-case-drawer-method-tag.request-method-head {
   color: #3b82f6;
+  border-color: #93c5fd;
+  background: #eff6ff;
 }
 
-:deep(.api-case-drawer .request-method-delete) {
+.api-case-drawer-method-tag.request-method-delete {
   color: #dc2626;
+  border-color: #fca5a5;
+  background: #fef2f2;
 }
 
-:deep(.api-case-drawer .request-method-patch) {
+.api-case-drawer-method-tag.request-method-patch {
   color: #ec4899;
+  border-color: #f9a8d4;
+  background: #fdf2f8;
 }
 
-:deep(.api-case-drawer .request-method-trace) {
+.api-case-drawer-method-tag.request-method-trace {
   color: #8b5cf6;
+  border-color: #c4b5fd;
+  background: #f5f3ff;
 }
 
 @media (max-width: 960px) {

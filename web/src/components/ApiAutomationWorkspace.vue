@@ -144,6 +144,9 @@ const caseDrawerVisible = ref(false)
 const caseDrawerEditorKey = ref('')
 const caseDrawerRequestTab = ref<RequestContentTab>('body')
 const caseDrawerResponsePreviewTab = ref<'body' | 'header' | 'console' | 'actualRequest'>('body')
+const caseDrawerDebugReportId = ref<number | null>(null)
+const caseDrawerDebugFailureSummary = ref('')
+const caseDrawerDebugStepResults = ref<ApiRunStepResult[]>([])
 const batchAddMode = ref<BatchAddMode>('query')
 const batchAddInput = ref('')
 const batchAddContext = ref<'main' | 'case'>('main')
@@ -379,9 +382,8 @@ const pagedDefinitionCases = computed(() => {
   return currentDefinitionCases.value.slice(start, start + caseListSettings.pageSize.value)
 })
 const caseListTotalPages = computed(() => Math.max(1, Math.ceil(currentDefinitionCases.value.length / caseListSettings.pageSize.value)))
-const isCaseDrawerMode = computed(() => caseDrawerVisible.value)
 const caseDrawerTitle = computed(() => (caseDrawerForm.id ? '编辑用例' : '创建用例'))
-const caseDrawerSubtitle = computed(() => caseDrawerForm.definitionName || '接口用例')
+const caseDrawerSubtitle = computed(() => caseDrawerForm.definitionName || caseDrawerForm.name || '未命名接口')
 const caseDrawerMethod = computed(() => caseDrawerForm.requestConfig.method || caseDrawerForm.method || 'GET')
 const caseDrawerPath = computed(() => caseDrawerForm.requestConfig.path || caseDrawerForm.path || '')
 const canWriteCaseDrawer = computed(() => canWriteTarget(caseDrawerForm.workspaceCode))
@@ -768,7 +770,7 @@ const currentProcessorResults = computed(() => currentResponseStep.value?.proces
 const currentDebugError = computed(() => currentResponseStep.value?.errorMessage || activeRequestEditorTab.value?.debugFailureSummary || '')
 const showResponseEmptyState = computed(() => !currentResponseStep.value && !currentDebugError.value)
 const caseDrawerResponseStep = computed(() => {
-  const steps = activeCaseDrawerEditorTab.value?.debugStepResults ?? []
+  const steps = caseDrawerDebugStepResults.value
   if (!steps.length) {
     return null
   }
@@ -786,18 +788,14 @@ const caseDrawerResponseHeaders = computed(() => caseDrawerResponseStep.value?.r
 const caseDrawerAssertionResults = computed(() => caseDrawerResponseStep.value?.assertionResults ?? [])
 const caseDrawerExtractionResults = computed(() => caseDrawerResponseStep.value?.extractionResults ?? [])
 const caseDrawerProcessorResults = computed(() => caseDrawerResponseStep.value?.processorResults ?? [])
-const caseDrawerDebugError = computed(() => caseDrawerResponseStep.value?.errorMessage || activeCaseDrawerEditorTab.value?.debugFailureSummary || '')
+const caseDrawerDebugError = computed(() => caseDrawerResponseStep.value?.errorMessage || caseDrawerDebugFailureSummary.value || '')
 const caseDrawerShowResponseEmptyState = computed(() => !caseDrawerResponseStep.value && !caseDrawerDebugError.value)
 const shouldShowResponsePanel = computed(() => {
   if (showCaseListContent.value) {
     return false
   }
-  if (!isCaseDrawerMode.value) {
-    return true
-  }
-  return !showResponseEmptyState.value || !!currentDebugError.value
+  return true
 })
-const caseDrawerShouldShowResponsePanel = computed(() => !caseDrawerShowResponseEmptyState.value || !!caseDrawerDebugError.value)
 const queryEnabledCount = computed(() =>
   definitionForm.requestConfig.queryParams.filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false).length,
 )
@@ -1824,6 +1822,28 @@ function applyCaseDrawerDetailToForm(detail: ApiRequestEditorDetail, options?: {
   })
 }
 
+function resetCaseDrawerDebugState() {
+  caseDrawerDebugReportId.value = null
+  caseDrawerDebugFailureSummary.value = ''
+  caseDrawerDebugStepResults.value = []
+}
+
+function syncCaseDrawerDebugStateFromTab(tab?: RequestEditorTab | null) {
+  if (!tab) {
+    resetCaseDrawerDebugState()
+    return
+  }
+  caseDrawerDebugReportId.value = tab.debugReportId
+  caseDrawerDebugFailureSummary.value = tab.debugFailureSummary || ''
+  caseDrawerDebugStepResults.value = [...(tab.debugStepResults || [])]
+}
+
+function updateCaseDrawerDebugState(reportId: number | null, failureSummary: string, stepResults: ApiRunStepResult[]) {
+  caseDrawerDebugReportId.value = reportId
+  caseDrawerDebugFailureSummary.value = failureSummary
+  caseDrawerDebugStepResults.value = [...stepResults]
+}
+
 function activateRequestEditorTab(key: string) {
   const target = requestEditorTabs.value.find(item => item.key === key)
   if (!target) {
@@ -1942,6 +1962,7 @@ async function closeCaseDrawer() {
   caseDrawerRequestTab.value = 'body'
   caseDrawerResponsePreviewTab.value = 'body'
   caseDrawerSourceEditorKey.value = ''
+  resetCaseDrawerDebugState()
 }
 
 function buildCaseDraftFromCurrentDefinition(options?: { fromSavedDefinition?: boolean }) {
@@ -1979,6 +2000,7 @@ async function openCaseEditor(id: number) {
     caseDrawerRequestTab.value = target.activeTab || resolveDefaultRequestTab(target.draft)
     caseDrawerResponsePreviewTab.value = 'body'
     applyCaseDrawerDetailToForm(target.draft)
+    syncCaseDrawerDebugStateFromTab(target)
     caseDrawerVisible.value = true
   }
 }
@@ -1992,6 +2014,7 @@ function openCaseDraftFromDefinition(options?: { fromSavedDefinition?: boolean }
   caseDrawerRequestTab.value = tab.activeTab || resolveDefaultRequestTab(tab.draft)
   caseDrawerResponsePreviewTab.value = 'body'
   applyCaseDrawerDetailToForm(tab.draft)
+  syncCaseDrawerDebugStateFromTab(tab)
   caseDrawerVisible.value = true
 }
 
@@ -2018,6 +2041,7 @@ async function duplicateCaseItem(id: number) {
   caseDrawerRequestTab.value = tab.activeTab || resolveDefaultRequestTab(tab.draft)
   caseDrawerResponsePreviewTab.value = 'body'
   applyCaseDrawerDetailToForm(tab.draft)
+  syncCaseDrawerDebugStateFromTab(tab)
   caseDrawerVisible.value = true
 }
 
@@ -2751,6 +2775,14 @@ async function debugDefinition() {
       current.debugFailureSummary = response.failureSummary || ''
       current.debugStepResults = response.stepResults || []
     }
+    if (caseDrawerVisible.value && activeRequestEditorKey.value === caseDrawerEditorKey.value) {
+      updateCaseDrawerDebugState(
+        response.reportId,
+        response.failureSummary || '',
+        response.stepResults || [],
+      )
+      caseDrawerResponsePreviewTab.value = 'body'
+    }
     ElMessage.success(response.result === 'SUCCESS' ? '发送成功' : '发送完成')
     await refreshData()
     activeTab.value = 'definitions'
@@ -2826,6 +2858,14 @@ async function debugCase() {
       current.debugReportId = response.reportId
       current.debugFailureSummary = response.failureSummary || ''
       current.debugStepResults = response.stepResults || []
+    }
+    if (caseDrawerVisible.value && activeRequestEditorKey.value === caseDrawerEditorKey.value) {
+      updateCaseDrawerDebugState(
+        response.reportId,
+        response.failureSummary || '',
+        response.stepResults || [],
+      )
+      caseDrawerResponsePreviewTab.value = 'body'
     }
     ElMessage.success(response.result === 'SUCCESS' ? '发送成功' : '发送完成')
     await refreshData()
@@ -3378,54 +3418,7 @@ function formatTimeLabel(value?: string | null) {
                 &#24403;&#21069;&#22788;&#20110; ALL &#35270;&#35282;&#65292;&#35831;&#20808;&#22312;&#39030;&#37096;&#36873;&#25321;&#30446;&#26631;&#31354;&#38388;&#21518;&#20877;&#20445;&#23384;&#25110;&#35843;&#35797;&#12290;
               </div>
 
-              <div v-if="isCaseDrawerMode" class="case-drawer-summary-card">
-                <div class="case-drawer-summary-main">
-                  <div class="case-drawer-summary-name">{{ caseDrawerSubtitle }}</div>
-                  <div class="case-drawer-summary-meta">
-                    <span :class="['case-drawer-method-tag', `request-method-${caseDrawerMethod.toLowerCase()}`]">{{ caseDrawerMethod }}</span>
-                    <span class="case-drawer-summary-path">{{ caseDrawerPath || '未设置路径' }}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div v-if="isCaseDrawerMode" class="case-drawer-name-row">
-                <el-input
-                  v-model="definitionForm.name"
-                  maxlength="255"
-                  show-word-limit
-                  placeholder="请输入用例名称"
-                  class="case-drawer-name-input"
-                />
-                <el-button type="primary" :disabled="!canDebugDefinition" :loading="saving" @click="debugActiveEditor">
-                  服务端执行
-                </el-button>
-                <el-dropdown v-if="!definitionForm.id" split-button :disabled="!canWriteDefinition" :loading="saving" @click="saveActiveEditor">
-                  创建
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item @click="saveAndDebugActiveEditor">创建并执行</el-dropdown-item>
-                      <el-dropdown-item @click="removeActiveEditor">关闭用例</el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
-              </div>
-
-              <div v-if="isCaseDrawerMode" class="case-drawer-meta-row">
-                <el-select v-model="definitionForm.casePriority" class="case-drawer-meta-field" placeholder="优先级">
-                  <el-option v-for="item in casePriorityOptions" :key="item" :label="item" :value="item" />
-                </el-select>
-                <el-select v-model="definitionForm.caseStatus" class="case-drawer-meta-field" placeholder="状态">
-                  <el-option v-for="item in caseStatusOptions" :key="item" :label="item" :value="item" />
-                </el-select>
-                <el-input
-                  :model-value="readTagInput(definitionForm.tags)"
-                  class="case-drawer-tags-field"
-                  placeholder="添加标签，回车结束"
-                  @update:model-value="(value: string | number) => updateTagInput(definitionForm, String(value))"
-                />
-              </div>
-
-              <div :class="['ms-like-request-row', { 'is-case-drawer-request-row': isCaseDrawerMode }]">
+              <div class="ms-like-request-row">
                 <el-select
                   v-model="definitionForm.requestConfig.method"
                   :class="['request-method-select', requestMethodClass(definitionForm.requestConfig.method)]"
@@ -3442,10 +3435,10 @@ function formatTimeLabel(value?: string | null) {
                 </el-select>
                 <el-input v-model="definitionForm.requestConfig.path" class="request-url-input" placeholder="&#35831;&#36755;&#20837;&#21253;&#21547; http/https &#30340;&#23436;&#25972; URL &#25110;&#25509;&#21475;&#36335;&#24452;" data-testid="definition-url-input" />
                 <el-button @click="promptImportCurl">Curl</el-button>
-                <el-button v-if="!isCaseDrawerMode" type="primary" :disabled="!canDebugDefinition" :loading="saving" @click="debugActiveEditor">
+                <el-button type="primary" :disabled="!canDebugDefinition" :loading="saving" @click="debugActiveEditor">
                   &#21457;&#36865;
                 </el-button>
-                <el-dropdown v-if="!isCaseDrawerMode" split-button :disabled="!canWriteDefinition" :loading="saving" data-testid="definition-save-button" @click="saveActiveEditor">
+                <el-dropdown split-button :disabled="!canWriteDefinition" :loading="saving" data-testid="definition-save-button" @click="saveActiveEditor">
                   &#20445;&#23384;
                   <template #dropdown>
                     <el-dropdown-menu>
@@ -4021,8 +4014,8 @@ function formatTimeLabel(value?: string | null) {
           </section>
 
           <ApiCaseDrawer
-            v-if="isCaseDrawerMode"
-            :model-value="isCaseDrawerMode"
+            v-if="caseDrawerVisible"
+            :model-value="caseDrawerVisible"
             :title="caseDrawerTitle"
             :subtitle="caseDrawerSubtitle"
             :summary-name="caseDrawerSubtitle"
@@ -4048,27 +4041,6 @@ function formatTimeLabel(value?: string | null) {
             @create-and-debug="saveAndDebugCaseDrawer"
             @save="saveCaseDrawer"
           >
-            <template #request-row>
-              <div class="ms-like-request-row is-case-drawer-request-row">
-                <el-select
-                  v-model="caseDrawerForm.requestConfig.method"
-                  :class="['request-method-select', requestMethodClass(caseDrawerForm.requestConfig.method)]"
-                  popper-class="request-method-popper"
-                >
-                  <el-option
-                    v-for="method in requestMethodOptions"
-                    :key="method"
-                    :label="method"
-                    :value="method"
-                  >
-                    <span :class="['request-method-option', requestMethodClass(method)]">{{ method }}</span>
-                  </el-option>
-                </el-select>
-                <el-input v-model="caseDrawerForm.requestConfig.path" class="request-url-input" placeholder="请输入包含 http/https 的完整 URL 或接口路径" />
-                <el-button @click="promptImportCurl">Curl</el-button>
-              </div>
-            </template>
-
             <template #tabs>
               <div class="ms-like-top-tabs case-drawer-top-tabs">
                 <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'headers' }]" @click="setCaseDrawerRequestContentTab('headers')">请求头</button>
@@ -4105,7 +4077,7 @@ function formatTimeLabel(value?: string | null) {
                       <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('query', 'case')">批量添加</button>
                     </div>
                     <div
-                      v-for="(row, index) in definitionForm.requestConfig.queryParams"
+                      v-for="(row, index) in caseDrawerForm.requestConfig.queryParams"
                       :key="`case-query-${index}`"
                       :class="['ms-like-table-row', 'ms-like-param-table-grid', 'ms-like-param-table-grid--query', { 'is-dragging': isParamRowDragging('query', index), 'is-drag-over': isParamRowDragOver('query', index) }]"
                       @dragover="handleParamDragOver('query', index, $event)"
@@ -4137,16 +4109,16 @@ function formatTimeLabel(value?: string | null) {
                         <el-input
                           v-model="row.key"
                           placeholder="参数名称"
-                          @input="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
+                          @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())"
                         />
                       </div>
-                      <el-select v-model="row.paramType" @change="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())">
+                      <el-select v-model="row.paramType" @change="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())">
                         <el-option v-for="option in queryParamTypeOptions" :key="option" :label="option" :value="option" />
                       </el-select>
                       <el-input
                         v-model="row.value"
                         placeholder="参数值 / {{variable}}"
-                        @input="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
+                        @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())"
                       />
                       <div class="ms-like-switch-cell ms-like-switch-cell--query">
                         <el-switch v-model="row.encode" size="small" />
@@ -4154,11 +4126,11 @@ function formatTimeLabel(value?: string | null) {
                       <el-input
                         v-model="row.description"
                         placeholder="描述"
-                        @input="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
+                        @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())"
                       />
-                      <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(definitionForm.requestConfig.queryParams, index, queryParamDefaults())">删除</button>
+                      <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(caseDrawerForm.requestConfig.queryParams, index, queryParamDefaults())">删除</button>
                     </div>
-                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.queryParams)">+ 添加一行</button>
+                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(caseDrawerForm.requestConfig.queryParams)">+ 添加一行</button>
                   </div>
                 </template>
 
@@ -4178,7 +4150,7 @@ function formatTimeLabel(value?: string | null) {
                       <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('header', 'case')">批量添加</button>
                     </div>
                     <div
-                      v-for="(row, index) in definitionForm.requestConfig.headers"
+                      v-for="(row, index) in caseDrawerForm.requestConfig.headers"
                       :key="`case-header-${index}`"
                       :class="['ms-like-table-row', 'ms-like-param-table-grid', 'ms-like-param-table-grid--header', { 'is-dragging': isParamRowDragging('header', index), 'is-drag-over': isParamRowDragOver('header', index) }]"
                       @dragover="handleParamDragOver('header', index, $event)"
@@ -4203,22 +4175,22 @@ function formatTimeLabel(value?: string | null) {
                         <el-input
                           v-model="row.key"
                           placeholder="参数名称"
-                          @input="handleKeyValueRowInput(definitionForm.requestConfig.headers, headerParamDefaults())"
+                          @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.headers, headerParamDefaults())"
                         />
                       </div>
                       <el-input
                         v-model="row.value"
                         placeholder="参数值"
-                        @input="handleKeyValueRowInput(definitionForm.requestConfig.headers, headerParamDefaults())"
+                        @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.headers, headerParamDefaults())"
                       />
                       <el-input
                         v-model="row.description"
                         placeholder="描述"
-                        @input="handleKeyValueRowInput(definitionForm.requestConfig.headers, headerParamDefaults())"
+                        @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.headers, headerParamDefaults())"
                       />
-                      <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(definitionForm.requestConfig.headers, index, headerParamDefaults())">删除</button>
+                      <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(caseDrawerForm.requestConfig.headers, index, headerParamDefaults())">删除</button>
                     </div>
-                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.headers)">+ 添加一行</button>
+                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(caseDrawerForm.requestConfig.headers)">+ 添加一行</button>
                   </div>
                 </template>
 
@@ -4235,26 +4207,27 @@ function formatTimeLabel(value?: string | null) {
                     </div>
                     <div class="ms-like-body-mode-shell">
                       <MonacoCodeEditor
-                        v-if="['RAW_JSON', 'RAW_XML', 'RAW_TEXT'].includes(definitionForm.requestConfig.body.type)"
+                        v-if="['RAW_JSON', 'RAW_XML', 'RAW_TEXT'].includes(caseDrawerForm.requestConfig.body.type)"
                         v-model="caseDrawerActiveBodyRawText"
                         :language="caseDrawerActiveBodyLanguage"
+                        class="case-drawer-body-editor"
                         height="300px"
                       />
-                      <div v-else-if="definitionForm.requestConfig.body.type === 'BINARY'" class="request-section ms-like-form-panel">
+                      <div v-else-if="caseDrawerForm.requestConfig.body.type === 'BINARY'" class="request-section ms-like-form-panel">
                         <div class="ms-like-form-row">
                           <div class="ms-like-form-label">File</div>
                           <div class="ms-like-form-control ms-like-binary-actions">
                             <el-button @click="pickCaseDrawerBinaryBodyFile">
-                              {{ definitionForm.requestConfig.body.fileName ? '重新选择' : '选择文件' }}
+                              {{ caseDrawerForm.requestConfig.body.fileName ? '重新选择' : '选择文件' }}
                             </el-button>
-                            <el-button :disabled="!definitionForm.requestConfig.body.binaryBase64" @click="clearCaseDrawerBinaryBodyFile">清空</el-button>
+                            <el-button :disabled="!caseDrawerForm.requestConfig.body.binaryBase64" @click="clearCaseDrawerBinaryBodyFile">清空</el-button>
                           </div>
                         </div>
                         <div class="ms-like-form-row">
                           <div class="ms-like-form-label">已选文件</div>
                           <div class="empty-hint">
-                            <template v-if="definitionForm.requestConfig.body.fileName">
-                              <span class="binary-file-name">{{ definitionForm.requestConfig.body.fileName }}</span>
+                            <template v-if="caseDrawerForm.requestConfig.body.fileName">
+                              <span class="binary-file-name">{{ caseDrawerForm.requestConfig.body.fileName }}</span>
                               <span v-if="caseDrawerBinaryBodySizeLabel" class="binary-file-size">{{ caseDrawerBinaryBodySizeLabel }}</span>
                             </template>
                             <template v-else>
@@ -4264,7 +4237,7 @@ function formatTimeLabel(value?: string | null) {
                         </div>
                       </div>
                       <div
-                        v-else-if="['FORM_URLENCODED', 'FORM_DATA'].includes(definitionForm.requestConfig.body.type)"
+                        v-else-if="['FORM_URLENCODED', 'FORM_DATA'].includes(caseDrawerForm.requestConfig.body.type)"
                         class="body-form-grid ms-like-table-surface ms-like-param-table ms-like-param-table--body-form"
                       >
                         <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--body-form">
@@ -4282,7 +4255,7 @@ function formatTimeLabel(value?: string | null) {
                           <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('body-form', 'case')">批量添加</button>
                         </div>
                         <div
-                          v-for="(row, index) in definitionForm.requestConfig.body.formItems"
+                          v-for="(row, index) in caseDrawerForm.requestConfig.body.formItems"
                           :key="`case-body-${index}`"
                           :class="['ms-like-table-row', 'ms-like-param-table-grid', 'ms-like-param-table-grid--body-form', { 'is-dragging': isParamRowDragging('body-form', index), 'is-drag-over': isParamRowDragOver('body-form', index) }]"
                           @dragover="handleParamDragOver('body-form', index, $event)"
@@ -4314,25 +4287,25 @@ function formatTimeLabel(value?: string | null) {
                             <el-input
                               v-model="row.key"
                               placeholder="参数名称"
-                              @input="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())"
+                              @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())"
                             />
                           </div>
-                          <el-select v-model="row.paramType" @change="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())">
+                          <el-select v-model="row.paramType" @change="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())">
                             <el-option v-for="option in bodyParamTypeOptions" :key="option" :label="option" :value="option" />
                           </el-select>
                           <el-input
                             v-model="row.value"
                             placeholder="参数值"
-                            @input="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())"
+                            @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())"
                           />
                           <el-input
                             v-model="row.description"
                             placeholder="描述"
-                            @input="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())"
+                            @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())"
                           />
-                          <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(definitionForm.requestConfig.body.formItems, index, bodyFormParamDefaults())">删除</button>
+                          <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(caseDrawerForm.requestConfig.body.formItems, index, bodyFormParamDefaults())">删除</button>
                         </div>
-                        <button type="button" class="ms-like-add-row" @click="definitionForm.requestConfig.body.formItems.push(emptyKeyValue(bodyFormParamDefaults()))">+ 添加一行</button>
+                        <button type="button" class="ms-like-add-row" @click="caseDrawerForm.requestConfig.body.formItems.push(emptyKeyValue(bodyFormParamDefaults()))">+ 添加一行</button>
                       </div>
                       <div v-else class="ms-like-empty-body">请求没有 Body</div>
                     </div>
@@ -4342,7 +4315,7 @@ function formatTimeLabel(value?: string | null) {
                 <template v-else-if="caseDrawerRequestTab === 'pre'">
                   <div class="request-section" data-testid="pre-processors-section">
                     <ApiProcessorEditor
-                      v-model="definitionForm.preProcessors"
+                      v-model="caseDrawerForm.preProcessors"
                       v-model:active-id="activePreProcessorId"
                       stage="pre"
                       :db-connections="dbConnections"
@@ -4354,7 +4327,7 @@ function formatTimeLabel(value?: string | null) {
                 <template v-else-if="caseDrawerRequestTab === 'post'">
                   <div class="request-section" data-testid="post-processors-section">
                     <ApiProcessorEditor
-                      v-model="definitionForm.postProcessors"
+                      v-model="caseDrawerForm.postProcessors"
                       v-model:active-id="activePostProcessorId"
                       stage="post"
                       :db-connections="dbConnections"
@@ -4366,7 +4339,7 @@ function formatTimeLabel(value?: string | null) {
                 <template v-else-if="caseDrawerRequestTab === 'tests'">
                   <div class="request-section" data-testid="assertions-section">
                     <ApiAssertionEditor
-                      v-model="definitionForm.assertions"
+                      v-model="caseDrawerForm.assertions"
                       v-model:active-id="activeAssertionId"
                       :latest-response="caseDrawerResponseStep?.response ?? null"
                     />
@@ -4380,7 +4353,7 @@ function formatTimeLabel(value?: string | null) {
                   <div class="request-section">
                     <div class="ms-auth-panel">
                       <div class="ms-auth-panel-title">认证方式</div>
-                      <el-radio-group v-model="definitionForm.requestConfig.authConfig.authType" class="ms-auth-radio-group">
+                      <el-radio-group v-model="caseDrawerForm.requestConfig.authConfig.authType" class="ms-auth-radio-group">
                         <el-radio-button
                           v-for="option in requestAuthTypeOptions"
                           :key="option.value"
@@ -4390,13 +4363,13 @@ function formatTimeLabel(value?: string | null) {
                         </el-radio-button>
                       </el-radio-group>
                       <div
-                        v-if="definitionForm.requestConfig.authConfig.authType === 'BASIC'"
+                        v-if="caseDrawerForm.requestConfig.authConfig.authType === 'BASIC'"
                         class="ms-auth-form"
                       >
                         <div class="ms-auth-form-item">
                           <label class="ms-auth-form-label">Username</label>
                           <el-input
-                            v-model="definitionForm.requestConfig.authConfig.basicAuth.userName"
+                            v-model="caseDrawerForm.requestConfig.authConfig.basicAuth.userName"
                             placeholder="username"
                             class="ms-auth-form-control"
                           />
@@ -4404,7 +4377,7 @@ function formatTimeLabel(value?: string | null) {
                         <div class="ms-auth-form-item">
                           <label class="ms-auth-form-label">Password</label>
                           <el-input
-                            v-model="definitionForm.requestConfig.authConfig.basicAuth.password"
+                            v-model="caseDrawerForm.requestConfig.authConfig.basicAuth.password"
                             placeholder="password"
                             class="ms-auth-form-control"
                             show-password
@@ -4412,13 +4385,13 @@ function formatTimeLabel(value?: string | null) {
                         </div>
                       </div>
                       <div
-                        v-else-if="definitionForm.requestConfig.authConfig.authType === 'DIGEST'"
+                        v-else-if="caseDrawerForm.requestConfig.authConfig.authType === 'DIGEST'"
                         class="ms-auth-form"
                       >
                         <div class="ms-auth-form-item">
                           <label class="ms-auth-form-label">Username</label>
                           <el-input
-                            v-model="definitionForm.requestConfig.authConfig.digestAuth.userName"
+                            v-model="caseDrawerForm.requestConfig.authConfig.digestAuth.userName"
                             placeholder="username"
                             class="ms-auth-form-control"
                           />
@@ -4426,7 +4399,7 @@ function formatTimeLabel(value?: string | null) {
                         <div class="ms-auth-form-item">
                           <label class="ms-auth-form-label">Password</label>
                           <el-input
-                            v-model="definitionForm.requestConfig.authConfig.digestAuth.password"
+                            v-model="caseDrawerForm.requestConfig.authConfig.digestAuth.password"
                             placeholder="password"
                             class="ms-auth-form-control"
                             show-password
@@ -4441,33 +4414,33 @@ function formatTimeLabel(value?: string | null) {
                   <div class="request-section ms-like-form-panel">
                     <div class="ms-like-form-row" data-testid="definition-name-input">
                       <div class="ms-like-form-label">接口名称</div>
-                      <el-input v-model="definitionForm.name" class="ms-like-form-control" placeholder="接口名称" />
+                      <el-input v-model="caseDrawerForm.name" class="ms-like-form-control" placeholder="接口名称" />
                     </div>
                     <div class="ms-like-form-row">
                       <div class="ms-like-form-label">模块 / 目录</div>
-                      <el-input v-model="definitionForm.directoryName" class="ms-like-form-control" placeholder="模块 / 目录" />
+                      <el-input v-model="caseDrawerForm.directoryName" class="ms-like-form-control" placeholder="模块 / 目录" />
                     </div>
                     <div class="ms-like-form-row">
                       <div class="ms-like-form-label">标签</div>
                       <el-input
-                        :model-value="readTagInput(definitionForm.tags)"
+                        :model-value="readTagInput(caseDrawerForm.tags)"
                         class="ms-like-form-control"
                         placeholder="标签，逗号分隔"
-                        @update:model-value="(value: string | number) => updateTagInput(definitionForm, String(value))"
+                        @update:model-value="(value: string | number) => updateTagInput(caseDrawerForm, String(value))"
                       />
                     </div>
                     <div class="ms-like-form-row">
                       <div class="ms-like-form-label">超时时间</div>
-                      <el-input-number v-model="definitionForm.requestConfig.timeoutMs" :min="1000" :step="1000" class="ms-like-form-control full-width" />
+                      <el-input-number v-model="caseDrawerForm.requestConfig.timeoutMs" :min="1000" :step="1000" class="ms-like-form-control full-width" />
                     </div>
                     <div class="ms-like-form-row align-start">
                       <div class="ms-like-form-label">描述</div>
-                      <el-input v-model="definitionForm.description" class="ms-like-form-control" type="textarea" :rows="4" placeholder="接口描述、调用约束或备注" />
+                      <el-input v-model="caseDrawerForm.description" class="ms-like-form-control" type="textarea" :rows="4" placeholder="接口描述、调用约束或备注" />
                     </div>
                     <div class="ms-like-settings-hint">
                       <span>写入空间 {{ currentDefinitionWorkspaceLabel }}</span>
                       <span>调试上下文 {{ currentEnvironmentName }} / {{ currentVariableSetName }}</span>
-                      <span>最后运行 {{ formatTimeLabel(definitionForm.lastRunAt) }}</span>
+                      <span>最后运行 {{ formatTimeLabel(caseDrawerForm.lastRunAt) }}</span>
                     </div>
                   </div>
                 </template>
@@ -4475,7 +4448,7 @@ function formatTimeLabel(value?: string | null) {
             </template>
 
             <template #response>
-              <div v-if="caseDrawerShouldShowResponsePanel" class="ms-like-response-shell case-drawer-response-shell">
+              <div class="ms-like-response-shell case-drawer-response-shell">
                 <div class="ms-like-response-header">
                   <div class="ms-like-response-title">响应内容</div>
                   <div v-if="!caseDrawerShowResponseEmptyState" class="ms-like-response-metrics">
@@ -5436,26 +5409,6 @@ function formatTimeLabel(value?: string | null) {
   background: #fff;
 }
 
-.case-drawer-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 1998;
-  background: rgba(15, 23, 42, 0.42);
-}
-
-.ms-like-main.is-case-drawer-mode {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 1999;
-  width: min(58vw, 1120px);
-  min-width: 960px;
-  border-left: 1px solid var(--el-border-color-light);
-  box-shadow: -18px 0 42px rgba(15, 23, 42, 0.18);
-  background: #fff;
-}
-
 .ms-like-main > * {
   min-height: 0;
 }
@@ -5536,77 +5489,6 @@ function formatTimeLabel(value?: string | null) {
   font-size: 13px;
   font-weight: 600;
   line-height: 1;
-}
-
-.case-drawer-summary-path {
-  min-width: 0;
-  color: #344054;
-  font-size: 14px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.case-drawer-name-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 12px;
-  align-items: center;
-}
-
-.case-drawer-name-input {
-  min-width: 0;
-}
-
-.case-drawer-meta-row {
-  display: grid;
-  grid-template-columns: 160px 1fr minmax(220px, 1.2fr);
-  gap: 16px;
-  align-items: center;
-}
-
-.case-drawer-meta-field,
-.case-drawer-tags-field {
-  min-width: 0;
-}
-
-.ms-like-main.is-case-drawer-mode .ms-like-editor-shell {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  padding: 16px 20px 18px;
-}
-
-.ms-like-request-row.is-case-drawer-request-row {
-  grid-template-columns: 120px minmax(0, 1fr) auto;
-}
-
-.ms-like-main.is-case-drawer-mode .ms-like-request-row {
-  gap: 10px;
-}
-
-.ms-like-main.is-case-drawer-mode .ms-like-top-tabs {
-  gap: 28px;
-}
-
-.ms-like-main.is-case-drawer-mode .ms-like-top-tab {
-  font-size: 15px;
-  padding: 12px 0 13px;
-}
-
-.ms-like-main.is-case-drawer-mode :deep(.el-input__wrapper),
-.ms-like-main.is-case-drawer-mode :deep(.el-select__wrapper),
-.ms-like-main.is-case-drawer-mode :deep(.el-input-number .el-input__wrapper) {
-  min-height: 40px;
-}
-
-.ms-like-main.is-case-drawer-mode :deep(.el-button) {
-  min-height: 40px;
-  padding-inline: 18px;
-}
-
-.ms-like-main.is-case-drawer-mode :deep(.el-input__count) {
-  font-size: 12px;
 }
 
 .case-drawer-footer {
@@ -6241,6 +6123,44 @@ function formatTimeLabel(value?: string | null) {
   font-weight: 500;
 }
 
+.case-drawer-response-shell {
+  min-height: 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--el-border-color-light);
+}
+
+.case-drawer-response-shell .ms-like-response-header {
+  min-height: 36px;
+  padding: 0 16px;
+}
+
+.case-drawer-response-shell .ms-like-response-empty {
+  padding: 6px 16px 12px;
+}
+
+.case-drawer-response-shell .ms-like-response-tabs {
+  margin: 0 16px;
+}
+
+.case-drawer-response-shell .ms-like-response-body {
+  padding: 0 16px 12px;
+}
+
+.case-drawer-response-shell .response-error-banner {
+  margin: 0 16px;
+}
+
+.case-drawer-body-editor {
+  min-height: 324px;
+}
+
+.case-drawer-body-editor :deep(.ms-monaco-editor),
+.case-drawer-body-editor :deep(.ms-monaco-editor__body),
+.case-drawer-body-editor :deep(.monaco-editor),
+.case-drawer-body-editor :deep(.overflow-guard) {
+  min-height: 300px !important;
+}
+
 .workspace-sidebar,
 .panel {
   padding: 16px;
@@ -6685,11 +6605,6 @@ pre {
 }
 
 @media (max-width: 1480px) {
-  .ms-like-main.is-case-drawer-mode {
-    min-width: 0;
-    width: 100%;
-  }
-
   .ms-like-param-table-grid--query {
       grid-template-columns: 24px 28px minmax(190px, 1.15fr) 112px minmax(220px, 1fr) 72px minmax(170px, 0.95fr) 64px;
   }
@@ -6716,11 +6631,6 @@ pre {
 
   .ms-like-main {
     flex: 1;
-  }
-
-  .ms-like-main.is-case-drawer-mode {
-    width: 100%;
-    min-width: 0;
   }
 
   .ms-like-request-row,

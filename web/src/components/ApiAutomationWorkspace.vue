@@ -2,19 +2,23 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import type { Directive } from 'vue'
 import {
-  Close,
   Fold,
   Folder,
   FolderOpened,
+  MoreFilled,
   Plus,
+  Setting,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
+import { useTableSettings, type TableSettingsColumn } from '../composables/useTableSettings'
 import { useWorkspace } from '../composables/useWorkspace'
 import { useWorkspaceAccess } from '../composables/useWorkspaceAccess'
 import ApiAssertionEditor from './ApiAssertionEditor.vue'
+import ApiCaseDrawer from './ApiCaseDrawer.vue'
 import ApiProcessorEditor from './ApiProcessorEditor.vue'
 import MonacoCodeEditor from './MonacoCodeEditor.vue'
+import TableSettingsDrawer from './TableSettingsDrawer.vue'
 import type {
   ApiAssertionConfig,
   ApiAuthConfig,
@@ -51,6 +55,8 @@ type ApiRequestEditorDetail = ApiDefinitionDetail & {
   resourceType: RequestEditorResourceType
   definitionId: number | null
   definitionName: string | null
+  casePriority?: string | null
+  caseStatus?: string | null
 }
 
 type RequestEditorTab = {
@@ -77,6 +83,9 @@ const requestAuthTypeOptions = [
   { label: 'Basic Auth', value: 'BASIC' },
   { label: 'Digest Auth', value: 'DIGEST' },
 ] as const
+const casePriorityOptions = ['P0', 'P1', 'P2', 'P3'] as const
+const caseStatusOptions = ['进行中', '已完成', '已废弃'] as const
+const CASE_LIST_PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50] as const
 
 type DefinitionDirectoryTreeNode = {
   key: string
@@ -201,6 +210,8 @@ const definitionForm = reactive<ApiRequestEditorDetail>({
   lastRunAt: null,
   updatedAt: null,
   createdAt: null,
+  casePriority: 'P0',
+  caseStatus: '进行中',
   requestConfig: {
     method: 'GET',
     path: '',
@@ -331,9 +342,35 @@ const currentDefinitionCases = computed(() => {
   }
   return apiCases.value.filter(item => item.definitionId === definitionId)
 })
+const caseListColumns = computed<TableSettingsColumn[]>(() => [
+  { key: 'id', label: 'ID', required: true, defaultVisible: true },
+  { key: 'name', label: '用例名称', required: true, defaultVisible: true },
+  { key: 'protocol', label: '协议', defaultVisible: true },
+  { key: 'priority', label: '用例等级', defaultVisible: true },
+  { key: 'status', label: '状态', defaultVisible: true },
+  { key: 'path', label: '路径', defaultVisible: true },
+  { key: 'tags', label: '标签', defaultVisible: true },
+  { key: 'creator', label: '创建人', defaultVisible: true },
+])
+const caseListSettings = useTableSettings({
+  storageKey: 'api-automation-definition-case-list-settings',
+  columns: caseListColumns,
+  pageSizeEnabled: true,
+  defaultPageSize: 10,
+  pageSizeOptions: [...CASE_LIST_PAGE_SIZE_OPTIONS],
+})
+const visibleCaseListColumnKeys = computed(() => new Set(caseListSettings.visibleColumns.value.map(item => item.key)))
+const caseListCurrentPage = ref(1)
+const pagedDefinitionCases = computed(() => {
+  const start = (caseListCurrentPage.value - 1) * caseListSettings.pageSize.value
+  return currentDefinitionCases.value.slice(start, start + caseListSettings.pageSize.value)
+})
+const caseListTotalPages = computed(() => Math.max(1, Math.ceil(currentDefinitionCases.value.length / caseListSettings.pageSize.value)))
 const isCaseDrawerMode = computed(() => activeRequestEditorTab.value?.resourceType === 'case')
-const caseDrawerTitle = computed(() => definitionForm.name || '新建用例')
+const caseDrawerTitle = computed(() => (definitionForm.id ? '编辑用例' : '创建用例'))
 const caseDrawerSubtitle = computed(() => definitionForm.definitionName || '接口用例')
+const caseDrawerMethod = computed(() => definitionForm.requestConfig.method || definitionForm.method || 'GET')
+const caseDrawerPath = computed(() => definitionForm.requestConfig.path || definitionForm.path || '')
 const showCaseListContent = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && activeRequestTab.value === 'cases')
 const visibleRequestEditorTabs = computed(() => requestEditorTabs.value.filter(item => item.resourceType === 'definition'))
 
@@ -713,6 +750,15 @@ const currentExtractionResults = computed(() => currentResponseStep.value?.extra
 const currentProcessorResults = computed(() => currentResponseStep.value?.processorResults ?? [])
 const currentDebugError = computed(() => currentResponseStep.value?.errorMessage || activeRequestEditorTab.value?.debugFailureSummary || '')
 const showResponseEmptyState = computed(() => !currentResponseStep.value && !currentDebugError.value)
+const shouldShowResponsePanel = computed(() => {
+  if (showCaseListContent.value) {
+    return false
+  }
+  if (!isCaseDrawerMode.value) {
+    return true
+  }
+  return !showResponseEmptyState.value || !!currentDebugError.value
+})
 const queryEnabledCount = computed(() =>
   definitionForm.requestConfig.queryParams.filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false).length,
 )
@@ -956,6 +1002,10 @@ const actualRequestPreview = computed(() => {
     body: getModeBodyText(definitionForm.requestConfig.body.type) || null,
   }, null, 2)
 })
+const caseTagsInput = computed({
+  get: () => readTagInput(definitionForm.tags),
+  set: (value: string) => updateTagInput(definitionForm, value),
+})
 
 async function pickBinaryBodyFile() {
   const input = document.createElement('input')
@@ -1039,6 +1089,17 @@ watch(filteredScenarios, (items) => {
   }
 })
 
+watch(currentDefinitionCases, () => {
+  const maxPage = Math.max(1, Math.ceil(currentDefinitionCases.value.length / caseListSettings.pageSize.value))
+  if (caseListCurrentPage.value > maxPage) {
+    caseListCurrentPage.value = maxPage
+  }
+}, { deep: true })
+
+watch(() => caseListSettings.pageSize.value, () => {
+  caseListCurrentPage.value = 1
+})
+
 watch(
   () => definitionSaveForm.workspaceCode,
   (workspace) => {
@@ -1065,6 +1126,7 @@ watch(definitionDirectoryTree, (tree) => {
 
 onMounted(() => {
   openNewRequestTab()
+  caseListSettings.load()
   void bootstrap()
 })
 
@@ -1377,6 +1439,7 @@ function toEditorDetailFromDefinition(detail: ApiDefinitionDetail): ApiRequestEd
 }
 
 function toEditorDetailFromCase(detail: ApiDefinitionCaseDetail): ApiRequestEditorDetail {
+  const meta = detail as ApiDefinitionCaseDetail & { casePriority?: string | null, caseStatus?: string | null, priority?: string | null, status?: string | null }
   return {
     ...JSON.parse(JSON.stringify(detail)) as ApiDefinitionCaseDetail,
     directoryName: '',
@@ -1384,6 +1447,8 @@ function toEditorDetailFromCase(detail: ApiDefinitionCaseDetail): ApiRequestEdit
     resourceType: 'case',
     definitionId: detail.definitionId,
     definitionName: detail.definitionName,
+    casePriority: meta.casePriority || meta.priority || 'P0',
+    caseStatus: meta.caseStatus || meta.status || '进行中',
   }
 }
 
@@ -1430,6 +1495,8 @@ function buildEmptyDefinitionDetail(): ApiRequestEditorDetail {
     lastRunAt: null,
     updatedAt: null,
     createdAt: null,
+    casePriority: 'P0',
+    caseStatus: '进行中',
     requestConfig: {
       method: 'GET',
       path: '',
@@ -1693,6 +1760,28 @@ async function openCaseEditor(id: number) {
 function openCaseDraftFromDefinition(options?: { fromSavedDefinition?: boolean }) {
   const detail = buildCaseDraftFromCurrentDefinition(options)
   const tab = makeRequestEditorTab(detail)
+  requestEditorTabs.value.push(tab)
+  caseDrawerSourceEditorKey.value = activeRequestEditorKey.value
+  activateRequestEditorTab(tab.key)
+}
+
+async function runCaseItem(id: number) {
+  await openCaseEditor(id)
+  await debugActiveEditor()
+}
+
+async function duplicateCaseItem(id: number) {
+  const detail = await platformApi.getApiDefinitionCaseDetail(workspaceCode.value, id)
+  const duplicated = Object.assign(buildEmptyDefinitionDetail(), toEditorDetailFromCase(detail), {
+    resourceType: 'case' as const,
+    id: 0,
+    name: detail.name ? `${detail.name} - 副本` : '新建用例',
+    lastRunResult: null,
+    lastRunAt: null,
+    createdAt: null,
+    updatedAt: null,
+  })
+  const tab = makeRequestEditorTab(duplicated)
   requestEditorTabs.value.push(tab)
   caseDrawerSourceEditorKey.value = activeRequestEditorKey.value
   activateRequestEditorTab(tab.key)
@@ -2862,6 +2951,29 @@ function readTagInput(tags: string[]) {
   return tags.join(', ')
 }
 
+function formatCaseTags(tags?: string[] | null) {
+  return tags?.length ? tags.join(', ') : '-'
+}
+
+function caseProtocolLabel() {
+  return 'HTTP'
+}
+
+function casePriorityLabel(item: ApiDefinitionCaseItem) {
+  const meta = item as ApiDefinitionCaseItem & { casePriority?: string | null, priority?: string | null }
+  return meta.casePriority || meta.priority || '-'
+}
+
+function caseStatusLabel(item: ApiDefinitionCaseItem) {
+  const meta = item as ApiDefinitionCaseItem & { caseStatus?: string | null, status?: string | null }
+  return meta.caseStatus || meta.status || '-'
+}
+
+function updateCaseListPageSize(size: number) {
+  caseListSettings.updatePageSize(size)
+  caseListCurrentPage.value = 1
+}
+
 function uniqueNonEmpty(values: Array<string | null | undefined>) {
   return Array.from(new Set(values.filter((item): item is string => !!item && item.trim().length > 0)))
 }
@@ -2957,18 +3069,8 @@ function formatTimeLabel(value?: string | null) {
             </div>
           </aside>
 
-          <section :class="['ms-like-main', { 'is-case-drawer-mode': isCaseDrawerMode }]">
-            <div v-if="isCaseDrawerMode" class="case-drawer-top">
-              <div class="case-drawer-header">
-                <div class="case-drawer-title">{{ caseDrawerTitle }}</div>
-                <div class="case-drawer-subtitle">{{ caseDrawerSubtitle }}</div>
-              </div>
-              <el-button text class="case-drawer-close" @click="closeCaseDrawer">
-                <el-icon><Close /></el-icon>
-              </el-button>
-            </div>
-
-            <div v-else class="ms-like-tab-strip">
+          <section class="ms-like-main">
+            <div class="ms-like-tab-strip">
               <button
                 v-for="item in visibleRequestEditorTabs"
                 :key="item.key"
@@ -2991,7 +3093,54 @@ function formatTimeLabel(value?: string | null) {
                 &#24403;&#21069;&#22788;&#20110; ALL &#35270;&#35282;&#65292;&#35831;&#20808;&#22312;&#39030;&#37096;&#36873;&#25321;&#30446;&#26631;&#31354;&#38388;&#21518;&#20877;&#20445;&#23384;&#25110;&#35843;&#35797;&#12290;
               </div>
 
-              <div class="ms-like-request-row">
+              <div v-if="isCaseDrawerMode" class="case-drawer-summary-card">
+                <div class="case-drawer-summary-main">
+                  <div class="case-drawer-summary-name">{{ caseDrawerSubtitle }}</div>
+                  <div class="case-drawer-summary-meta">
+                    <span :class="['case-drawer-method-tag', `request-method-${caseDrawerMethod.toLowerCase()}`]">{{ caseDrawerMethod }}</span>
+                    <span class="case-drawer-summary-path">{{ caseDrawerPath || '未设置路径' }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="isCaseDrawerMode" class="case-drawer-name-row">
+                <el-input
+                  v-model="definitionForm.name"
+                  maxlength="255"
+                  show-word-limit
+                  placeholder="请输入用例名称"
+                  class="case-drawer-name-input"
+                />
+                <el-button type="primary" :disabled="!canDebugDefinition" :loading="saving" @click="debugActiveEditor">
+                  服务端执行
+                </el-button>
+                <el-dropdown v-if="!definitionForm.id" split-button :disabled="!canWriteDefinition" :loading="saving" @click="saveActiveEditor">
+                  创建
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item @click="saveAndDebugActiveEditor">创建并执行</el-dropdown-item>
+                      <el-dropdown-item @click="removeActiveEditor">关闭用例</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
+
+              <div v-if="isCaseDrawerMode" class="case-drawer-meta-row">
+                <el-select v-model="definitionForm.casePriority" class="case-drawer-meta-field" placeholder="优先级">
+                  <el-option v-for="item in casePriorityOptions" :key="item" :label="item" :value="item" />
+                </el-select>
+                <el-select v-model="definitionForm.caseStatus" class="case-drawer-meta-field" placeholder="状态">
+                  <el-option v-for="item in caseStatusOptions" :key="item" :label="item" :value="item" />
+                </el-select>
+                <el-input
+                  :model-value="readTagInput(definitionForm.tags)"
+                  class="case-drawer-tags-field"
+                  placeholder="添加标签，回车结束"
+                  @update:model-value="(value: string | number) => updateTagInput(definitionForm, String(value))"
+                />
+              </div>
+
+              <div :class="['ms-like-request-row', { 'is-case-drawer-request-row': isCaseDrawerMode }]">
                 <el-select
                   v-model="definitionForm.requestConfig.method"
                   :class="['request-method-select', requestMethodClass(definitionForm.requestConfig.method)]"
@@ -3008,10 +3157,10 @@ function formatTimeLabel(value?: string | null) {
                 </el-select>
                 <el-input v-model="definitionForm.requestConfig.path" class="request-url-input" placeholder="&#35831;&#36755;&#20837;&#21253;&#21547; http/https &#30340;&#23436;&#25972; URL &#25110;&#25509;&#21475;&#36335;&#24452;" data-testid="definition-url-input" />
                 <el-button @click="promptImportCurl">Curl</el-button>
-                <el-button type="primary" :disabled="!canDebugDefinition" :loading="saving" @click="debugActiveEditor">
+                <el-button v-if="!isCaseDrawerMode" type="primary" :disabled="!canDebugDefinition" :loading="saving" @click="debugActiveEditor">
                   &#21457;&#36865;
                 </el-button>
-                <el-dropdown split-button :disabled="!canWriteDefinition" :loading="saving" data-testid="definition-save-button" @click="saveActiveEditor">
+                <el-dropdown v-if="!isCaseDrawerMode" split-button :disabled="!canWriteDefinition" :loading="saving" data-testid="definition-save-button" @click="saveActiveEditor">
                   &#20445;&#23384;
                   <template #dropdown>
                     <el-dropdown-menu>
@@ -3045,18 +3194,74 @@ function formatTimeLabel(value?: string | null) {
                     <el-button @click="openCaseDraftFromDefinition()">从当前草稿生成用例</el-button>
                   </div>
                   <div v-if="!currentDefinitionCases.length" class="empty-hint">当前接口下还没有用例</div>
-                  <div v-else class="asset-list compact">
-                    <div v-for="item in currentDefinitionCases" :key="item.id" class="execution-item">
-                      <div>
-                        <div class="execution-name">{{ item.name }}</div>
-                        <div class="execution-meta">{{ item.method }} {{ item.path }}</div>
-                      </div>
-                      <div class="execution-actions">
-                        <el-tag size="small" :type="resultTagType(item.lastRunResult)">{{ item.lastRunResult || '未运行' }}</el-tag>
-                        <el-button size="small" @click="openCaseEditor(item.id)">编辑</el-button>
-                        <el-button size="small" type="primary" @click="openCaseEditor(item.id)">执行</el-button>
-                      </div>
-                    </div>
+                  <div v-else class="case-list-table-wrap">
+                  <el-table :data="pagedDefinitionCases" size="small" class="case-list-table">
+                    <el-table-column v-if="visibleCaseListColumnKeys.has('id')" prop="id" label="ID" width="92" />
+                    <el-table-column v-if="visibleCaseListColumnKeys.has('name')" prop="name" label="用例名称" min-width="200" show-overflow-tooltip />
+                    <el-table-column v-if="visibleCaseListColumnKeys.has('protocol')" label="协议" width="90">
+                      <template #default>
+                        {{ caseProtocolLabel() }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column v-if="visibleCaseListColumnKeys.has('priority')" label="用例等级" width="100">
+                      <template #default="{ row }">
+                        {{ casePriorityLabel(row) }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column v-if="visibleCaseListColumnKeys.has('status')" label="状态" width="110">
+                      <template #default="{ row }">
+                        {{ caseStatusLabel(row) }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column v-if="visibleCaseListColumnKeys.has('path')" prop="path" label="路径" min-width="240" show-overflow-tooltip />
+                    <el-table-column v-if="visibleCaseListColumnKeys.has('tags')" label="标签" min-width="160" show-overflow-tooltip>
+                      <template #default="{ row }">
+                        {{ formatCaseTags(row.tags) }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column v-if="visibleCaseListColumnKeys.has('creator')" label="创建人" width="110">
+                      <template #default>-</template>
+                    </el-table-column>
+                    <el-table-column width="148" fixed="right" align="center" header-align="center">
+                      <template #header>
+                        <div class="case-list-operation-header">
+                          <span>操作</span>
+                          <el-button text class="table-settings-trigger case-list-settings-trigger" @click="caseListSettings.settingsVisible.value = true">
+                            <el-icon><Setting /></el-icon>
+                          </el-button>
+                        </div>
+                      </template>
+                      <template #default="{ row }">
+                        <div class="case-list-actions">
+                          <el-button text type="primary" size="small" class="case-list-action-button" @click="openCaseEditor(row.id)">编辑</el-button>
+                          <el-button text size="small" type="primary" @click="runCaseItem(row.id)">执行</el-button>
+                          <el-dropdown trigger="click" placement="bottom-end">
+                            <el-button text type="primary" size="small" class="case-list-more-button">
+                              <el-icon><MoreFilled /></el-icon>
+                            </el-button>
+                            <template #dropdown>
+                              <el-dropdown-menu class="case-list-more-menu">
+                                <el-dropdown-item class="case-list-menu-item" @click="duplicateCaseItem(row.id)">复制</el-dropdown-item>
+                                <el-dropdown-item class="case-list-menu-item is-danger" @click="removeCase(row.id)">删除</el-dropdown-item>
+                              </el-dropdown-menu>
+                            </template>
+                          </el-dropdown>
+                        </div>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                  <div class="case-list-pagination">
+                    <div class="case-list-pagination-summary">共 {{ currentDefinitionCases.length }} 条 / {{ caseListTotalPages }} 页</div>
+                    <el-pagination
+                      v-model:current-page="caseListCurrentPage"
+                      :page-size="caseListSettings.pageSize.value"
+                      :page-sizes="[...CASE_LIST_PAGE_SIZE_OPTIONS]"
+                      size="small"
+                      layout="sizes, prev, pager, next"
+                      :total="currentDefinitionCases.length"
+                      @size-change="updateCaseListPageSize"
+                    />
+                  </div>
                   </div>
                 </div>
               </div>
@@ -3448,7 +3653,7 @@ function formatTimeLabel(value?: string | null) {
                 </template>
               </div>
 
-            <div v-if="!showCaseListContent" class="ms-like-response-shell">
+            <div v-if="shouldShowResponsePanel" class="ms-like-response-shell">
               <div class="ms-like-response-header">
                 <div class="ms-like-response-title">响应内容</div>
                 <div v-if="!showResponseEmptyState" class="ms-like-response-metrics">
@@ -3526,8 +3731,545 @@ function formatTimeLabel(value?: string | null) {
                 </div>
               </template>
             </div>
+
             </div>
           </section>
+
+          <ApiCaseDrawer
+            v-if="isCaseDrawerMode"
+            :model-value="isCaseDrawerMode"
+            :title="caseDrawerTitle"
+            :subtitle="caseDrawerSubtitle"
+            :summary-name="caseDrawerSubtitle"
+            :method="caseDrawerMethod"
+            :path="caseDrawerPath"
+            :case-name="definitionForm.name"
+            :priority="definitionForm.casePriority || 'P0'"
+            :priority-options="casePriorityOptions"
+            :status="definitionForm.caseStatus || '进行中'"
+            :status-options="caseStatusOptions"
+            :tags-input="caseTagsInput"
+            :can-debug="canDebugDefinition"
+            :can-write="canWriteDefinition"
+            :saving="saving"
+            :is-edit="!!definitionForm.id"
+            @request-close="closeCaseDrawer"
+            @update:case-name="value => definitionForm.name = value"
+            @update:priority="value => definitionForm.casePriority = value"
+            @update:status="value => definitionForm.caseStatus = value"
+            @update:tags-input="value => caseTagsInput = value"
+            @debug="debugActiveEditor"
+            @create="saveActiveEditor"
+            @create-and-debug="saveAndDebugActiveEditor"
+            @save="saveActiveEditor"
+          >
+            <template #request-row>
+              <div class="ms-like-request-row is-case-drawer-request-row">
+                <el-select
+                  v-model="definitionForm.requestConfig.method"
+                  :class="['request-method-select', requestMethodClass(definitionForm.requestConfig.method)]"
+                  popper-class="request-method-popper"
+                >
+                  <el-option
+                    v-for="method in requestMethodOptions"
+                    :key="method"
+                    :label="method"
+                    :value="method"
+                  >
+                    <span :class="['request-method-option', requestMethodClass(method)]">{{ method }}</span>
+                  </el-option>
+                </el-select>
+                <el-input v-model="definitionForm.requestConfig.path" class="request-url-input" placeholder="请输入包含 http/https 的完整 URL 或接口路径" />
+                <el-button @click="promptImportCurl">Curl</el-button>
+              </div>
+            </template>
+
+            <template #tabs>
+              <div class="ms-like-top-tabs case-drawer-top-tabs">
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'headers' }]" @click="setActiveRequestContentTab('headers')">请求头</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'body' }]" @click="setActiveRequestContentTab('body')">请求体</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'params' }]" @click="setActiveRequestContentTab('params')">
+                  Params
+                  <span v-if="queryEnabledCount" class="ms-like-tab-badge">{{ queryEnabledCount }}</span>
+                </button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'auth' }]" @click="setActiveRequestContentTab('auth')">Auth</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'pre' }]" @click="setActiveRequestContentTab('pre')">前置处理</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'post' }]" @click="setActiveRequestContentTab('post')">后置处理</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="setActiveRequestContentTab('tests')">断言</button>
+                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'settings' }]" @click="setActiveRequestContentTab('settings')">设置</button>
+              </div>
+            </template>
+
+            <template #body>
+              <div class="ms-like-request-body">
+                <template v-if="activeRequestTab === 'params'">
+                  <div class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--query">
+                    <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--query">
+                      <div class="ms-like-drag-cell"></div>
+                      <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
+                        <el-checkbox
+                          v-model="queryTableSelectionModel"
+                          :indeterminate="tableSelectionState(definitionForm.requestConfig.queryParams).indeterminate"
+                        />
+                      </div>
+                      <span class="ms-like-header-input-title">Query 参数</span>
+                      <span>类型</span>
+                      <span>参数值</span>
+                      <span>编码</span>
+                      <span>描述</span>
+                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('query')">批量添加</button>
+                    </div>
+                    <div
+                      v-for="(row, index) in definitionForm.requestConfig.queryParams"
+                      :key="`case-query-${index}`"
+                      :class="['ms-like-table-row', 'ms-like-param-table-grid', 'ms-like-param-table-grid--query', { 'is-dragging': isParamRowDragging('query', index), 'is-drag-over': isParamRowDragOver('query', index) }]"
+                      @dragover="handleParamDragOver('query', index, $event)"
+                      @drop="handleParamDrop('query', index, $event)"
+                    >
+                      <div class="ms-like-drag-cell">
+                        <button
+                          type="button"
+                          class="ms-like-drag-handle"
+                          draggable="true"
+                          aria-label="拖拽排序"
+                          @dragstart="handleParamDragStart('query', index, $event)"
+                          @dragend="handleParamDragEnd"
+                        >
+                          <span v-for="dotIndex in 6" :key="`case-query-dot-${index}-${dotIndex}`" class="ms-like-drag-dot"></span>
+                        </button>
+                      </div>
+                      <div class="ms-like-checkbox-cell">
+                        <el-checkbox v-model="row.enabled" />
+                      </div>
+                      <div class="ms-like-name-field">
+                        <button
+                          type="button"
+                          :class="['ms-like-required-button', { active: row.required }]"
+                          @click="row.required = !row.required"
+                        >
+                          *
+                        </button>
+                        <el-input
+                          v-model="row.key"
+                          placeholder="参数名称"
+                          @input="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
+                        />
+                      </div>
+                      <el-select v-model="row.paramType" @change="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())">
+                        <el-option v-for="option in queryParamTypeOptions" :key="option" :label="option" :value="option" />
+                      </el-select>
+                      <el-input
+                        v-model="row.value"
+                        placeholder="参数值 / {{variable}}"
+                        @input="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
+                      />
+                      <div class="ms-like-switch-cell ms-like-switch-cell--query">
+                        <el-switch v-model="row.encode" size="small" />
+                      </div>
+                      <el-input
+                        v-model="row.description"
+                        placeholder="描述"
+                        @input="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
+                      />
+                      <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(definitionForm.requestConfig.queryParams, index, queryParamDefaults())">删除</button>
+                    </div>
+                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.queryParams)">+ 添加一行</button>
+                  </div>
+                </template>
+
+                <template v-else-if="activeRequestTab === 'headers'">
+                  <div class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--header">
+                    <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--header">
+                      <div class="ms-like-drag-cell"></div>
+                      <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
+                        <el-checkbox
+                          v-model="headerTableSelectionModel"
+                          :indeterminate="tableSelectionState(definitionForm.requestConfig.headers).indeterminate"
+                        />
+                      </div>
+                      <span class="ms-like-header-input-title">参数名称</span>
+                      <span>参数值</span>
+                      <span>描述</span>
+                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('header')">批量添加</button>
+                    </div>
+                    <div
+                      v-for="(row, index) in definitionForm.requestConfig.headers"
+                      :key="`case-header-${index}`"
+                      :class="['ms-like-table-row', 'ms-like-param-table-grid', 'ms-like-param-table-grid--header', { 'is-dragging': isParamRowDragging('header', index), 'is-drag-over': isParamRowDragOver('header', index) }]"
+                      @dragover="handleParamDragOver('header', index, $event)"
+                      @drop="handleParamDrop('header', index, $event)"
+                    >
+                      <div class="ms-like-drag-cell">
+                        <button
+                          type="button"
+                          class="ms-like-drag-handle"
+                          draggable="true"
+                          aria-label="拖拽排序"
+                          @dragstart="handleParamDragStart('header', index, $event)"
+                          @dragend="handleParamDragEnd"
+                        >
+                          <span v-for="dotIndex in 6" :key="`case-header-dot-${index}-${dotIndex}`" class="ms-like-drag-dot"></span>
+                        </button>
+                      </div>
+                      <div class="ms-like-checkbox-cell">
+                        <el-checkbox v-model="row.enabled" />
+                      </div>
+                      <div class="ms-like-header-input-cell">
+                        <el-input
+                          v-model="row.key"
+                          placeholder="参数名称"
+                          @input="handleKeyValueRowInput(definitionForm.requestConfig.headers, headerParamDefaults())"
+                        />
+                      </div>
+                      <el-input
+                        v-model="row.value"
+                        placeholder="参数值"
+                        @input="handleKeyValueRowInput(definitionForm.requestConfig.headers, headerParamDefaults())"
+                      />
+                      <el-input
+                        v-model="row.description"
+                        placeholder="描述"
+                        @input="handleKeyValueRowInput(definitionForm.requestConfig.headers, headerParamDefaults())"
+                      />
+                      <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(definitionForm.requestConfig.headers, index, headerParamDefaults())">删除</button>
+                    </div>
+                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(definitionForm.requestConfig.headers)">+ 添加一行</button>
+                  </div>
+                </template>
+
+                <template v-else-if="activeRequestTab === 'body'">
+                  <div class="request-section">
+                    <div class="ms-like-body-type-row">
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('NONE') }]" @click="setBodyMode('NONE')">none</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('FORM_DATA') }]" @click="setBodyMode('FORM_DATA')">form-data</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('FORM_URLENCODED') }]" @click="setBodyMode('FORM_URLENCODED')">x-www-form-urlencoded</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_JSON') }]" @click="setBodyMode('RAW_JSON')">json</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_XML') }]" @click="setBodyMode('RAW_XML')">xml</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_TEXT') }]" @click="setBodyMode('RAW_TEXT')">raw</button>
+                      <button :class="['ms-like-body-chip', { active: isBodyMode('BINARY') }]" @click="setBodyMode('BINARY')">binary</button>
+                    </div>
+                    <div class="ms-like-body-mode-shell">
+                      <MonacoCodeEditor
+                        v-if="['RAW_JSON', 'RAW_XML', 'RAW_TEXT'].includes(definitionForm.requestConfig.body.type)"
+                        v-model="activeBodyRawText"
+                        :language="activeBodyLanguage"
+                        height="300px"
+                      />
+                      <div v-else-if="definitionForm.requestConfig.body.type === 'BINARY'" class="request-section ms-like-form-panel">
+                        <div class="ms-like-form-row">
+                          <div class="ms-like-form-label">File</div>
+                          <div class="ms-like-form-control ms-like-binary-actions">
+                            <el-button @click="pickBinaryBodyFile">
+                              {{ definitionForm.requestConfig.body.fileName ? '重新选择' : '选择文件' }}
+                            </el-button>
+                            <el-button :disabled="!definitionForm.requestConfig.body.binaryBase64" @click="clearBinaryBodyFile">清空</el-button>
+                          </div>
+                        </div>
+                        <div class="ms-like-form-row">
+                          <div class="ms-like-form-label">已选文件</div>
+                          <div class="empty-hint">
+                            <template v-if="definitionForm.requestConfig.body.fileName">
+                              <span class="binary-file-name">{{ definitionForm.requestConfig.body.fileName }}</span>
+                              <span v-if="binaryBodySizeLabel" class="binary-file-size">{{ binaryBodySizeLabel }}</span>
+                            </template>
+                            <template v-else>
+                              尚未选择二进制文件
+                            </template>
+                          </div>
+                        </div>
+                      </div>
+                      <div
+                        v-else-if="['FORM_URLENCODED', 'FORM_DATA'].includes(definitionForm.requestConfig.body.type)"
+                        class="body-form-grid ms-like-table-surface ms-like-param-table ms-like-param-table--body-form"
+                      >
+                        <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--body-form">
+                          <div class="ms-like-drag-cell"></div>
+                          <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
+                            <el-checkbox
+                              v-model="bodyFormTableSelectionModel"
+                              :indeterminate="tableSelectionState(definitionForm.requestConfig.body.formItems).indeterminate"
+                            />
+                          </div>
+                          <span class="ms-like-header-input-title">参数名称</span>
+                          <span>类型</span>
+                          <span>参数值</span>
+                          <span>描述</span>
+                          <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('body-form')">批量添加</button>
+                        </div>
+                        <div
+                          v-for="(row, index) in definitionForm.requestConfig.body.formItems"
+                          :key="`case-body-${index}`"
+                          :class="['ms-like-table-row', 'ms-like-param-table-grid', 'ms-like-param-table-grid--body-form', { 'is-dragging': isParamRowDragging('body-form', index), 'is-drag-over': isParamRowDragOver('body-form', index) }]"
+                          @dragover="handleParamDragOver('body-form', index, $event)"
+                          @drop="handleParamDrop('body-form', index, $event)"
+                        >
+                          <div class="ms-like-drag-cell">
+                            <button
+                              type="button"
+                              class="ms-like-drag-handle"
+                              draggable="true"
+                              aria-label="拖拽排序"
+                              @dragstart="handleParamDragStart('body-form', index, $event)"
+                              @dragend="handleParamDragEnd"
+                            >
+                              <span v-for="dotIndex in 6" :key="`case-body-dot-${index}-${dotIndex}`" class="ms-like-drag-dot"></span>
+                            </button>
+                          </div>
+                          <div class="ms-like-checkbox-cell">
+                            <el-checkbox v-model="row.enabled" />
+                          </div>
+                          <div class="ms-like-name-field">
+                            <button
+                              type="button"
+                              :class="['ms-like-required-button', { active: row.required }]"
+                              @click="row.required = !row.required"
+                            >
+                              *
+                            </button>
+                            <el-input
+                              v-model="row.key"
+                              placeholder="参数名称"
+                              @input="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())"
+                            />
+                          </div>
+                          <el-select v-model="row.paramType" @change="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())">
+                            <el-option v-for="option in bodyParamTypeOptions" :key="option" :label="option" :value="option" />
+                          </el-select>
+                          <el-input
+                            v-model="row.value"
+                            placeholder="参数值"
+                            @input="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())"
+                          />
+                          <el-input
+                            v-model="row.description"
+                            placeholder="描述"
+                            @input="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())"
+                          />
+                          <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(definitionForm.requestConfig.body.formItems, index, bodyFormParamDefaults())">删除</button>
+                        </div>
+                        <button type="button" class="ms-like-add-row" @click="definitionForm.requestConfig.body.formItems.push(emptyKeyValue(bodyFormParamDefaults()))">+ 添加一行</button>
+                      </div>
+                      <div v-else class="ms-like-empty-body">请求没有 Body</div>
+                    </div>
+                  </div>
+                </template>
+
+                <template v-else-if="activeRequestTab === 'pre'">
+                  <div class="request-section" data-testid="pre-processors-section">
+                    <ApiProcessorEditor
+                      v-model="definitionForm.preProcessors"
+                      v-model:active-id="activePreProcessorId"
+                      stage="pre"
+                      :db-connections="dbConnections"
+                      :latest-response="currentResponseStep?.response ?? null"
+                    />
+                  </div>
+                </template>
+
+                <template v-else-if="activeRequestTab === 'post'">
+                  <div class="request-section" data-testid="post-processors-section">
+                    <ApiProcessorEditor
+                      v-model="definitionForm.postProcessors"
+                      v-model:active-id="activePostProcessorId"
+                      stage="post"
+                      :db-connections="dbConnections"
+                      :latest-response="currentResponseStep?.response ?? null"
+                    />
+                  </div>
+                </template>
+
+                <template v-else-if="activeRequestTab === 'tests'">
+                  <div class="request-section" data-testid="assertions-section">
+                    <ApiAssertionEditor
+                      v-model="definitionForm.assertions"
+                      v-model:active-id="activeAssertionId"
+                      :latest-response="currentResponseStep?.response ?? null"
+                    />
+                    <div class="editor-actions left">
+                      <el-button text type="primary" @click="openBatchAddDrawer('assertion')">批量添加</el-button>
+                    </div>
+                  </div>
+                </template>
+
+                <template v-else-if="activeRequestTab === 'auth'">
+                  <div class="request-section">
+                    <div class="ms-auth-panel">
+                      <div class="ms-auth-panel-title">认证方式</div>
+                      <el-radio-group v-model="definitionForm.requestConfig.authConfig.authType" class="ms-auth-radio-group">
+                        <el-radio-button
+                          v-for="option in requestAuthTypeOptions"
+                          :key="option.value"
+                          :value="option.value"
+                        >
+                          {{ option.label }}
+                        </el-radio-button>
+                      </el-radio-group>
+                      <div
+                        v-if="definitionForm.requestConfig.authConfig.authType === 'BASIC'"
+                        class="ms-auth-form"
+                      >
+                        <div class="ms-auth-form-item">
+                          <label class="ms-auth-form-label">Username</label>
+                          <el-input
+                            v-model="definitionForm.requestConfig.authConfig.basicAuth.userName"
+                            placeholder="username"
+                            class="ms-auth-form-control"
+                          />
+                        </div>
+                        <div class="ms-auth-form-item">
+                          <label class="ms-auth-form-label">Password</label>
+                          <el-input
+                            v-model="definitionForm.requestConfig.authConfig.basicAuth.password"
+                            placeholder="password"
+                            class="ms-auth-form-control"
+                            show-password
+                          />
+                        </div>
+                      </div>
+                      <div
+                        v-else-if="definitionForm.requestConfig.authConfig.authType === 'DIGEST'"
+                        class="ms-auth-form"
+                      >
+                        <div class="ms-auth-form-item">
+                          <label class="ms-auth-form-label">Username</label>
+                          <el-input
+                            v-model="definitionForm.requestConfig.authConfig.digestAuth.userName"
+                            placeholder="username"
+                            class="ms-auth-form-control"
+                          />
+                        </div>
+                        <div class="ms-auth-form-item">
+                          <label class="ms-auth-form-label">Password</label>
+                          <el-input
+                            v-model="definitionForm.requestConfig.authConfig.digestAuth.password"
+                            placeholder="password"
+                            class="ms-auth-form-control"
+                            show-password
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+
+                <template v-else>
+                  <div class="request-section ms-like-form-panel">
+                    <div class="ms-like-form-row" data-testid="definition-name-input">
+                      <div class="ms-like-form-label">接口名称</div>
+                      <el-input v-model="definitionForm.name" class="ms-like-form-control" placeholder="接口名称" />
+                    </div>
+                    <div class="ms-like-form-row">
+                      <div class="ms-like-form-label">模块 / 目录</div>
+                      <el-input v-model="definitionForm.directoryName" class="ms-like-form-control" placeholder="模块 / 目录" />
+                    </div>
+                    <div class="ms-like-form-row">
+                      <div class="ms-like-form-label">标签</div>
+                      <el-input
+                        :model-value="readTagInput(definitionForm.tags)"
+                        class="ms-like-form-control"
+                        placeholder="标签，逗号分隔"
+                        @update:model-value="(value: string | number) => updateTagInput(definitionForm, String(value))"
+                      />
+                    </div>
+                    <div class="ms-like-form-row">
+                      <div class="ms-like-form-label">超时时间</div>
+                      <el-input-number v-model="definitionForm.requestConfig.timeoutMs" :min="1000" :step="1000" class="ms-like-form-control full-width" />
+                    </div>
+                    <div class="ms-like-form-row align-start">
+                      <div class="ms-like-form-label">描述</div>
+                      <el-input v-model="definitionForm.description" class="ms-like-form-control" type="textarea" :rows="4" placeholder="接口描述、调用约束或备注" />
+                    </div>
+                    <div class="ms-like-settings-hint">
+                      <span>写入空间 {{ currentDefinitionWorkspaceLabel }}</span>
+                      <span>调试上下文 {{ currentEnvironmentName }} / {{ currentVariableSetName }}</span>
+                      <span>最后运行 {{ formatTimeLabel(definitionForm.lastRunAt) }}</span>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <template #response>
+              <div v-if="shouldShowResponsePanel" class="ms-like-response-shell case-drawer-response-shell">
+                <div class="ms-like-response-header">
+                  <div class="ms-like-response-title">响应内容</div>
+                  <div v-if="!showResponseEmptyState" class="ms-like-response-metrics">
+                    <span>状态 {{ currentResponseStatusCode ?? '-' }}</span>
+                    <span>耗时 {{ currentResponseDuration ?? '-' }}<template v-if="currentResponseDuration !== null"> ms</template></span>
+                    <span>大小 {{ currentResponseSize }}</span>
+                  </div>
+                </div>
+
+                <div v-if="currentDebugError" class="response-error-banner">
+                  {{ currentDebugError }}
+                </div>
+
+                <div v-if="showResponseEmptyState" class="ms-like-response-empty">
+                  <div class="ms-like-response-empty-card">
+                    <div class="ms-like-response-empty-visual">
+                      <div class="ms-like-response-empty-window">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                      </div>
+                    </div>
+                    <div class="ms-like-response-empty-text">点击 <span>发送</span> 获取响应内容</div>
+                  </div>
+                </div>
+                <template v-else>
+                  <div class="ms-like-response-tabs">
+                    <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'body' }]" @click="responsePreviewTab = 'body'">Body</button>
+                    <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'header' }]" @click="responsePreviewTab = 'header'">Header</button>
+                    <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'console' }]" @click="responsePreviewTab = 'console'">控制台</button>
+                    <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'actualRequest' }]" @click="responsePreviewTab = 'actualRequest'">实际请求</button>
+                  </div>
+
+                  <div class="ms-like-response-body">
+                    <MonacoCodeEditor
+                      v-if="responsePreviewTab === 'body'"
+                      :model-value="responseBodyPreview"
+                      :language="responseBodyLanguage"
+                      :read-only="true"
+                      :show-format-button="false"
+                      :fit-content="true"
+                      :max-fit-content-height="1000"
+                      height="100%"
+                    />
+                    <MonacoCodeEditor
+                      v-else-if="responsePreviewTab === 'header'"
+                      :model-value="responseHeadersPreview"
+                      language="json"
+                      :read-only="true"
+                      :show-format-button="false"
+                      :fit-content="true"
+                      :max-fit-content-height="1000"
+                      height="100%"
+                    />
+                    <MonacoCodeEditor
+                      v-else-if="responsePreviewTab === 'console'"
+                      :model-value="responseConsolePreview"
+                      language="text"
+                      :read-only="true"
+                      :show-format-button="false"
+                      :fit-content="true"
+                      :max-fit-content-height="1000"
+                      height="100%"
+                    />
+                    <MonacoCodeEditor
+                      v-else-if="responsePreviewTab === 'actualRequest'"
+                      :model-value="actualRequestPreview"
+                      language="json"
+                      :read-only="true"
+                      :show-format-button="false"
+                      :fit-content="true"
+                      :max-fit-content-height="1000"
+                      height="100%"
+                    />
+                  </div>
+                </template>
+              </div>
+            </template>
+          </ApiCaseDrawer>
         </div>
       </el-tab-pane>
 
@@ -3930,6 +4672,27 @@ function formatTimeLabel(value?: string | null) {
         </div>
       </div>
     </el-drawer>
+
+    <TableSettingsDrawer
+      v-model="caseListSettings.settingsVisible.value"
+      :columns="caseListSettings.settingsColumns.value.map(column => ({
+        key: column.key,
+        label: column.label,
+        required: column.required,
+        visible: column.required ? true : visibleCaseListColumnKeys.has(column.key),
+        draggable: caseListSettings.canDragColumn(column.key),
+      }))"
+      :page-size-enabled="true"
+      :page-size="caseListSettings.pageSizeDisplay.value"
+      :page-size-options="[...CASE_LIST_PAGE_SIZE_OPTIONS]"
+      :dragging-key="caseListSettings.draggingColumnKey.value"
+      @page-size-change="updateCaseListPageSize"
+      @toggle-column="caseListSettings.toggleColumnVisibility"
+      @drag-start="caseListSettings.handleDragStart"
+      @drag-end="caseListSettings.handleDragEnd"
+      @drop-column="caseListSettings.moveColumnToTarget"
+      @reset="caseListSettings.reset"
+    />
   </section>
 </template>
 
@@ -4354,6 +5117,32 @@ function formatTimeLabel(value?: string | null) {
   color: #8b5cf6;
 }
 
+.case-drawer-method-tag.request-method-get {
+  color: #16a34a;
+}
+
+.case-drawer-method-tag.request-method-post {
+  color: #f97316;
+}
+
+.case-drawer-method-tag.request-method-put,
+.case-drawer-method-tag.request-method-options,
+.case-drawer-method-tag.request-method-head {
+  color: #3b82f6;
+}
+
+.case-drawer-method-tag.request-method-delete {
+  color: #dc2626;
+}
+
+.case-drawer-method-tag.request-method-patch {
+  color: #ec4899;
+}
+
+.case-drawer-method-tag.request-method-trace {
+  color: #8b5cf6;
+}
+
 .ms-like-main {
   display: flex;
   flex-direction: column;
@@ -4362,12 +5151,24 @@ function formatTimeLabel(value?: string | null) {
   background: #fff;
 }
 
+.case-drawer-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1998;
+  background: rgba(15, 23, 42, 0.42);
+}
+
 .ms-like-main.is-case-drawer-mode {
-  margin-left: auto;
-  width: min(72vw, 1180px);
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1999;
+  width: min(58vw, 1120px);
   min-width: 960px;
   border-left: 1px solid var(--el-border-color-light);
-  box-shadow: -12px 0 32px rgba(15, 23, 42, 0.08);
+  box-shadow: -18px 0 42px rgba(15, 23, 42, 0.18);
+  background: #fff;
 }
 
 .ms-like-main > * {
@@ -4379,7 +5180,7 @@ function formatTimeLabel(value?: string | null) {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 16px 10px;
+  padding: 18px 20px 14px;
   border-bottom: 1px solid var(--el-border-color-light);
   background: #fff;
 }
@@ -4392,18 +5193,144 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .case-drawer-title {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   color: #101828;
 }
 
 .case-drawer-subtitle {
-  font-size: 12px;
+  font-size: 13px;
   color: #667085;
 }
 
 .case-drawer-close {
   flex: 0 0 auto;
+}
+
+.case-drawer-summary-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0 2px;
+}
+
+.case-drawer-summary-main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.case-drawer-summary-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #101828;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.case-drawer-summary-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.case-drawer-method-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid currentColor;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.case-drawer-summary-path {
+  min-width: 0;
+  color: #344054;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.case-drawer-name-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.case-drawer-name-input {
+  min-width: 0;
+}
+
+.case-drawer-meta-row {
+  display: grid;
+  grid-template-columns: 160px 1fr minmax(220px, 1.2fr);
+  gap: 16px;
+  align-items: center;
+}
+
+.case-drawer-meta-field,
+.case-drawer-tags-field {
+  min-width: 0;
+}
+
+.ms-like-main.is-case-drawer-mode .ms-like-editor-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 20px 18px;
+}
+
+.ms-like-request-row.is-case-drawer-request-row {
+  grid-template-columns: 120px minmax(0, 1fr) auto;
+}
+
+.ms-like-main.is-case-drawer-mode .ms-like-request-row {
+  gap: 10px;
+}
+
+.ms-like-main.is-case-drawer-mode .ms-like-top-tabs {
+  gap: 28px;
+}
+
+.ms-like-main.is-case-drawer-mode .ms-like-top-tab {
+  font-size: 15px;
+  padding: 12px 0 13px;
+}
+
+.ms-like-main.is-case-drawer-mode :deep(.el-input__wrapper),
+.ms-like-main.is-case-drawer-mode :deep(.el-select__wrapper),
+.ms-like-main.is-case-drawer-mode :deep(.el-input-number .el-input__wrapper) {
+  min-height: 40px;
+}
+
+.ms-like-main.is-case-drawer-mode :deep(.el-button) {
+  min-height: 40px;
+  padding-inline: 18px;
+}
+
+.ms-like-main.is-case-drawer-mode :deep(.el-input__count) {
+  font-size: 12px;
+}
+
+.case-drawer-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 14px 20px 18px;
+  border-top: 1px solid var(--el-border-color-light);
+  background: #fff;
 }
 
 .ms-like-tab-strip {
@@ -5405,6 +6332,71 @@ pre {
 
 .editor-actions.left {
   justify-content: flex-start;
+}
+
+.case-list-table {
+  width: 100%;
+}
+
+.case-list-table-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.case-list-operation-header {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.case-list-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+.case-list-action-button,
+.case-list-more-button {
+  color: var(--el-color-primary);
+}
+
+.case-list-more-button {
+  width: 26px;
+  min-width: 26px;
+  padding-inline: 0;
+}
+
+.case-list-settings-trigger {
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  color: var(--el-text-color-secondary);
+}
+
+.case-list-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.case-list-pagination-summary {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+:deep(.case-list-more-menu .case-list-menu-item) {
+  color: var(--el-color-primary);
+}
+
+:deep(.case-list-more-menu .case-list-menu-item.is-danger) {
+  color: var(--el-color-danger);
 }
 
 @media (max-width: 1480px) {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Close } from '@element-plus/icons-vue'
 
 const props = defineProps<{
@@ -29,9 +30,10 @@ const emit = defineEmits<{
   (event: 'requestClose'): void
   (event: 'debug'): void
   (event: 'create'): void
-  (event: 'createAndDebug'): void
   (event: 'save'): void
 }>()
+
+const submitLabel = computed(() => (props.isEdit ? '保存' : '创建'))
 
 function handleDrawerModelValueChange(value: boolean) {
   if (!value) {
@@ -59,6 +61,14 @@ function updateStatus(value: string | number) {
 
 function updateTagsInput(value: string | number) {
   emit('update:tagsInput', String(value))
+}
+
+function handleSubmitClick() {
+  if (props.isEdit) {
+    emit('save')
+    return
+  }
+  emit('create')
 }
 </script>
 
@@ -109,21 +119,6 @@ function updateTagsInput(value: string | number) {
           <el-button type="primary" :disabled="!props.canDebug" :loading="props.saving" @click="emit('debug')">
             发送
           </el-button>
-          <el-dropdown
-            v-if="!props.isEdit"
-            split-button
-            :disabled="!props.canWrite"
-            :loading="props.saving"
-            @click="emit('create')"
-          >
-            创建
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item @click="emit('createAndDebug')">创建并发送</el-dropdown-item>
-                <el-dropdown-item @click="handleCloseClick">关闭用例</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
         </div>
 
         <div class="api-case-drawer-meta-row">
@@ -162,9 +157,11 @@ function updateTagsInput(value: string | number) {
         </div>
       </div>
 
-      <div v-if="props.isEdit" class="api-case-drawer-footer">
+      <div class="api-case-drawer-footer">
         <el-button @click="handleCloseClick">取消</el-button>
-        <el-button type="primary" :disabled="!props.canWrite" :loading="props.saving" @click="emit('save')">保存</el-button>
+        <el-button type="primary" :disabled="!props.canWrite" :loading="props.saving" @click="handleSubmitClick">
+          {{ submitLabel }}
+        </el-button>
       </div>
     </div>
   </el-drawer>
@@ -200,7 +197,7 @@ function updateTagsInput(value: string | number) {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 16px 12px;
+  padding: 14px 16px 10px;
   border-bottom: 1px solid var(--el-border-color-light);
   background: #fff;
 }
@@ -208,18 +205,20 @@ function updateTagsInput(value: string | number) {
 .api-case-drawer-header {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
 }
 
 .api-case-drawer-title {
   font-size: 17px;
   font-weight: 600;
+  line-height: 24px;
   color: #101828;
 }
 
 .api-case-drawer-subtitle {
   font-size: 13px;
+  line-height: 20px;
   color: #667085;
 }
 
@@ -242,10 +241,10 @@ function updateTagsInput(value: string | number) {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 16px;
+  padding: 14px 16px 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
 }
@@ -268,20 +267,20 @@ function updateTagsInput(value: string | number) {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 4px 0 2px;
+  padding: 0;
 }
 
 .api-case-drawer-summary-main {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
 }
 
 .api-case-drawer-summary-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -290,13 +289,13 @@ function updateTagsInput(value: string | number) {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  min-width: 54px;
-  height: 32px;
-  padding: 0 14px;
-  border: 1px solid #d9dde5;
-  border-radius: 6px;
+  min-width: 50px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid #e4e7ec;
+  border-radius: 4px;
   background: #fff;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   line-height: 1;
 }
@@ -304,7 +303,8 @@ function updateTagsInput(value: string | number) {
 .api-case-drawer-summary-path {
   min-width: 0;
   color: #344054;
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 20px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -312,8 +312,8 @@ function updateTagsInput(value: string | number) {
 
 .api-case-drawer-name-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
   align-items: center;
 }
 
@@ -326,8 +326,13 @@ function updateTagsInput(value: string | number) {
 .api-case-drawer-meta-row {
   display: grid;
   grid-template-columns: 160px 1fr minmax(220px, 1.2fr);
-  gap: 12px;
+  gap: 8px;
   align-items: center;
+}
+
+.api-case-drawer-name-row :deep(.el-button) {
+  min-height: 38px;
+  padding-inline: 16px;
 }
 
 .api-case-drawer-tabs,
@@ -350,6 +355,7 @@ function updateTagsInput(value: string | number) {
   padding: 12px 16px 16px;
   border-top: 1px solid var(--el-border-color-light);
   background: #fff;
+  box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.05);
 }
 
 :deep(.api-case-drawer .el-input__wrapper),
@@ -363,53 +369,55 @@ function updateTagsInput(value: string | number) {
   padding-inline: 18px;
 }
 
+:deep(.api-case-drawer-footer .el-button) {
+  min-width: 88px;
+  padding-inline: 0;
+}
+
 :deep(.api-case-drawer .el-input__count) {
   font-size: 12px;
 }
 
 .api-case-drawer-method-tag.request-method-get {
   color: #16a34a;
-  border-color: #86efac;
-  background: #f0fdf4;
+  border-color: #bbf7d0;
+  background: #f7fef9;
 }
 
 .api-case-drawer-method-tag.request-method-post {
   color: #f97316;
-  border-color: #fdba74;
-  background: #fff7ed;
+  border-color: #fed7aa;
+  background: #fffaf5;
 }
 
 .api-case-drawer-method-tag.request-method-put,
 .api-case-drawer-method-tag.request-method-options,
 .api-case-drawer-method-tag.request-method-head {
   color: #3b82f6;
-  border-color: #93c5fd;
-  background: #eff6ff;
+  border-color: #bfdbfe;
+  background: #f7fbff;
 }
 
 .api-case-drawer-method-tag.request-method-delete {
   color: #dc2626;
-  border-color: #fca5a5;
-  background: #fef2f2;
+  border-color: #fecaca;
+  background: #fff7f7;
 }
 
 .api-case-drawer-method-tag.request-method-patch {
   color: #ec4899;
-  border-color: #f9a8d4;
-  background: #fdf2f8;
+  border-color: #fbcfe8;
+  background: #fff7fb;
 }
 
 .api-case-drawer-method-tag.request-method-trace {
   color: #8b5cf6;
-  border-color: #c4b5fd;
-  background: #f5f3ff;
+  border-color: #ddd6fe;
+  background: #faf8ff;
 }
 
 @media (max-width: 960px) {
-  .api-case-drawer-name-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
+  .api-case-drawer-name-row,
   .api-case-drawer-meta-row {
     grid-template-columns: minmax(0, 1fr);
   }

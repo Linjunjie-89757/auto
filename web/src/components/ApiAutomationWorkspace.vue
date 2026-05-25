@@ -136,7 +136,6 @@ const saving = ref(false)
 const reportDrawerVisible = ref(false)
 const bugDialogVisible = ref(false)
 const definitionSaveDialogVisible = ref(false)
-const definitionSaveDialogDebugAfterSave = ref(false)
 const batchAddDrawerVisible = ref(false)
 const activeTab = ref<'definitions' | 'scenarios' | 'execution' | 'reports' | 'settings'>('definitions')
 const activeRequestTab = ref<RequestContentTab>('body')
@@ -378,12 +377,18 @@ const caseListSettings = useTableSettings({
 })
 const visibleCaseListColumnKeys = computed(() => new Set(caseListSettings.visibleColumns.value.map(item => item.key)))
 const caseListCurrentPage = ref(1)
+const caseDrawerCreateSource = ref<'draft' | 'savedDefinition'>('draft')
 const pagedDefinitionCases = computed(() => {
   const start = (caseListCurrentPage.value - 1) * caseListSettings.pageSize.value
   return currentDefinitionCases.value.slice(start, start + caseListSettings.pageSize.value)
 })
 const caseListTotalPages = computed(() => Math.max(1, Math.ceil(currentDefinitionCases.value.length / caseListSettings.pageSize.value)))
-const caseDrawerTitle = computed(() => (caseDrawerForm.id ? '编辑用例' : '创建用例'))
+const caseDrawerTitle = computed(() => {
+  if (caseDrawerForm.id) {
+    return '编辑用例'
+  }
+  return caseDrawerCreateSource.value === 'savedDefinition' ? '保存为用例' : '创建用例'
+})
 const caseDrawerSubtitle = computed(() => caseDrawerForm.definitionName || caseDrawerForm.name || '未命名接口')
 const caseDrawerMethod = computed(() => caseDrawerForm.requestConfig.method || caseDrawerForm.method || 'GET')
 const caseDrawerPath = computed(() => caseDrawerForm.requestConfig.path || caseDrawerForm.path || '')
@@ -1997,6 +2002,7 @@ async function openCaseEditor(id: number) {
   caseDrawerSourceEditorKey.value = activeRequestEditorKey.value
   const target = requestEditorTabs.value.find(item => item.resourceType === 'case' && item.resourceId === id)
   if (target) {
+    caseDrawerCreateSource.value = 'draft'
     caseDrawerEditorKey.value = target.key
     caseDrawerRequestTab.value = target.activeTab || resolveDefaultRequestTab(target.draft)
     caseDrawerResponsePreviewTab.value = 'body'
@@ -2011,6 +2017,7 @@ function openCaseDraftFromDefinition(options?: { fromSavedDefinition?: boolean }
   const tab = makeRequestEditorTab(detail)
   requestEditorTabs.value.push(tab)
   caseDrawerSourceEditorKey.value = activeRequestEditorKey.value
+  caseDrawerCreateSource.value = options?.fromSavedDefinition ? 'savedDefinition' : 'draft'
   caseDrawerEditorKey.value = tab.key
   caseDrawerRequestTab.value = tab.activeTab || resolveDefaultRequestTab(tab.draft)
   caseDrawerResponsePreviewTab.value = 'body'
@@ -2038,6 +2045,7 @@ async function duplicateCaseItem(id: number) {
   const tab = makeRequestEditorTab(duplicated)
   requestEditorTabs.value.push(tab)
   caseDrawerSourceEditorKey.value = activeRequestEditorKey.value
+  caseDrawerCreateSource.value = 'draft'
   caseDrawerEditorKey.value = tab.key
   caseDrawerRequestTab.value = tab.activeTab || resolveDefaultRequestTab(tab.draft)
   caseDrawerResponsePreviewTab.value = 'body'
@@ -2680,8 +2688,7 @@ async function persistCase(options?: { debugAfterSave?: boolean }) {
   }
 }
 
-function openDefinitionSaveDialog(debugAfterSave = false) {
-  definitionSaveDialogDebugAfterSave.value = debugAfterSave
+function openDefinitionSaveDialog() {
   syncDefinitionSaveForm()
   definitionSaveDialogVisible.value = true
 }
@@ -2704,10 +2711,7 @@ async function confirmDefinitionSaveDialog() {
   definitionForm.path = definitionSaveForm.path
   definitionForm.workspaceCode = definitionSaveForm.workspaceCode
   definitionForm.directoryName = definitionSaveForm.directoryName
-  await persistDefinition({ debugAfterSave: definitionSaveDialogDebugAfterSave.value })
-  if (!definitionSaveDialogVisible.value) {
-    definitionSaveDialogDebugAfterSave.value = false
-  }
+  await persistDefinition()
 }
 
 function moveScenarioStep(index: number, delta: number) {
@@ -2797,24 +2801,12 @@ async function debugDefinition() {
   }
 }
 
-async function saveAndDebugDefinition() {
-  try {
-    ensureScopedTargetWorkspace(definitionForm.workspaceCode)
-  }
-  catch (error) {
-    ElMessage.warning((error as Error).message)
+function saveDefinitionAsCase() {
+  if (activeRequestEditorTab.value?.resourceType !== 'definition' || !definitionForm.id) {
+    ElMessage.warning('请先保存接口定义')
     return
   }
-  if (definitionForm.id) {
-    if (!definitionForm.name.trim() || !definitionForm.requestConfig.path.trim()) {
-      ElMessage.warning('\u8bf7\u8865\u5168\u8bf7\u6c42\u540d\u79f0\u548c\u8bf7\u6c42 URL')
-      return
-    }
-    definitionForm.path = definitionForm.requestConfig.path.trim()
-    await persistDefinition({ debugAfterSave: true })
-    return
-  }
-  openDefinitionSaveDialog(true)
+  openCaseDraftFromDefinition({ fromSavedDefinition: true })
 }
 
 async function saveCase() {
@@ -2881,22 +2873,6 @@ async function debugCase() {
   }
 }
 
-async function saveAndDebugCase() {
-  try {
-    ensureScopedTargetWorkspace(definitionForm.workspaceCode)
-  }
-  catch (error) {
-    ElMessage.warning((error as Error).message)
-    return
-  }
-  if (!definitionForm.name.trim() || !definitionForm.requestConfig.path.trim()) {
-    ElMessage.warning('请补全用例名称和请求 URL')
-    return
-  }
-  definitionForm.path = definitionForm.requestConfig.path.trim()
-  await persistCase({ debugAfterSave: true })
-}
-
 async function runInCaseDrawerContext(action: () => Promise<void>) {
   const drawerTab = activeCaseDrawerEditorTab.value
   if (!drawerTab) {
@@ -2939,12 +2915,6 @@ async function debugCaseDrawer() {
   })
 }
 
-async function saveAndDebugCaseDrawer() {
-  await runInCaseDrawerContext(async () => {
-    await saveAndDebugCase()
-  })
-}
-
 async function saveActiveEditor() {
   if (activeRequestEditorTab.value?.resourceType === 'case') {
     await saveCase()
@@ -2959,14 +2929,6 @@ async function debugActiveEditor() {
     return
   }
   await debugDefinition()
-}
-
-async function saveAndDebugActiveEditor() {
-  if (activeRequestEditorTab.value?.resourceType === 'case') {
-    await saveAndDebugCase()
-    return
-  }
-  await saveAndDebugDefinition()
 }
 
 async function removeActiveEditor() {
@@ -3445,7 +3407,7 @@ function formatTimeLabel(value?: string | null) {
                   &#20445;&#23384;
                   <template #dropdown>
                     <el-dropdown-menu>
-                      <el-dropdown-item @click="saveAndDebugActiveEditor">&#20445;&#23384;&#24182;&#25191;&#34892;</el-dropdown-item>
+                      <el-dropdown-item v-if="activeRequestEditorTab?.resourceType === 'definition' && !!definitionForm.id" @click="saveDefinitionAsCase">保存为用例</el-dropdown-item>
                       <el-dropdown-item v-if="activeRequestEditorTab?.resourceType === 'definition'" @click="duplicateDefinition">&#22797;&#21046;&#25509;&#21475;</el-dropdown-item>
                       <el-dropdown-item @click="removeActiveEditor">{{ activeRequestEditorTab?.resourceType === 'case' ? '删除用例' : '删除接口' }}</el-dropdown-item>
                     </el-dropdown-menu>
@@ -3471,8 +3433,7 @@ function formatTimeLabel(value?: string | null) {
               <div v-if="showCaseListContent" class="ms-like-request-body">
                 <div class="request-section case-list-panel">
                   <div class="editor-actions left">
-                    <el-button type="primary" @click="openCaseDraftFromDefinition({ fromSavedDefinition: true })">新建用例</el-button>
-                    <el-button @click="openCaseDraftFromDefinition()">从当前草稿生成用例</el-button>
+                    <el-button type="primary" @click="openCaseDraftFromDefinition()">新建用例</el-button>
                   </div>
                   <div v-if="!currentDefinitionCases.length" class="empty-hint">当前接口下还没有用例</div>
                   <div v-else class="case-list-table-wrap">
@@ -4041,7 +4002,6 @@ function formatTimeLabel(value?: string | null) {
             @update:tags-input="value => caseDrawerTagsInput = value"
             @debug="debugCaseDrawer"
             @create="saveCaseDrawer"
-            @create-and-debug="saveAndDebugCaseDrawer"
             @save="saveCaseDrawer"
           >
             <template #tabs>

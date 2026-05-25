@@ -784,6 +784,19 @@ function formatResponseSize(body?: string | null) {
   return body ? `${new Blob([body]).size} B` : '0 B'
 }
 
+function formatStoredResponseSize(size?: number | null) {
+  if (size == null) {
+    return '-'
+  }
+  if (size < 1024) {
+    return `${size} B`
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`
+  }
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
 const currentResponseStep = computed(() => {
   return pickPreferredRunStep(activeRequestEditorTab.value?.debugStepResults ?? [])
 })
@@ -1936,6 +1949,10 @@ async function selectCaseDrawerRunHistory(historyId: number | null) {
   finally {
     caseDrawerRunHistoryDetailLoading.value = false
   }
+}
+
+function handleCaseDrawerHistoryRowClick(row: ApiDefinitionCaseRunHistoryItem) {
+  void selectCaseDrawerRunHistory(row.id)
 }
 
 async function loadCaseDrawerRunHistory(caseId?: number | null, preferredHistoryId?: number | null) {
@@ -4642,32 +4659,69 @@ function formatTimeLabel(value?: string | null) {
               </div>
               <div v-else-if="caseDrawerViewTab === 'runHistory'" class="case-drawer-history-panel">
                 <div class="case-drawer-history-list-shell">
-                  <div class="case-drawer-history-list-header">
-                    <span>执行时间</span>
-                    <span>结果</span>
-                    <span>状态码</span>
-                    <span>耗时</span>
-                    <span>环境</span>
-                    <span>执行人</span>
-                  </div>
                   <div v-if="caseDrawerRunHistoryLoading" class="case-drawer-history-loading">加载中...</div>
-                  <div v-else-if="!caseDrawerRunHistoryItems.length" class="case-drawer-history-empty">暂无执行历史</div>
-                  <template v-else>
-                    <button
-                      v-for="item in caseDrawerRunHistoryItems"
-                      :key="item.id"
-                      type="button"
-                      :class="['case-drawer-history-row', { active: selectedCaseDrawerRunHistoryId === item.id }]"
-                      @click="void selectCaseDrawerRunHistory(item.id)"
-                    >
-                      <span>{{ formatTimeLabel(item.createdAt) }}</span>
-                      <span :class="['case-drawer-history-result', item.result === 'SUCCESS' ? 'is-success' : 'is-failed']">{{ item.result === 'SUCCESS' ? '成功' : '失败' }}</span>
-                      <span>{{ item.statusCode ?? '-' }}</span>
-                      <span>{{ item.durationMs ?? '-' }}<template v-if="item.durationMs != null"> ms</template></span>
-                      <span>{{ item.environmentName || '默认' }}</span>
-                      <span>{{ item.operator || '-' }}</span>
-                    </button>
-                  </template>
+                  <el-table
+                    v-else
+                    :data="caseDrawerRunHistoryItems"
+                    size="small"
+                    class="case-drawer-history-table"
+                    row-key="id"
+                    highlight-current-row
+                    @row-click="handleCaseDrawerHistoryRowClick"
+                  >
+                    <el-table-column label="执行时间" min-width="162" show-overflow-tooltip>
+                      <template #default="{ row }">
+                        {{ formatTimeLabel(row.createdAt) }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="结果" width="78">
+                      <template #default="{ row }">
+                        <span :class="['case-drawer-history-result', row.result === 'SUCCESS' ? 'is-success' : 'is-failed']">
+                          {{ row.result === 'SUCCESS' ? '成功' : '失败' }}
+                        </span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="状态码" width="78" align="center">
+                      <template #default="{ row }">
+                        {{ row.statusCode ?? '-' }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="耗时" width="92">
+                      <template #default="{ row }">
+                        {{ row.durationMs ?? '-' }}<template v-if="row.durationMs != null"> ms</template>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="大小" width="92">
+                      <template #default="{ row }">
+                        {{ formatStoredResponseSize(row.responseSize) }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="环境" min-width="108" show-overflow-tooltip>
+                      <template #default="{ row }">
+                        {{ row.environmentName || '默认' }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="变量集" min-width="108" show-overflow-tooltip>
+                      <template #default="{ row }">
+                        {{ row.variableSetName || '未选择' }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="执行人" min-width="96" show-overflow-tooltip>
+                      <template #default="{ row }">
+                        {{ row.operator || '-' }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="88" align="center" header-align="center">
+                      <template #default="{ row }">
+                        <el-button text type="primary" size="small" class="case-drawer-history-detail-button" @click.stop="void selectCaseDrawerRunHistory(row.id)">
+                          查看详情
+                        </el-button>
+                      </template>
+                    </el-table-column>
+                    <template #empty>
+                      <div class="case-drawer-history-table-empty">暂无执行历史</div>
+                    </template>
+                  </el-table>
                 </div>
 
                 <div class="ms-like-response-shell case-drawer-history-detail-shell">
@@ -6549,43 +6603,24 @@ function formatTimeLabel(value?: string | null) {
   background: #fff;
 }
 
-.case-drawer-history-list-header,
-.case-drawer-history-row {
-  display: grid;
-  grid-template-columns: minmax(150px, 1.4fr) 76px 72px 92px minmax(120px, 1fr) 92px;
-  gap: 12px;
-  align-items: center;
-  padding: 0 16px;
-}
-
-.case-drawer-history-list-header {
-  min-height: 40px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  background: #f8fafc;
-  border-bottom: 1px solid var(--el-border-color-light);
-}
-
-.case-drawer-history-row {
+.case-drawer-history-table {
   width: 100%;
-  min-height: 46px;
-  border: 0;
-  border-bottom: 1px solid #f2f4f7;
-  background: #fff;
-  text-align: left;
-  color: var(--el-text-color-primary);
+}
+
+.case-drawer-history-table :deep(.el-table__header-wrapper th.el-table__cell) {
+  height: 40px;
+  background: #f8fafc;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.case-drawer-history-table :deep(.el-table__row) {
   cursor: pointer;
 }
 
-.case-drawer-history-row:last-child {
-  border-bottom: 0;
-}
-
-.case-drawer-history-row:hover {
-  background: #f8fbff;
-}
-
-.case-drawer-history-row.active {
+.case-drawer-history-table :deep(.el-table__row.current-row > td.el-table__cell),
+.case-drawer-history-table :deep(.el-table__row:hover > td.el-table__cell) {
   background: #eef4ff;
 }
 
@@ -6601,6 +6636,11 @@ function formatTimeLabel(value?: string | null) {
   color: #dc2626;
 }
 
+.case-drawer-history-detail-button {
+  padding-inline: 0;
+  color: var(--el-color-primary);
+}
+
 .case-drawer-history-loading,
 .case-drawer-history-empty,
 .case-drawer-history-placeholder {
@@ -6608,6 +6648,15 @@ function formatTimeLabel(value?: string | null) {
   align-items: center;
   justify-content: center;
   min-height: 120px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.case-drawer-history-table-empty {
+  min-height: 92px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--el-text-color-secondary);
   font-size: 13px;
 }

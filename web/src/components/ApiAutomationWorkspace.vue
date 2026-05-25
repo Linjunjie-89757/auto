@@ -1850,6 +1850,19 @@ function updateCaseDrawerDebugState(reportId: number | null, failureSummary: str
   caseDrawerDebugStepResults.value = [...stepResults]
 }
 
+function applyDebugResponseToEditorTab(tab: RequestEditorTab | null | undefined, response: {
+  reportId: number | null
+  failureSummary?: string | null
+  stepResults?: ApiRunStepResult[] | null
+}) {
+  if (!tab) {
+    return
+  }
+  tab.debugReportId = response.reportId
+  tab.debugFailureSummary = response.failureSummary || ''
+  tab.debugStepResults = response.stepResults || []
+}
+
 function activateRequestEditorTab(key: string) {
   const target = requestEditorTabs.value.find(item => item.key === key)
   if (!target) {
@@ -2552,78 +2565,94 @@ function syncDefinitionSaveForm() {
   definitionSaveForm.directoryName = resolveDefinitionDirectoryName(definitionSaveForm.workspaceCode)
 }
 
-function resolveDefinitionDirectoryName(targetWorkspaceCode?: string) {
-  const workspace = (targetWorkspaceCode || definitionForm.workspaceCode || selectedDefinitionWorkspaceCode.value || '').trim()
+function resolveDefinitionDirectoryNameFor(form: ApiRequestEditorDetail, targetWorkspaceCode?: string) {
+  const workspace = (targetWorkspaceCode || form.workspaceCode || selectedDefinitionWorkspaceCode.value || '').trim()
   const selectedPath = selectedDefinitionWorkspaceCode.value === workspace
     ? (selectedDefinitionModulePath.value || '').trim()
     : ''
-  const currentPath = (definitionForm.directoryName || '').trim()
-  if (!definitionForm.id && selectedPath) {
+  const currentPath = (form.directoryName || '').trim()
+  if (!form.id && selectedPath) {
     return selectedPath
   }
   return currentPath || selectedPath
 }
 
-function buildDefinitionMutationPayload() {
-  const targetWorkspaceCode = isAllScope.value ? definitionForm.workspaceCode || writableWorkspaces.value[0]?.code : workspaceCode.value
+function resolveDefinitionDirectoryName(targetWorkspaceCode?: string) {
+  return resolveDefinitionDirectoryNameFor(definitionForm, targetWorkspaceCode)
+}
+
+function buildDefinitionMutationPayloadFor(form: ApiRequestEditorDetail) {
+  const targetWorkspaceCode = isAllScope.value ? form.workspaceCode || writableWorkspaces.value[0]?.code : workspaceCode.value
   return {
     workspaceCode: targetWorkspaceCode,
-    name: definitionForm.name.trim(),
-    directoryName: (definitionForm.directoryName || '').trim() || null,
-    description: definitionForm.description,
-    tags: definitionForm.tags,
+    name: form.name.trim(),
+    directoryName: (form.directoryName || '').trim() || null,
+    description: form.description,
+    tags: form.tags,
     requestConfig: {
-      ...definitionForm.requestConfig,
-      path: definitionForm.requestConfig.path.trim(),
-      queryParams: prepareKeyValueRowsForPayload(definitionForm.requestConfig.queryParams),
-      headers: prepareKeyValueRowsForPayload(definitionForm.requestConfig.headers),
+      ...form.requestConfig,
+      path: form.requestConfig.path.trim(),
+      queryParams: prepareKeyValueRowsForPayload(form.requestConfig.queryParams),
+      headers: prepareKeyValueRowsForPayload(form.requestConfig.headers),
       body: {
-        ...definitionForm.requestConfig.body,
-        formItems: prepareKeyValueRowsForPayload(definitionForm.requestConfig.body.formItems),
+        ...form.requestConfig.body,
+        formItems: prepareKeyValueRowsForPayload(form.requestConfig.body.formItems),
       },
     },
-    assertions: definitionForm.assertions,
-    extractors: definitionForm.extractors,
-    preProcessors: definitionForm.preProcessors,
-    postProcessors: definitionForm.postProcessors,
+    assertions: form.assertions,
+    extractors: form.extractors,
+    preProcessors: form.preProcessors,
+    postProcessors: form.postProcessors,
+  }
+}
+
+function buildDefinitionMutationPayload() {
+  return buildDefinitionMutationPayloadFor(definitionForm)
+}
+
+function buildCaseMutationPayloadFor(form: ApiRequestEditorDetail, definitionId: number) {
+  const targetWorkspaceCode = isAllScope.value ? form.workspaceCode || writableWorkspaces.value[0]?.code : workspaceCode.value
+  return {
+    workspaceCode: targetWorkspaceCode,
+    definitionId,
+    name: form.name.trim(),
+    description: form.description,
+    tags: form.tags,
+    requestConfig: {
+      ...form.requestConfig,
+      path: form.requestConfig.path.trim(),
+      queryParams: prepareKeyValueRowsForPayload(form.requestConfig.queryParams),
+      headers: prepareKeyValueRowsForPayload(form.requestConfig.headers),
+      body: {
+        ...form.requestConfig.body,
+        formItems: prepareKeyValueRowsForPayload(form.requestConfig.body.formItems),
+      },
+    },
+    assertions: form.assertions,
+    preProcessors: form.preProcessors,
+    postProcessors: form.postProcessors,
   }
 }
 
 function buildCaseMutationPayload(definitionId: number) {
-  const targetWorkspaceCode = isAllScope.value ? definitionForm.workspaceCode || writableWorkspaces.value[0]?.code : workspaceCode.value
-  return {
-    workspaceCode: targetWorkspaceCode,
-    definitionId,
-    name: definitionForm.name.trim(),
-    description: definitionForm.description,
-    tags: definitionForm.tags,
-    requestConfig: {
-      ...definitionForm.requestConfig,
-      path: definitionForm.requestConfig.path.trim(),
-      queryParams: prepareKeyValueRowsForPayload(definitionForm.requestConfig.queryParams),
-      headers: prepareKeyValueRowsForPayload(definitionForm.requestConfig.headers),
-      body: {
-        ...definitionForm.requestConfig.body,
-        formItems: prepareKeyValueRowsForPayload(definitionForm.requestConfig.body.formItems),
-      },
-    },
-    assertions: definitionForm.assertions,
-    preProcessors: definitionForm.preProcessors,
-    postProcessors: definitionForm.postProcessors,
+  return buildCaseMutationPayloadFor(definitionForm, definitionId)
+}
+
+async function ensureCaseDefinitionSavedFor(form: ApiRequestEditorDetail) {
+  if (form.definitionId) {
+    return form.definitionId
   }
+  const payload = buildDefinitionMutationPayloadFor(form)
+  payload.name = (form.definitionName || form.name || '').trim()
+    || `${form.requestConfig.method || 'GET'} ${form.requestConfig.path.trim()}`
+  const detail = await platformApi.createApiDefinition(workspaceCode.value, payload)
+  form.definitionId = detail.id
+  form.definitionName = detail.name
+  return detail.id
 }
 
 async function ensureCaseDefinitionSaved() {
-  if (definitionForm.definitionId) {
-    return definitionForm.definitionId
-  }
-  const payload = buildDefinitionMutationPayload()
-  payload.name = (definitionForm.definitionName || definitionForm.name || '').trim()
-    || `${definitionForm.requestConfig.method || 'GET'} ${definitionForm.requestConfig.path.trim()}`
-  const detail = await platformApi.createApiDefinition(workspaceCode.value, payload)
-  definitionForm.definitionId = detail.id
-  definitionForm.definitionName = detail.name
-  return detail.id
+  return ensureCaseDefinitionSavedFor(definitionForm)
 }
 
 async function persistDefinition(options?: { debugAfterSave?: boolean }) {
@@ -2873,46 +2902,83 @@ async function debugCase() {
   }
 }
 
-async function runInCaseDrawerContext(action: () => Promise<void>) {
-  const drawerTab = activeCaseDrawerEditorTab.value
-  if (!drawerTab) {
+async function saveCaseDrawer() {
+  try {
+    ensureScopedTargetWorkspace(caseDrawerForm.workspaceCode)
+  }
+  catch (error) {
+    ElMessage.warning((error as Error).message)
     return
   }
-  const mainSnapshot = cloneEditorDetail(definitionForm)
-  const mainActiveEditorKey = activeRequestEditorKey.value
-  const mainRequestTab = activeRequestTab.value
-  const mainSelectedDefinitionId = selectedDefinitionId.value
-
-  requestEditorSyncing.value = true
-  activeRequestEditorKey.value = drawerTab.key
-  activeRequestTab.value = caseDrawerRequestTab.value
-  Object.assign(definitionForm, cloneEditorDetail(caseDrawerForm))
-  requestEditorSyncing.value = false
-
+  if (!caseDrawerForm.name.trim() || !caseDrawerForm.requestConfig.path.trim()) {
+    ElMessage.warning('请补全用例名称和请求 URL')
+    return
+  }
+  const isUpdate = !!caseDrawerForm.id
+  saving.value = true
   try {
-    await action()
-    applyCaseDrawerDetailToForm(cloneEditorDetail(definitionForm), { markSaved: true })
+    caseDrawerForm.name = caseDrawerForm.name.trim()
+    caseDrawerForm.requestConfig.path = caseDrawerForm.requestConfig.path.trim()
+    caseDrawerForm.path = caseDrawerForm.requestConfig.path
+    syncActiveBodyText(caseDrawerForm)
+    caseDrawerForm.directoryName = resolveDefinitionDirectoryNameFor(
+      caseDrawerForm,
+      isAllScope.value ? caseDrawerForm.workspaceCode || writableWorkspaces.value[0]?.code : workspaceCode.value,
+    )
+    const definitionId = await ensureCaseDefinitionSavedFor(caseDrawerForm)
+    const payload = buildCaseMutationPayloadFor(caseDrawerForm, definitionId)
+    const detail = isUpdate
+      ? await platformApi.updateApiDefinitionCase(workspaceCode.value, caseDrawerForm.id, payload)
+      : await platformApi.createApiDefinitionCase(workspaceCode.value, payload)
+    ElMessage.success(isUpdate ? '用例已更新' : '用例已保存')
+    await refreshData()
+    const latestDetail = toEditorDetailFromCase(await platformApi.getApiDefinitionCaseDetail(workspaceCode.value, detail.id))
+    applyCaseDrawerDetailToForm(latestDetail, { markSaved: true })
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
   }
   finally {
-    requestEditorSyncing.value = true
-    Object.assign(definitionForm, mainSnapshot)
-    activeRequestEditorKey.value = mainActiveEditorKey
-    activeRequestTab.value = mainRequestTab
-    selectedDefinitionId.value = mainSelectedDefinitionId
-    requestEditorSyncing.value = false
+    saving.value = false
   }
-}
-
-async function saveCaseDrawer() {
-  await runInCaseDrawerContext(async () => {
-    await saveCase()
-  })
 }
 
 async function debugCaseDrawer() {
-  await runInCaseDrawerContext(async () => {
-    await debugCase()
-  })
+  if (!canDebugCaseDrawer.value) {
+    ElMessage.warning('请补全请求方法和请求 URL')
+    return
+  }
+  saving.value = true
+  try {
+    syncActiveBodyText(caseDrawerForm)
+    const response = caseDrawerForm.definitionId
+      ? await platformApi.debugApiDefinitionCaseDraft(workspaceCode.value, {
+          ...buildCaseMutationPayloadFor(caseDrawerForm, caseDrawerForm.definitionId),
+          caseId: caseDrawerForm.id || null,
+          environmentId: runOptions.environmentId,
+          variableSetId: runOptions.variableSetId,
+        } satisfies ApiDebugCasePayload)
+      : await platformApi.debugApiDefinitionDraft(workspaceCode.value, {
+          ...buildDefinitionMutationPayloadFor(caseDrawerForm),
+          definitionId: null,
+          environmentId: runOptions.environmentId,
+          variableSetId: runOptions.variableSetId,
+        } satisfies ApiDebugDefinitionPayload)
+    applyDebugResponseToEditorTab(activeCaseDrawerEditorTab.value, response)
+    updateCaseDrawerDebugState(
+      response.reportId,
+      response.failureSummary || '',
+      response.stepResults || [],
+    )
+    caseDrawerResponsePreviewTab.value = 'body'
+    ElMessage.success(response.result === 'SUCCESS' ? '发送成功' : '发送完成')
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    saving.value = false
+  }
 }
 
 async function saveActiveEditor() {

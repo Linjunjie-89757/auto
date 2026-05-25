@@ -1,6 +1,7 @@
 package com.company.autoplatform.apiautomation;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.company.autoplatform.auth.CurrentUserContext;
 import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.common.NotFoundException;
 import com.company.autoplatform.common.PageResponse;
@@ -85,6 +86,7 @@ public class ApiAutomationService {
 
     private final ApiDefinitionMapper definitionMapper;
     private final ApiDefinitionCaseMapper caseMapper;
+    private final ApiDefinitionCaseRunHistoryMapper caseRunHistoryMapper;
     private final ApiScenarioMapper scenarioMapper;
     private final ApiRunStepResultMapper runStepResultMapper;
     private final EnvConfigMapper envConfigMapper;
@@ -100,6 +102,7 @@ public class ApiAutomationService {
     public ApiAutomationService(
             ApiDefinitionMapper definitionMapper,
             ApiDefinitionCaseMapper caseMapper,
+            ApiDefinitionCaseRunHistoryMapper caseRunHistoryMapper,
             ApiScenarioMapper scenarioMapper,
             ApiRunStepResultMapper runStepResultMapper,
             EnvConfigMapper envConfigMapper,
@@ -113,6 +116,7 @@ public class ApiAutomationService {
     ) {
         this.definitionMapper = definitionMapper;
         this.caseMapper = caseMapper;
+        this.caseRunHistoryMapper = caseRunHistoryMapper;
         this.scenarioMapper = scenarioMapper;
         this.runStepResultMapper = runStepResultMapper;
         this.envConfigMapper = envConfigMapper;
@@ -169,6 +173,24 @@ public class ApiAutomationService {
         ApiDefinitionCaseEntity entity = requireCase(id);
         validateReadable(entity.getWorkspaceId(), workspaceCode, "Current workspace cannot access the case");
         return toCaseDetail(entity);
+    }
+
+    public PageResponse<ApiDefinitionCaseRunHistoryItem> listCaseRunHistory(Long caseId, String workspaceCode) {
+        ApiDefinitionCaseEntity apiCase = requireCase(caseId);
+        validateReadable(apiCase.getWorkspaceId(), workspaceCode, "Current workspace cannot access the case");
+        List<ApiDefinitionCaseRunHistoryItem> items = caseRunHistoryMapper.selectList(new LambdaQueryWrapper<ApiDefinitionCaseRunHistoryEntity>()
+                        .eq(ApiDefinitionCaseRunHistoryEntity::getCaseId, caseId)
+                        .orderByDesc(ApiDefinitionCaseRunHistoryEntity::getCreatedAt))
+                .stream()
+                .map(this::toCaseRunHistoryItem)
+                .toList();
+        return new PageResponse<>(items, items.size());
+    }
+
+    public ApiDefinitionCaseRunHistoryDetail getCaseRunHistoryDetail(Long historyId, String workspaceCode) {
+        ApiDefinitionCaseRunHistoryEntity history = requireCaseRunHistory(historyId);
+        validateReadable(history.getWorkspaceId(), workspaceCode, "Current workspace cannot access the case run history");
+        return toCaseRunHistoryDetail(history);
     }
 
     public ApiDefinitionDetail createDefinition(String headerWorkspaceCode, SaveApiDefinitionRequest request) {
@@ -409,6 +431,13 @@ public class ApiAutomationService {
         RunStepComputation step = executeCase(apiCase, apiCase.getCaseName(), 1, context.variables(), context.environment());
         persistStep(envelope.report(), apiCase.getWorkspaceId(), step);
         finalizeRunCase(apiCase, step.success(), envelope.task(), envelope.report(), step);
+        persistCaseRunHistory(
+                apiCase,
+                envelope.report(),
+                step,
+                request.environmentId(),
+                request.variableSetId()
+        );
         return new ApiRunResponse(
                 envelope.task().getId(),
                 envelope.report().getId(),
@@ -486,9 +515,10 @@ public class ApiAutomationService {
         validateReadable(workspace.getId(), workspaceCode, "Current workspace cannot run the case");
         workspaceService.requireWritableWorkspace(workspace.getWorkspaceCode());
 
+        ApiDefinitionCaseEntity persistedCase = null;
         if (request.caseId() != null) {
-            ApiDefinitionCaseEntity apiCase = requireCase(request.caseId());
-            if (!apiCase.getWorkspaceId().equals(workspace.getId())) {
+            persistedCase = requireCase(request.caseId());
+            if (!persistedCase.getWorkspaceId().equals(workspace.getId())) {
                 throw new BadRequestException("Case does not belong to the selected workspace");
             }
         }
@@ -528,6 +558,19 @@ public class ApiAutomationService {
                 step.success() ? "SUCCESS" : "FAILED",
                 step.response().errorMessage()
         );
+        if (persistedCase != null) {
+            persistedCase.setLastRunResult(step.success() ? "SUCCESS" : "FAILED");
+            persistedCase.setLastRunAt(LocalDateTime.now());
+            persistedCase.setUpdatedAt(LocalDateTime.now());
+            caseMapper.updateById(persistedCase);
+            persistCaseRunHistory(
+                    persistedCase,
+                    envelope.report(),
+                    step,
+                    request.environmentId(),
+                    request.variableSetId()
+            );
+        }
         return new ApiRunResponse(
                 envelope.task().getId(),
                 envelope.report().getId(),
@@ -776,6 +819,61 @@ public class ApiAutomationService {
                 entity.getLastRunAt(),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt()
+        );
+    }
+
+    private ApiDefinitionCaseRunHistoryItem toCaseRunHistoryItem(ApiDefinitionCaseRunHistoryEntity entity) {
+        WorkspaceEntity workspace = workspaceService.requireWorkspaceById(entity.getWorkspaceId());
+        return new ApiDefinitionCaseRunHistoryItem(
+                entity.getId(),
+                workspace.getWorkspaceCode(),
+                workspace.getWorkspaceName(),
+                entity.getCaseId(),
+                entity.getDefinitionId(),
+                entity.getCaseName(),
+                entity.getReportId(),
+                entity.getRunResult(),
+                entity.getFailureSummary(),
+                entity.getStatusCode(),
+                entity.getDurationMs(),
+                entity.getResponseSize(),
+                entity.getEnvironmentId(),
+                entity.getEnvironmentName(),
+                entity.getVariableSetId(),
+                entity.getVariableSetName(),
+                entity.getOperatorName(),
+                entity.getCreatedAt()
+        );
+    }
+
+    private ApiDefinitionCaseRunHistoryDetail toCaseRunHistoryDetail(ApiDefinitionCaseRunHistoryEntity entity) {
+        WorkspaceEntity workspace = workspaceService.requireWorkspaceById(entity.getWorkspaceId());
+        List<ApiRunStepResultResponse> stepResults = runStepResultMapper.selectList(new LambdaQueryWrapper<ApiRunStepResultEntity>()
+                        .eq(ApiRunStepResultEntity::getReportId, entity.getReportId())
+                        .orderByAsc(ApiRunStepResultEntity::getStepOrder))
+                .stream()
+                .map(this::toRunStepResponse)
+                .toList();
+        return new ApiDefinitionCaseRunHistoryDetail(
+                entity.getId(),
+                workspace.getWorkspaceCode(),
+                workspace.getWorkspaceName(),
+                entity.getCaseId(),
+                entity.getDefinitionId(),
+                entity.getCaseName(),
+                entity.getReportId(),
+                entity.getRunResult(),
+                entity.getFailureSummary(),
+                entity.getStatusCode(),
+                entity.getDurationMs(),
+                entity.getResponseSize(),
+                entity.getEnvironmentId(),
+                entity.getEnvironmentName(),
+                entity.getVariableSetId(),
+                entity.getVariableSetName(),
+                entity.getOperatorName(),
+                entity.getCreatedAt(),
+                stepResults
         );
     }
 
@@ -2199,6 +2297,56 @@ public class ApiAutomationService {
         reportMapper.updateById(report);
     }
 
+    private void persistCaseRunHistory(
+            ApiDefinitionCaseEntity apiCase,
+            ReportEntity report,
+            RunStepComputation step,
+            Long environmentId,
+            Long variableSetId
+    ) {
+        ApiRunStepResultResponse response = step.response();
+        ApiDefinitionCaseRunHistoryEntity entity = new ApiDefinitionCaseRunHistoryEntity();
+        entity.setWorkspaceId(apiCase.getWorkspaceId());
+        entity.setDefinitionId(apiCase.getDefinitionId());
+        entity.setCaseId(apiCase.getId());
+        entity.setReportId(report.getId());
+        entity.setCaseName(apiCase.getCaseName());
+        entity.setRunResult(report.getResult());
+        entity.setFailureSummary(blankToNull(report.getFailureSummary()));
+        entity.setOperatorName(CurrentUserContext.require().displayName());
+        entity.setEnvironmentId(environmentId);
+        entity.setEnvironmentName(resolveEnvironmentName(environmentId));
+        entity.setVariableSetId(variableSetId);
+        entity.setVariableSetName(resolveVariableSetName(variableSetId));
+        entity.setStatusCode(response.response() == null ? null : response.response().statusCode());
+        entity.setDurationMs(response.durationMs());
+        entity.setResponseSize(computeResponseSize(response.response()));
+        entity.setCreatedAt(LocalDateTime.now());
+        entity.setUpdatedAt(LocalDateTime.now());
+        caseRunHistoryMapper.insert(entity);
+    }
+
+    private String resolveEnvironmentName(Long environmentId) {
+        if (environmentId == null) {
+            return null;
+        }
+        return requireEnvironment(environmentId).getEnvName();
+    }
+
+    private String resolveVariableSetName(Long variableSetId) {
+        if (variableSetId == null) {
+            return null;
+        }
+        return requireVariableSet(variableSetId).getParamName();
+    }
+
+    private Long computeResponseSize(ApiResponseSnapshot response) {
+        if (response == null || response.body() == null) {
+            return 0L;
+        }
+        return (long) response.body().getBytes(StandardCharsets.UTF_8).length;
+    }
+
     private String extractJsonValue(String body, String expression) throws IOException {
         if (body == null || body.isBlank()) {
             return "";
@@ -2740,6 +2888,14 @@ public class ApiAutomationService {
         ApiDefinitionCaseEntity entity = caseMapper.selectById(id);
         if (entity == null) {
             throw new NotFoundException("API case not found");
+        }
+        return entity;
+    }
+
+    private ApiDefinitionCaseRunHistoryEntity requireCaseRunHistory(Long id) {
+        ApiDefinitionCaseRunHistoryEntity entity = caseRunHistoryMapper.selectById(id);
+        if (entity == null) {
+            throw new NotFoundException("API case run history not found");
         }
         return entity;
     }

@@ -27,6 +27,8 @@ import type {
   ApiDebugCasePayload,
   ApiDefinitionCaseDetail,
   ApiDefinitionCaseItem,
+  ApiDefinitionCaseRunHistoryDetail,
+  ApiDefinitionCaseRunHistoryItem,
   ApiDefinitionDetail,
   ApiDefinitionItem,
   DbConnectionItem,
@@ -52,6 +54,9 @@ import type {
 } from '../types/api'
 
 type RequestEditorResourceType = 'definition' | 'case'
+type CaseDrawerMode = 'create' | 'edit' | 'run'
+type CaseDrawerViewTab = 'detail' | 'runHistory' | 'changeHistory'
+type ResponsePreviewTab = 'body' | 'header' | 'console' | 'actualRequest'
 type ApiRequestEditorDetail = ApiDefinitionDetail & {
   resourceType: RequestEditorResourceType
   definitionId: number | null
@@ -143,10 +148,17 @@ const responsePreviewTab = ref<'body' | 'header' | 'console' | 'actualRequest'>(
 const caseDrawerVisible = ref(false)
 const caseDrawerEditorKey = ref('')
 const caseDrawerRequestTab = ref<RequestContentTab>('body')
-const caseDrawerResponsePreviewTab = ref<'body' | 'header' | 'console' | 'actualRequest'>('body')
+const caseDrawerViewTab = ref<CaseDrawerViewTab>('detail')
+const caseDrawerResponsePreviewTab = ref<ResponsePreviewTab>('body')
+const caseDrawerHistoryPreviewTab = ref<ResponsePreviewTab>('body')
 const caseDrawerDebugReportId = ref<number | null>(null)
 const caseDrawerDebugFailureSummary = ref('')
 const caseDrawerDebugStepResults = ref<ApiRunStepResult[]>([])
+const caseDrawerRunHistoryLoading = ref(false)
+const caseDrawerRunHistoryItems = ref<ApiDefinitionCaseRunHistoryItem[]>([])
+const caseDrawerRunHistoryDetailLoading = ref(false)
+const caseDrawerRunHistoryDetail = ref<ApiDefinitionCaseRunHistoryDetail | null>(null)
+const selectedCaseDrawerRunHistoryId = ref<number | null>(null)
 const batchAddMode = ref<BatchAddMode>('query')
 const batchAddInput = ref('')
 const batchAddContext = ref<'main' | 'case'>('main')
@@ -378,12 +390,16 @@ const caseListSettings = useTableSettings({
 const visibleCaseListColumnKeys = computed(() => new Set(caseListSettings.visibleColumns.value.map(item => item.key)))
 const caseListCurrentPage = ref(1)
 const caseDrawerCreateSource = ref<'draft' | 'savedDefinition'>('draft')
+const caseDrawerMode = ref<CaseDrawerMode>('create')
 const pagedDefinitionCases = computed(() => {
   const start = (caseListCurrentPage.value - 1) * caseListSettings.pageSize.value
   return currentDefinitionCases.value.slice(start, start + caseListSettings.pageSize.value)
 })
 const caseListTotalPages = computed(() => Math.max(1, Math.ceil(currentDefinitionCases.value.length / caseListSettings.pageSize.value)))
 const caseDrawerTitle = computed(() => {
+  if (caseDrawerMode.value === 'run') {
+    return '用例详情'
+  }
   if (caseDrawerForm.id) {
     return '编辑用例'
   }
@@ -396,6 +412,9 @@ const canWriteCaseDrawer = computed(() => canWriteTarget(caseDrawerForm.workspac
 const canDebugCaseDrawer = computed(() => canWriteCaseDrawer.value
   && !!caseDrawerForm.requestConfig.method?.trim()
   && !!caseDrawerForm.requestConfig.path?.trim())
+const caseDrawerReadOnly = computed(() => caseDrawerMode.value === 'run')
+const caseDrawerPrimaryActionLabel = computed(() => (caseDrawerReadOnly.value ? '执行' : '发送'))
+const caseDrawerShowFooter = computed(() => !caseDrawerReadOnly.value)
 const showCaseListContent = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && activeRequestTab.value === 'cases')
 const visibleRequestEditorTabs = computed(() => requestEditorTabs.value.filter(item => item.resourceType === 'definition'))
 
@@ -754,19 +773,23 @@ const filteredScenarios = computed(() => scenarios.value.filter((item) => {
 const apiTasks = computed(() => tasks.value.filter(item => item.engineType === 'API'))
 const apiTaskMap = computed(() => new Map(apiTasks.value.map(item => [item.id, item])))
 const apiReports = computed(() => reports.value.filter(item => apiTaskMap.value.has(item.taskId)))
-const currentResponseStep = computed(() => {
-  const steps = activeRequestEditorTab.value?.debugStepResults ?? []
+function pickPreferredRunStep(steps: ApiRunStepResult[]) {
   if (!steps.length) {
     return null
   }
   return steps.find(item => !item.success) ?? steps[steps.length - 1]
+}
+
+function formatResponseSize(body?: string | null) {
+  return body ? `${new Blob([body]).size} B` : '0 B'
+}
+
+const currentResponseStep = computed(() => {
+  return pickPreferredRunStep(activeRequestEditorTab.value?.debugStepResults ?? [])
 })
 const currentResponseStatusCode = computed(() => currentResponseStep.value?.response?.statusCode ?? null)
 const currentResponseDuration = computed(() => currentResponseStep.value?.durationMs ?? null)
-const currentResponseSize = computed(() => {
-  const body = currentResponseStep.value?.response?.body
-  return body ? `${new Blob([body]).size} B` : '0 B'
-})
+const currentResponseSize = computed(() => formatResponseSize(currentResponseStep.value?.response?.body))
 const currentResponseContentType = computed(() => currentResponseStep.value?.response?.contentType ?? '')
 const currentResponseBody = computed(() => currentResponseStep.value?.response?.body ?? '')
 const currentResponseHeaders = computed(() => currentResponseStep.value?.response?.headers ?? {})
@@ -775,19 +798,10 @@ const currentExtractionResults = computed(() => currentResponseStep.value?.extra
 const currentProcessorResults = computed(() => currentResponseStep.value?.processorResults ?? [])
 const currentDebugError = computed(() => currentResponseStep.value?.errorMessage || activeRequestEditorTab.value?.debugFailureSummary || '')
 const showResponseEmptyState = computed(() => !currentResponseStep.value && !currentDebugError.value)
-const caseDrawerResponseStep = computed(() => {
-  const steps = caseDrawerDebugStepResults.value
-  if (!steps.length) {
-    return null
-  }
-  return steps.find(item => !item.success) ?? steps[steps.length - 1]
-})
+const caseDrawerResponseStep = computed(() => pickPreferredRunStep(caseDrawerDebugStepResults.value))
 const caseDrawerResponseStatusCode = computed(() => caseDrawerResponseStep.value?.response?.statusCode ?? null)
 const caseDrawerResponseDuration = computed(() => caseDrawerResponseStep.value?.durationMs ?? null)
-const caseDrawerResponseSize = computed(() => {
-  const body = caseDrawerResponseStep.value?.response?.body
-  return body ? `${new Blob([body]).size} B` : '0 B'
-})
+const caseDrawerResponseSize = computed(() => formatResponseSize(caseDrawerResponseStep.value?.response?.body))
 const caseDrawerResponseContentType = computed(() => caseDrawerResponseStep.value?.response?.contentType ?? '')
 const caseDrawerResponseBody = computed(() => caseDrawerResponseStep.value?.response?.body ?? '')
 const caseDrawerResponseHeaders = computed(() => caseDrawerResponseStep.value?.response?.headers ?? {})
@@ -796,6 +810,16 @@ const caseDrawerExtractionResults = computed(() => caseDrawerResponseStep.value?
 const caseDrawerProcessorResults = computed(() => caseDrawerResponseStep.value?.processorResults ?? [])
 const caseDrawerDebugError = computed(() => caseDrawerResponseStep.value?.errorMessage || caseDrawerDebugFailureSummary.value || '')
 const caseDrawerShowResponseEmptyState = computed(() => !caseDrawerResponseStep.value && !caseDrawerDebugError.value)
+const caseDrawerSelectedHistoryStep = computed(() => pickPreferredRunStep(caseDrawerRunHistoryDetail.value?.stepResults ?? []))
+const caseDrawerSelectedHistoryStatusCode = computed(() => caseDrawerSelectedHistoryStep.value?.response?.statusCode ?? caseDrawerRunHistoryDetail.value?.statusCode ?? null)
+const caseDrawerSelectedHistoryDuration = computed(() => caseDrawerSelectedHistoryStep.value?.durationMs ?? caseDrawerRunHistoryDetail.value?.durationMs ?? null)
+const caseDrawerSelectedHistorySize = computed(() => formatResponseSize(
+  caseDrawerSelectedHistoryStep.value?.response?.body ?? caseDrawerRunHistoryDetail.value?.stepResults?.[0]?.response?.body,
+))
+const caseDrawerSelectedHistoryContentType = computed(() => caseDrawerSelectedHistoryStep.value?.response?.contentType ?? '')
+const caseDrawerSelectedHistoryBody = computed(() => caseDrawerSelectedHistoryStep.value?.response?.body ?? '')
+const caseDrawerSelectedHistoryHeaders = computed(() => caseDrawerSelectedHistoryStep.value?.response?.headers ?? {})
+const caseDrawerSelectedHistoryError = computed(() => caseDrawerSelectedHistoryStep.value?.errorMessage || caseDrawerRunHistoryDetail.value?.failureSummary || '')
 const shouldShowResponsePanel = computed(() => {
   if (showCaseListContent.value) {
     return false
@@ -1046,17 +1070,44 @@ const caseDrawerResponseBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
   }
   return 'text'
 })
+const caseDrawerHistoryBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
+  const contentType = caseDrawerSelectedHistoryContentType.value.toLowerCase()
+  const body = caseDrawerSelectedHistoryBody.value.trim()
+  if (contentType.includes('json')) return 'json'
+  if (contentType.includes('xml') || contentType.includes('html')) return 'xml'
+  if (!body) return 'text'
+  if ((body.startsWith('{') && body.endsWith('}')) || (body.startsWith('[') && body.endsWith(']'))) {
+    try {
+      JSON.parse(body)
+      return 'json'
+    }
+    catch {
+      return 'text'
+    }
+  }
+  if (body.startsWith('<') && body.endsWith('>')) {
+    return 'xml'
+  }
+  return 'text'
+})
 
 const responseBodyPreview = computed(() => currentResponseBody.value || '')
 const responseHeadersPreview = computed(() => JSON.stringify(currentResponseHeaders.value, null, 2))
 const caseDrawerResponseBodyPreview = computed(() => caseDrawerResponseBody.value || '')
 const caseDrawerResponseHeadersPreview = computed(() => JSON.stringify(caseDrawerResponseHeaders.value, null, 2))
-const responseConsolePreview = computed(() => {
+const caseDrawerHistoryBodyPreview = computed(() => caseDrawerSelectedHistoryBody.value || '')
+const caseDrawerHistoryHeadersPreview = computed(() => JSON.stringify(caseDrawerSelectedHistoryHeaders.value, null, 2))
+function buildRunConsolePreview(
+  debugError: string,
+  processorResults: ApiRunStepResult['processorResults'],
+  assertionResults: ApiRunStepResult['assertionResults'],
+  extractionResults: ApiRunStepResult['extractionResults'],
+) {
   const lines: string[] = []
-  if (currentDebugError.value) {
-    lines.push(`[Error] ${currentDebugError.value}`)
+  if (debugError) {
+    lines.push(`[Error] ${debugError}`)
   }
-  currentProcessorResults.value.forEach((item, index) => {
+  processorResults.forEach((item, index) => {
     lines.push(`[Processor ${index + 1}] ${item.stage} / ${item.name} / ${item.success ? 'PASS' : 'FAIL'} / ${item.durationMs} ms`)
     if (item.message) {
       lines.push(`  ${item.message}`)
@@ -1066,7 +1117,7 @@ const responseConsolePreview = computed(() => {
     }
     item.logs?.forEach(log => lines.push(`  ${log}`))
   })
-  currentAssertionResults.value.forEach((item, index) => {
+  assertionResults.forEach((item, index) => {
     lines.push(`[Assertion ${index + 1}] ${(item.name || item.type)} / ${item.success ? 'PASS' : 'FAIL'}`)
     if (item.message) {
       lines.push(`  ${item.message}`)
@@ -1076,49 +1127,44 @@ const responseConsolePreview = computed(() => {
       lines.push(`  actual: ${item.actualValue ?? ''}`)
     }
   })
-  currentExtractionResults.value.forEach((item, index) => {
+  extractionResults.forEach((item, index) => {
     lines.push(`[Extraction ${index + 1}] ${item.name} / ${item.success ? 'OK' : 'FAIL'}`)
     lines.push(`  ${item.value || item.message || ''}`)
   })
   return lines.length ? lines.join('\n') : '暂无控制台内容'
+}
+const responseConsolePreview = computed(() => {
+  return buildRunConsolePreview(
+    currentDebugError.value,
+    currentProcessorResults.value,
+    currentAssertionResults.value,
+    currentExtractionResults.value,
+  )
 })
 const caseDrawerResponseConsolePreview = computed(() => {
-  const lines: string[] = []
-  if (caseDrawerDebugError.value) {
-    lines.push(`[Error] ${caseDrawerDebugError.value}`)
-  }
-  caseDrawerProcessorResults.value.forEach((item, index) => {
-    lines.push(`[Processor ${index + 1}] ${item.stage} / ${item.name} / ${item.success ? 'PASS' : 'FAIL'} / ${item.durationMs} ms`)
-    if (item.message) {
-      lines.push(`  ${item.message}`)
-    }
-    if (Object.keys(item.outputVariables || {}).length) {
-      lines.push(`  outputVariables: ${JSON.stringify(item.outputVariables)}`)
-    }
-    item.logs?.forEach(log => lines.push(`  ${log}`))
-  })
-  caseDrawerAssertionResults.value.forEach((item, index) => {
-    lines.push(`[Assertion ${index + 1}] ${(item.name || item.type)} / ${item.success ? 'PASS' : 'FAIL'}`)
-    if (item.message) {
-      lines.push(`  ${item.message}`)
-    }
-    if (item.expectedValue !== undefined || item.actualValue !== undefined) {
-      lines.push(`  expected: ${item.expectedValue ?? ''}`)
-      lines.push(`  actual: ${item.actualValue ?? ''}`)
-    }
-  })
-  caseDrawerExtractionResults.value.forEach((item, index) => {
-    lines.push(`[Extraction ${index + 1}] ${item.name} / ${item.success ? 'OK' : 'FAIL'}`)
-    lines.push(`  ${item.value || item.message || ''}`)
-  })
-  return lines.length ? lines.join('\n') : '暂无控制台内容'
+  return buildRunConsolePreview(
+    caseDrawerDebugError.value,
+    caseDrawerProcessorResults.value,
+    caseDrawerAssertionResults.value,
+    caseDrawerExtractionResults.value,
+  )
 })
-const actualRequestPreview = computed(() => {
-  const snapshot = currentResponseStep.value?.request
+const caseDrawerHistoryConsolePreview = computed(() => buildRunConsolePreview(
+  caseDrawerSelectedHistoryError.value,
+  caseDrawerSelectedHistoryStep.value?.processorResults ?? [],
+  caseDrawerSelectedHistoryStep.value?.assertionResults ?? [],
+  caseDrawerSelectedHistoryStep.value?.extractionResults ?? [],
+))
+function buildActualRequestPreview(
+  snapshot: ApiRunStepResult['request'] | null | undefined,
+  fallback: { method: string, url: string, headers: Record<string, string>, body: string | null },
+) {
   if (snapshot) {
     return JSON.stringify(snapshot, null, 2)
   }
-  return JSON.stringify({
+  return JSON.stringify(fallback, null, 2)
+}
+const actualRequestPreview = computed(() => buildActualRequestPreview(currentResponseStep.value?.request, {
     method: definitionForm.requestConfig.method || definitionForm.method || 'GET',
     url: definitionForm.requestConfig.path || definitionForm.path || '',
     headers: Object.fromEntries(
@@ -1127,14 +1173,8 @@ const actualRequestPreview = computed(() => {
         .map(item => [item.key, item.value]),
     ),
     body: getModeBodyText(definitionForm.requestConfig.body.type) || null,
-  }, null, 2)
-})
-const caseDrawerActualRequestPreview = computed(() => {
-  const snapshot = caseDrawerResponseStep.value?.request
-  if (snapshot) {
-    return JSON.stringify(snapshot, null, 2)
-  }
-  return JSON.stringify({
+  }))
+const caseDrawerActualRequestPreview = computed(() => buildActualRequestPreview(caseDrawerResponseStep.value?.request, {
     method: caseDrawerForm.requestConfig.method || caseDrawerForm.method || 'GET',
     url: caseDrawerForm.requestConfig.path || caseDrawerForm.path || '',
     headers: Object.fromEntries(
@@ -1143,8 +1183,20 @@ const caseDrawerActualRequestPreview = computed(() => {
         .map(item => [item.key, item.value]),
     ),
     body: getModeBodyText(caseDrawerForm.requestConfig.body.type, caseDrawerForm) || null,
-  }, null, 2)
-})
+  }))
+const caseDrawerHistoryActualRequestPreview = computed(() => buildActualRequestPreview(
+  caseDrawerSelectedHistoryStep.value?.request,
+  {
+    method: caseDrawerForm.requestConfig.method || caseDrawerForm.method || 'GET',
+    url: caseDrawerForm.requestConfig.path || caseDrawerForm.path || '',
+    headers: Object.fromEntries(
+      caseDrawerForm.requestConfig.headers
+        .filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false)
+        .map(item => [item.key, item.value]),
+    ),
+    body: getModeBodyText(caseDrawerForm.requestConfig.body.type, caseDrawerForm) || null,
+  },
+))
 const caseDrawerTagsInput = computed({
   get: () => readTagInput(caseDrawerForm.tags),
   set: (value: string) => updateTagInput(caseDrawerForm, value),
@@ -1774,6 +1826,13 @@ function setCaseDrawerRequestContentTab(tab: RequestContentTab) {
   }
 }
 
+async function setCaseDrawerViewTab(tab: CaseDrawerViewTab) {
+  caseDrawerViewTab.value = tab
+  if (tab === 'runHistory' && caseDrawerForm.id && !caseDrawerRunHistoryItems.value.length && !caseDrawerRunHistoryLoading.value) {
+    await loadCaseDrawerRunHistory(caseDrawerForm.id)
+  }
+}
+
 function applyEditorDetailToForm(detail: ApiRequestEditorDetail, options?: { markSaved?: boolean }) {
   requestEditorSyncing.value = true
   const cloned = cloneEditorDetail(detail)
@@ -1834,6 +1893,15 @@ function resetCaseDrawerDebugState() {
   caseDrawerDebugStepResults.value = []
 }
 
+function resetCaseDrawerRunHistoryState() {
+  caseDrawerRunHistoryLoading.value = false
+  caseDrawerRunHistoryDetailLoading.value = false
+  caseDrawerRunHistoryItems.value = []
+  caseDrawerRunHistoryDetail.value = null
+  selectedCaseDrawerRunHistoryId.value = null
+  caseDrawerHistoryPreviewTab.value = 'body'
+}
+
 function syncCaseDrawerDebugStateFromTab(tab?: RequestEditorTab | null) {
   if (!tab) {
     resetCaseDrawerDebugState()
@@ -1848,6 +1916,50 @@ function updateCaseDrawerDebugState(reportId: number | null, failureSummary: str
   caseDrawerDebugReportId.value = reportId
   caseDrawerDebugFailureSummary.value = failureSummary
   caseDrawerDebugStepResults.value = [...stepResults]
+}
+
+async function selectCaseDrawerRunHistory(historyId: number | null) {
+  selectedCaseDrawerRunHistoryId.value = historyId
+  if (!historyId) {
+    caseDrawerRunHistoryDetail.value = null
+    return
+  }
+  caseDrawerRunHistoryDetailLoading.value = true
+  try {
+    caseDrawerRunHistoryDetail.value = await platformApi.getApiDefinitionCaseRunHistoryDetail(workspaceCode.value, historyId)
+    caseDrawerHistoryPreviewTab.value = 'body'
+  }
+  catch (error) {
+    caseDrawerRunHistoryDetail.value = null
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    caseDrawerRunHistoryDetailLoading.value = false
+  }
+}
+
+async function loadCaseDrawerRunHistory(caseId?: number | null, preferredHistoryId?: number | null) {
+  if (!caseId) {
+    resetCaseDrawerRunHistoryState()
+    return
+  }
+  caseDrawerRunHistoryLoading.value = true
+  try {
+    const response = await platformApi.getApiDefinitionCaseRunHistory(workspaceCode.value, caseId)
+    caseDrawerRunHistoryItems.value = response.items || []
+    const targetId = preferredHistoryId
+      ?? (selectedCaseDrawerRunHistoryId.value && caseDrawerRunHistoryItems.value.some(item => item.id === selectedCaseDrawerRunHistoryId.value)
+        ? selectedCaseDrawerRunHistoryId.value
+        : caseDrawerRunHistoryItems.value[0]?.id ?? null)
+    await selectCaseDrawerRunHistory(targetId)
+  }
+  catch (error) {
+    resetCaseDrawerRunHistoryState()
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    caseDrawerRunHistoryLoading.value = false
+  }
 }
 
 function applyDebugResponseToEditorTab(tab: RequestEditorTab | null | undefined, response: {
@@ -1978,10 +2090,13 @@ async function closeCaseDrawer() {
   await closeRequestEditorTab(activeCaseTab.key, { activateFallback: false })
   caseDrawerVisible.value = false
   caseDrawerEditorKey.value = ''
+  caseDrawerViewTab.value = 'detail'
   caseDrawerRequestTab.value = 'body'
   caseDrawerResponsePreviewTab.value = 'body'
   caseDrawerSourceEditorKey.value = ''
+  caseDrawerMode.value = 'create'
   resetCaseDrawerDebugState()
+  resetCaseDrawerRunHistoryState()
 }
 
 function buildCaseDraftFromCurrentDefinition(options?: { fromSavedDefinition?: boolean }) {
@@ -2005,7 +2120,7 @@ function buildCaseDraftFromCurrentDefinition(options?: { fromSavedDefinition?: b
   return snapshot
 }
 
-async function openCaseEditor(id: number) {
+async function openCaseEditor(id: number, options?: { mode?: Extract<CaseDrawerMode, 'edit' | 'run'> }) {
   const loadedTab = requestEditorTabs.value.find(item => item.resourceType === 'case' && item.resourceId === id)
   if (!loadedTab) {
     const detail = await platformApi.getApiDefinitionCaseDetail(workspaceCode.value, id)
@@ -2016,11 +2131,20 @@ async function openCaseEditor(id: number) {
   const target = requestEditorTabs.value.find(item => item.resourceType === 'case' && item.resourceId === id)
   if (target) {
     caseDrawerCreateSource.value = 'draft'
+    caseDrawerMode.value = options?.mode ?? 'edit'
+    caseDrawerViewTab.value = 'detail'
     caseDrawerEditorKey.value = target.key
     caseDrawerRequestTab.value = target.activeTab || resolveDefaultRequestTab(target.draft)
     caseDrawerResponsePreviewTab.value = 'body'
+    caseDrawerHistoryPreviewTab.value = 'body'
     applyCaseDrawerDetailToForm(target.draft)
     syncCaseDrawerDebugStateFromTab(target)
+    if (caseDrawerMode.value === 'run') {
+      await loadCaseDrawerRunHistory(target.resourceId)
+    }
+    else {
+      resetCaseDrawerRunHistoryState()
+    }
     caseDrawerVisible.value = true
   }
 }
@@ -2031,16 +2155,20 @@ function openCaseDraftFromDefinition(options?: { fromSavedDefinition?: boolean }
   requestEditorTabs.value.push(tab)
   caseDrawerSourceEditorKey.value = activeRequestEditorKey.value
   caseDrawerCreateSource.value = options?.fromSavedDefinition ? 'savedDefinition' : 'draft'
+  caseDrawerMode.value = 'create'
+  caseDrawerViewTab.value = 'detail'
   caseDrawerEditorKey.value = tab.key
   caseDrawerRequestTab.value = tab.activeTab || resolveDefaultRequestTab(tab.draft)
   caseDrawerResponsePreviewTab.value = 'body'
+  caseDrawerHistoryPreviewTab.value = 'body'
   applyCaseDrawerDetailToForm(tab.draft)
   syncCaseDrawerDebugStateFromTab(tab)
+  resetCaseDrawerRunHistoryState()
   caseDrawerVisible.value = true
 }
 
 async function runCaseItem(id: number) {
-  await openCaseEditor(id)
+  await openCaseEditor(id, { mode: 'run' })
   await debugCaseDrawer()
 }
 
@@ -2059,11 +2187,15 @@ async function duplicateCaseItem(id: number) {
   requestEditorTabs.value.push(tab)
   caseDrawerSourceEditorKey.value = activeRequestEditorKey.value
   caseDrawerCreateSource.value = 'draft'
+  caseDrawerMode.value = 'create'
+  caseDrawerViewTab.value = 'detail'
   caseDrawerEditorKey.value = tab.key
   caseDrawerRequestTab.value = tab.activeTab || resolveDefaultRequestTab(tab.draft)
   caseDrawerResponsePreviewTab.value = 'body'
+  caseDrawerHistoryPreviewTab.value = 'body'
   applyCaseDrawerDetailToForm(tab.draft)
   syncCaseDrawerDebugStateFromTab(tab)
+  resetCaseDrawerRunHistoryState()
   caseDrawerVisible.value = true
 }
 
@@ -2971,6 +3103,9 @@ async function debugCaseDrawer() {
       response.stepResults || [],
     )
     caseDrawerResponsePreviewTab.value = 'body'
+    if (caseDrawerForm.id) {
+      await loadCaseDrawerRunHistory(caseDrawerForm.id)
+    }
     ElMessage.success(response.result === 'SUCCESS' ? '发送成功' : '发送完成')
   }
   catch (error) {
@@ -4061,6 +4196,9 @@ function formatTimeLabel(value?: string | null) {
             :can-write="canWriteCaseDrawer"
             :saving="saving"
             :is-edit="!!caseDrawerForm.id"
+            :read-only="caseDrawerReadOnly"
+            :primary-action-label="caseDrawerPrimaryActionLabel"
+            :show-footer="caseDrawerShowFooter"
             @request-close="closeCaseDrawer"
             @update:case-name="value => caseDrawerForm.name = value"
             @update:priority="value => caseDrawerForm.casePriority = value"
@@ -4071,7 +4209,12 @@ function formatTimeLabel(value?: string | null) {
             @save="saveCaseDrawer"
           >
             <template #tabs>
-              <div class="ms-like-top-tabs case-drawer-top-tabs">
+              <div v-if="caseDrawerReadOnly" class="ms-like-top-tabs case-drawer-view-tabs">
+                <button :class="['ms-like-top-tab', { active: caseDrawerViewTab === 'detail' }]" @click="void setCaseDrawerViewTab('detail')">详情</button>
+                <button :class="['ms-like-top-tab', { active: caseDrawerViewTab === 'runHistory' }]" @click="void setCaseDrawerViewTab('runHistory')">执行历史</button>
+                <button :class="['ms-like-top-tab', { active: caseDrawerViewTab === 'changeHistory' }]" @click="void setCaseDrawerViewTab('changeHistory')">变更历史</button>
+              </div>
+              <div v-if="caseDrawerViewTab === 'detail'" class="ms-like-top-tabs case-drawer-top-tabs">
                 <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'headers' }]" @click="setCaseDrawerRequestContentTab('headers')">请求头</button>
                 <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'body' }]" @click="setCaseDrawerRequestContentTab('body')">请求体</button>
                 <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'params' }]" @click="setCaseDrawerRequestContentTab('params')">
@@ -4087,7 +4230,7 @@ function formatTimeLabel(value?: string | null) {
             </template>
 
             <template #body>
-              <div class="ms-like-request-body">
+              <div v-if="caseDrawerViewTab === 'detail'" :class="['ms-like-request-body', { 'case-drawer-readonly-body': caseDrawerReadOnly }]">
                 <template v-if="caseDrawerRequestTab === 'params'">
                   <div class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--query">
                     <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--query">
@@ -4095,6 +4238,7 @@ function formatTimeLabel(value?: string | null) {
                       <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
                         <el-checkbox
                           v-model="caseDrawerQueryTableSelectionModel"
+                          :disabled="caseDrawerReadOnly"
                           :indeterminate="tableSelectionState(caseDrawerForm.requestConfig.queryParams).indeterminate"
                         />
                       </div>
@@ -4103,7 +4247,7 @@ function formatTimeLabel(value?: string | null) {
                       <span>参数值</span>
                       <span>编码</span>
                       <span>描述</span>
-                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('query', 'case')">批量添加</button>
+                      <button v-if="!caseDrawerReadOnly" type="button" class="ms-like-link-button" @click="openBatchAddDrawer('query', 'case')">批量添加</button>
                     </div>
                     <div
                       v-for="(row, index) in caseDrawerForm.requestConfig.queryParams"
@@ -4116,7 +4260,8 @@ function formatTimeLabel(value?: string | null) {
                         <button
                           type="button"
                           class="ms-like-drag-handle"
-                          draggable="true"
+                          :disabled="caseDrawerReadOnly"
+                          :draggable="!caseDrawerReadOnly"
                           aria-label="拖拽排序"
                           @dragstart="handleParamDragStart('query', index, $event)"
                           @dragend="handleParamDragEnd"
@@ -4125,41 +4270,45 @@ function formatTimeLabel(value?: string | null) {
                         </button>
                       </div>
                       <div class="ms-like-checkbox-cell">
-                        <el-checkbox v-model="row.enabled" />
+                        <el-checkbox v-model="row.enabled" :disabled="caseDrawerReadOnly" />
                       </div>
                       <div class="ms-like-name-field">
                         <button
                           type="button"
                           :class="['ms-like-required-button', { active: row.required }]"
+                          :disabled="caseDrawerReadOnly"
                           @click="row.required = !row.required"
                         >
                           *
                         </button>
                         <el-input
                           v-model="row.key"
+                          :disabled="caseDrawerReadOnly"
                           placeholder="参数名称"
                           @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())"
                         />
                       </div>
-                      <el-select v-model="row.paramType" @change="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())">
+                      <el-select v-model="row.paramType" :disabled="caseDrawerReadOnly" @change="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())">
                         <el-option v-for="option in queryParamTypeOptions" :key="option" :label="option" :value="option" />
                       </el-select>
                       <el-input
                         v-model="row.value"
+                        :disabled="caseDrawerReadOnly"
                         placeholder="参数值 / {{variable}}"
                         @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())"
                       />
                       <div class="ms-like-switch-cell ms-like-switch-cell--query">
-                        <el-switch v-model="row.encode" size="small" />
+                        <el-switch v-model="row.encode" :disabled="caseDrawerReadOnly" size="small" />
                       </div>
                       <el-input
                         v-model="row.description"
+                        :disabled="caseDrawerReadOnly"
                         placeholder="描述"
                         @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())"
                       />
-                      <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(caseDrawerForm.requestConfig.queryParams, index, queryParamDefaults())">删除</button>
+                      <button v-if="!caseDrawerReadOnly" type="button" class="ms-like-row-remove" @click="removeKeyValueRow(caseDrawerForm.requestConfig.queryParams, index, queryParamDefaults())">删除</button>
                     </div>
-                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(caseDrawerForm.requestConfig.queryParams)">+ 添加一行</button>
+                    <button v-if="!caseDrawerReadOnly" type="button" class="ms-like-add-row" @click="addDefinitionRow(caseDrawerForm.requestConfig.queryParams)">+ 添加一行</button>
                   </div>
                 </template>
 
@@ -4170,13 +4319,14 @@ function formatTimeLabel(value?: string | null) {
                       <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
                         <el-checkbox
                           v-model="caseDrawerHeaderTableSelectionModel"
+                          :disabled="caseDrawerReadOnly"
                           :indeterminate="tableSelectionState(caseDrawerForm.requestConfig.headers).indeterminate"
                         />
                       </div>
                       <span class="ms-like-header-input-title">参数名称</span>
                       <span>参数值</span>
                       <span>描述</span>
-                      <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('header', 'case')">批量添加</button>
+                      <button v-if="!caseDrawerReadOnly" type="button" class="ms-like-link-button" @click="openBatchAddDrawer('header', 'case')">批量添加</button>
                     </div>
                     <div
                       v-for="(row, index) in caseDrawerForm.requestConfig.headers"
@@ -4189,7 +4339,8 @@ function formatTimeLabel(value?: string | null) {
                         <button
                           type="button"
                           class="ms-like-drag-handle"
-                          draggable="true"
+                          :disabled="caseDrawerReadOnly"
+                          :draggable="!caseDrawerReadOnly"
                           aria-label="拖拽排序"
                           @dragstart="handleParamDragStart('header', index, $event)"
                           @dragend="handleParamDragEnd"
@@ -4198,47 +4349,51 @@ function formatTimeLabel(value?: string | null) {
                         </button>
                       </div>
                       <div class="ms-like-checkbox-cell">
-                        <el-checkbox v-model="row.enabled" />
+                        <el-checkbox v-model="row.enabled" :disabled="caseDrawerReadOnly" />
                       </div>
                       <div class="ms-like-header-input-cell">
                         <el-input
                           v-model="row.key"
+                          :disabled="caseDrawerReadOnly"
                           placeholder="参数名称"
                           @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.headers, headerParamDefaults())"
                         />
                       </div>
                       <el-input
                         v-model="row.value"
+                        :disabled="caseDrawerReadOnly"
                         placeholder="参数值"
                         @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.headers, headerParamDefaults())"
                       />
                       <el-input
                         v-model="row.description"
+                        :disabled="caseDrawerReadOnly"
                         placeholder="描述"
                         @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.headers, headerParamDefaults())"
                       />
-                      <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(caseDrawerForm.requestConfig.headers, index, headerParamDefaults())">删除</button>
+                      <button v-if="!caseDrawerReadOnly" type="button" class="ms-like-row-remove" @click="removeKeyValueRow(caseDrawerForm.requestConfig.headers, index, headerParamDefaults())">删除</button>
                     </div>
-                    <button type="button" class="ms-like-add-row" @click="addDefinitionRow(caseDrawerForm.requestConfig.headers)">+ 添加一行</button>
+                    <button v-if="!caseDrawerReadOnly" type="button" class="ms-like-add-row" @click="addDefinitionRow(caseDrawerForm.requestConfig.headers)">+ 添加一行</button>
                   </div>
                 </template>
 
                 <template v-else-if="caseDrawerRequestTab === 'body'">
                   <div class="request-section">
                     <div class="ms-like-body-type-row">
-                      <button :class="['ms-like-body-chip', { active: isBodyMode('NONE', caseDrawerForm) }]" @click="setBodyMode('NONE', caseDrawerForm)">none</button>
-                      <button :class="['ms-like-body-chip', { active: isBodyMode('FORM_DATA', caseDrawerForm) }]" @click="setBodyMode('FORM_DATA', caseDrawerForm)">form-data</button>
-                      <button :class="['ms-like-body-chip', { active: isBodyMode('FORM_URLENCODED', caseDrawerForm) }]" @click="setBodyMode('FORM_URLENCODED', caseDrawerForm)">x-www-form-urlencoded</button>
-                      <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_JSON', caseDrawerForm) }]" @click="setBodyMode('RAW_JSON', caseDrawerForm)">json</button>
-                      <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_XML', caseDrawerForm) }]" @click="setBodyMode('RAW_XML', caseDrawerForm)">xml</button>
-                      <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_TEXT', caseDrawerForm) }]" @click="setBodyMode('RAW_TEXT', caseDrawerForm)">raw</button>
-                      <button :class="['ms-like-body-chip', { active: isBodyMode('BINARY', caseDrawerForm) }]" @click="setBodyMode('BINARY', caseDrawerForm)">binary</button>
+                      <button :disabled="caseDrawerReadOnly" :class="['ms-like-body-chip', { active: isBodyMode('NONE', caseDrawerForm) }]" @click="setBodyMode('NONE', caseDrawerForm)">none</button>
+                      <button :disabled="caseDrawerReadOnly" :class="['ms-like-body-chip', { active: isBodyMode('FORM_DATA', caseDrawerForm) }]" @click="setBodyMode('FORM_DATA', caseDrawerForm)">form-data</button>
+                      <button :disabled="caseDrawerReadOnly" :class="['ms-like-body-chip', { active: isBodyMode('FORM_URLENCODED', caseDrawerForm) }]" @click="setBodyMode('FORM_URLENCODED', caseDrawerForm)">x-www-form-urlencoded</button>
+                      <button :disabled="caseDrawerReadOnly" :class="['ms-like-body-chip', { active: isBodyMode('RAW_JSON', caseDrawerForm) }]" @click="setBodyMode('RAW_JSON', caseDrawerForm)">json</button>
+                      <button :disabled="caseDrawerReadOnly" :class="['ms-like-body-chip', { active: isBodyMode('RAW_XML', caseDrawerForm) }]" @click="setBodyMode('RAW_XML', caseDrawerForm)">xml</button>
+                      <button :disabled="caseDrawerReadOnly" :class="['ms-like-body-chip', { active: isBodyMode('RAW_TEXT', caseDrawerForm) }]" @click="setBodyMode('RAW_TEXT', caseDrawerForm)">raw</button>
+                      <button :disabled="caseDrawerReadOnly" :class="['ms-like-body-chip', { active: isBodyMode('BINARY', caseDrawerForm) }]" @click="setBodyMode('BINARY', caseDrawerForm)">binary</button>
                     </div>
                     <div class="ms-like-body-mode-shell">
                       <MonacoCodeEditor
                         v-if="['RAW_JSON', 'RAW_XML', 'RAW_TEXT'].includes(caseDrawerForm.requestConfig.body.type)"
                         v-model="caseDrawerActiveBodyRawText"
                         :language="caseDrawerActiveBodyLanguage"
+                        :read-only="caseDrawerReadOnly"
                         class="case-drawer-body-editor"
                         height="300px"
                       />
@@ -4246,10 +4401,10 @@ function formatTimeLabel(value?: string | null) {
                         <div class="ms-like-form-row">
                           <div class="ms-like-form-label">File</div>
                           <div class="ms-like-form-control ms-like-binary-actions">
-                            <el-button @click="pickCaseDrawerBinaryBodyFile">
+                            <el-button v-if="!caseDrawerReadOnly" @click="pickCaseDrawerBinaryBodyFile">
                               {{ caseDrawerForm.requestConfig.body.fileName ? '重新选择' : '选择文件' }}
                             </el-button>
-                            <el-button :disabled="!caseDrawerForm.requestConfig.body.binaryBase64" @click="clearCaseDrawerBinaryBodyFile">清空</el-button>
+                            <el-button v-if="!caseDrawerReadOnly" :disabled="!caseDrawerForm.requestConfig.body.binaryBase64" @click="clearCaseDrawerBinaryBodyFile">清空</el-button>
                           </div>
                         </div>
                         <div class="ms-like-form-row">
@@ -4272,16 +4427,17 @@ function formatTimeLabel(value?: string | null) {
                         <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--body-form">
                           <div class="ms-like-drag-cell"></div>
                           <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
-                            <el-checkbox
-                              v-model="caseDrawerBodyFormTableSelectionModel"
-                              :indeterminate="tableSelectionState(caseDrawerForm.requestConfig.body.formItems).indeterminate"
-                            />
+                              <el-checkbox
+                                v-model="caseDrawerBodyFormTableSelectionModel"
+                                :disabled="caseDrawerReadOnly"
+                                :indeterminate="tableSelectionState(caseDrawerForm.requestConfig.body.formItems).indeterminate"
+                              />
                           </div>
                           <span class="ms-like-header-input-title">参数名称</span>
                           <span>类型</span>
                           <span>参数值</span>
                           <span>描述</span>
-                          <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('body-form', 'case')">批量添加</button>
+                          <button v-if="!caseDrawerReadOnly" type="button" class="ms-like-link-button" @click="openBatchAddDrawer('body-form', 'case')">批量添加</button>
                         </div>
                         <div
                           v-for="(row, index) in caseDrawerForm.requestConfig.body.formItems"
@@ -4294,7 +4450,8 @@ function formatTimeLabel(value?: string | null) {
                             <button
                               type="button"
                               class="ms-like-drag-handle"
-                              draggable="true"
+                              :disabled="caseDrawerReadOnly"
+                              :draggable="!caseDrawerReadOnly"
                               aria-label="拖拽排序"
                               @dragstart="handleParamDragStart('body-form', index, $event)"
                               @dragend="handleParamDragEnd"
@@ -4303,38 +4460,42 @@ function formatTimeLabel(value?: string | null) {
                             </button>
                           </div>
                           <div class="ms-like-checkbox-cell">
-                            <el-checkbox v-model="row.enabled" />
+                            <el-checkbox v-model="row.enabled" :disabled="caseDrawerReadOnly" />
                           </div>
                           <div class="ms-like-name-field">
                             <button
                               type="button"
                               :class="['ms-like-required-button', { active: row.required }]"
+                              :disabled="caseDrawerReadOnly"
                               @click="row.required = !row.required"
                             >
                               *
                             </button>
                             <el-input
                               v-model="row.key"
+                              :disabled="caseDrawerReadOnly"
                               placeholder="参数名称"
                               @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())"
                             />
                           </div>
-                          <el-select v-model="row.paramType" @change="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())">
+                          <el-select v-model="row.paramType" :disabled="caseDrawerReadOnly" @change="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())">
                             <el-option v-for="option in bodyParamTypeOptions" :key="option" :label="option" :value="option" />
                           </el-select>
                           <el-input
                             v-model="row.value"
+                            :disabled="caseDrawerReadOnly"
                             placeholder="参数值"
                             @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())"
                           />
                           <el-input
                             v-model="row.description"
+                            :disabled="caseDrawerReadOnly"
                             placeholder="描述"
                             @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())"
                           />
-                          <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(caseDrawerForm.requestConfig.body.formItems, index, bodyFormParamDefaults())">删除</button>
+                          <button v-if="!caseDrawerReadOnly" type="button" class="ms-like-row-remove" @click="removeKeyValueRow(caseDrawerForm.requestConfig.body.formItems, index, bodyFormParamDefaults())">删除</button>
                         </div>
-                        <button type="button" class="ms-like-add-row" @click="caseDrawerForm.requestConfig.body.formItems.push(emptyKeyValue(bodyFormParamDefaults()))">+ 添加一行</button>
+                        <button v-if="!caseDrawerReadOnly" type="button" class="ms-like-add-row" @click="caseDrawerForm.requestConfig.body.formItems.push(emptyKeyValue(bodyFormParamDefaults()))">+ 添加一行</button>
                       </div>
                       <div v-else class="ms-like-empty-body">请求没有 Body</div>
                     </div>
@@ -4342,7 +4503,7 @@ function formatTimeLabel(value?: string | null) {
                 </template>
 
                 <template v-else-if="caseDrawerRequestTab === 'pre'">
-                  <div class="request-section" data-testid="pre-processors-section">
+                  <div :class="['request-section', { 'case-drawer-readonly-section': caseDrawerReadOnly }]" data-testid="pre-processors-section">
                     <ApiProcessorEditor
                       v-model="caseDrawerForm.preProcessors"
                       v-model:active-id="activePreProcessorId"
@@ -4354,7 +4515,7 @@ function formatTimeLabel(value?: string | null) {
                 </template>
 
                 <template v-else-if="caseDrawerRequestTab === 'post'">
-                  <div class="request-section" data-testid="post-processors-section">
+                  <div :class="['request-section', { 'case-drawer-readonly-section': caseDrawerReadOnly }]" data-testid="post-processors-section">
                     <ApiProcessorEditor
                       v-model="caseDrawerForm.postProcessors"
                       v-model:active-id="activePostProcessorId"
@@ -4366,13 +4527,13 @@ function formatTimeLabel(value?: string | null) {
                 </template>
 
                 <template v-else-if="caseDrawerRequestTab === 'tests'">
-                  <div class="request-section" data-testid="assertions-section">
+                  <div :class="['request-section', { 'case-drawer-readonly-section': caseDrawerReadOnly }]" data-testid="assertions-section">
                     <ApiAssertionEditor
                       v-model="caseDrawerForm.assertions"
                       v-model:active-id="activeAssertionId"
                       :latest-response="caseDrawerResponseStep?.response ?? null"
                     />
-                    <div class="editor-actions left">
+                    <div v-if="!caseDrawerReadOnly" class="editor-actions left">
                       <el-button text type="primary" @click="openBatchAddDrawer('assertion', 'case')">批量添加</el-button>
                     </div>
                   </div>
@@ -4382,7 +4543,7 @@ function formatTimeLabel(value?: string | null) {
                   <div class="request-section">
                     <div class="ms-auth-panel">
                       <div class="ms-auth-panel-title">认证方式</div>
-                      <el-radio-group v-model="caseDrawerForm.requestConfig.authConfig.authType" class="ms-auth-radio-group">
+                      <el-radio-group v-model="caseDrawerForm.requestConfig.authConfig.authType" :disabled="caseDrawerReadOnly" class="ms-auth-radio-group">
                         <el-radio-button
                           v-for="option in requestAuthTypeOptions"
                           :key="option.value"
@@ -4397,19 +4558,21 @@ function formatTimeLabel(value?: string | null) {
                       >
                         <div class="ms-auth-form-item">
                           <label class="ms-auth-form-label">Username</label>
-                          <el-input
-                            v-model="caseDrawerForm.requestConfig.authConfig.basicAuth.userName"
-                            placeholder="username"
-                            class="ms-auth-form-control"
-                          />
+                            <el-input
+                              v-model="caseDrawerForm.requestConfig.authConfig.basicAuth.userName"
+                              :disabled="caseDrawerReadOnly"
+                              placeholder="username"
+                              class="ms-auth-form-control"
+                            />
                         </div>
                         <div class="ms-auth-form-item">
                           <label class="ms-auth-form-label">Password</label>
-                          <el-input
-                            v-model="caseDrawerForm.requestConfig.authConfig.basicAuth.password"
-                            placeholder="password"
-                            class="ms-auth-form-control"
-                            show-password
+                            <el-input
+                              v-model="caseDrawerForm.requestConfig.authConfig.basicAuth.password"
+                              :disabled="caseDrawerReadOnly"
+                              placeholder="password"
+                              class="ms-auth-form-control"
+                              show-password
                           />
                         </div>
                       </div>
@@ -4419,19 +4582,21 @@ function formatTimeLabel(value?: string | null) {
                       >
                         <div class="ms-auth-form-item">
                           <label class="ms-auth-form-label">Username</label>
-                          <el-input
-                            v-model="caseDrawerForm.requestConfig.authConfig.digestAuth.userName"
-                            placeholder="username"
-                            class="ms-auth-form-control"
-                          />
+                            <el-input
+                              v-model="caseDrawerForm.requestConfig.authConfig.digestAuth.userName"
+                              :disabled="caseDrawerReadOnly"
+                              placeholder="username"
+                              class="ms-auth-form-control"
+                            />
                         </div>
                         <div class="ms-auth-form-item">
                           <label class="ms-auth-form-label">Password</label>
-                          <el-input
-                            v-model="caseDrawerForm.requestConfig.authConfig.digestAuth.password"
-                            placeholder="password"
-                            class="ms-auth-form-control"
-                            show-password
+                            <el-input
+                              v-model="caseDrawerForm.requestConfig.authConfig.digestAuth.password"
+                              :disabled="caseDrawerReadOnly"
+                              placeholder="password"
+                              class="ms-auth-form-control"
+                              show-password
                           />
                         </div>
                       </div>
@@ -4443,16 +4608,17 @@ function formatTimeLabel(value?: string | null) {
                   <div class="request-section ms-like-form-panel">
                     <div class="ms-like-form-row" data-testid="definition-name-input">
                       <div class="ms-like-form-label">接口名称</div>
-                      <el-input v-model="caseDrawerForm.name" class="ms-like-form-control" placeholder="接口名称" />
+                      <el-input v-model="caseDrawerForm.name" :disabled="caseDrawerReadOnly" class="ms-like-form-control" placeholder="接口名称" />
                     </div>
                     <div class="ms-like-form-row">
                       <div class="ms-like-form-label">模块 / 目录</div>
-                      <el-input v-model="caseDrawerForm.directoryName" class="ms-like-form-control" placeholder="模块 / 目录" />
+                      <el-input v-model="caseDrawerForm.directoryName" :disabled="caseDrawerReadOnly" class="ms-like-form-control" placeholder="模块 / 目录" />
                     </div>
                     <div class="ms-like-form-row">
                       <div class="ms-like-form-label">标签</div>
                       <el-input
                         :model-value="readTagInput(caseDrawerForm.tags)"
+                        :disabled="caseDrawerReadOnly"
                         class="ms-like-form-control"
                         placeholder="标签，逗号分隔"
                         @update:model-value="(value: string | number) => updateTagInput(caseDrawerForm, String(value))"
@@ -4460,11 +4626,11 @@ function formatTimeLabel(value?: string | null) {
                     </div>
                     <div class="ms-like-form-row">
                       <div class="ms-like-form-label">超时时间</div>
-                      <el-input-number v-model="caseDrawerForm.requestConfig.timeoutMs" :min="1000" :step="1000" class="ms-like-form-control full-width" />
+                      <el-input-number v-model="caseDrawerForm.requestConfig.timeoutMs" :disabled="caseDrawerReadOnly" :min="1000" :step="1000" class="ms-like-form-control full-width" />
                     </div>
                     <div class="ms-like-form-row align-start">
                       <div class="ms-like-form-label">描述</div>
-                      <el-input v-model="caseDrawerForm.description" class="ms-like-form-control" type="textarea" :rows="4" placeholder="接口描述、调用约束或备注" />
+                      <el-input v-model="caseDrawerForm.description" :disabled="caseDrawerReadOnly" class="ms-like-form-control" type="textarea" :rows="4" placeholder="接口描述、调用约束或备注" />
                     </div>
                     <div class="ms-like-settings-hint">
                       <span>写入空间 {{ currentDefinitionWorkspaceLabel }}</span>
@@ -4474,10 +4640,117 @@ function formatTimeLabel(value?: string | null) {
                   </div>
                 </template>
               </div>
+              <div v-else-if="caseDrawerViewTab === 'runHistory'" class="case-drawer-history-panel">
+                <div class="case-drawer-history-list-shell">
+                  <div class="case-drawer-history-list-header">
+                    <span>执行时间</span>
+                    <span>结果</span>
+                    <span>状态码</span>
+                    <span>耗时</span>
+                    <span>环境</span>
+                    <span>执行人</span>
+                  </div>
+                  <div v-if="caseDrawerRunHistoryLoading" class="case-drawer-history-loading">加载中...</div>
+                  <div v-else-if="!caseDrawerRunHistoryItems.length" class="case-drawer-history-empty">暂无执行历史</div>
+                  <template v-else>
+                    <button
+                      v-for="item in caseDrawerRunHistoryItems"
+                      :key="item.id"
+                      type="button"
+                      :class="['case-drawer-history-row', { active: selectedCaseDrawerRunHistoryId === item.id }]"
+                      @click="void selectCaseDrawerRunHistory(item.id)"
+                    >
+                      <span>{{ formatTimeLabel(item.createdAt) }}</span>
+                      <span :class="['case-drawer-history-result', item.result === 'SUCCESS' ? 'is-success' : 'is-failed']">{{ item.result === 'SUCCESS' ? '成功' : '失败' }}</span>
+                      <span>{{ item.statusCode ?? '-' }}</span>
+                      <span>{{ item.durationMs ?? '-' }}<template v-if="item.durationMs != null"> ms</template></span>
+                      <span>{{ item.environmentName || '默认' }}</span>
+                      <span>{{ item.operator || '-' }}</span>
+                    </button>
+                  </template>
+                </div>
+
+                <div class="ms-like-response-shell case-drawer-history-detail-shell">
+                  <div class="ms-like-response-header">
+                    <div class="ms-like-response-title">执行详情</div>
+                    <div v-if="caseDrawerRunHistoryDetail" class="ms-like-response-metrics">
+                      <span>状态 {{ caseDrawerSelectedHistoryStatusCode ?? '-' }}</span>
+                      <span>耗时 {{ caseDrawerSelectedHistoryDuration ?? '-' }}<template v-if="caseDrawerSelectedHistoryDuration !== null"> ms</template></span>
+                      <span>大小 {{ caseDrawerSelectedHistorySize }}</span>
+                    </div>
+                  </div>
+
+                  <div v-if="caseDrawerRunHistoryDetail" class="case-drawer-history-meta">
+                    <span>执行环境 {{ caseDrawerRunHistoryDetail.environmentName || '默认' }}</span>
+                    <span>变量集 {{ caseDrawerRunHistoryDetail.variableSetName || '未选择' }}</span>
+                    <span>执行人 {{ caseDrawerRunHistoryDetail.operator || '-' }}</span>
+                  </div>
+
+                  <div v-if="caseDrawerRunHistoryDetailLoading" class="case-drawer-history-loading">加载中...</div>
+                  <div v-else-if="!caseDrawerRunHistoryDetail" class="case-drawer-history-empty">选择一条执行记录查看详情</div>
+                  <template v-else>
+                    <div v-if="caseDrawerSelectedHistoryError" class="response-error-banner">
+                      {{ caseDrawerSelectedHistoryError }}
+                    </div>
+                    <div class="ms-like-response-tabs">
+                      <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'body' }]" @click="caseDrawerHistoryPreviewTab = 'body'">Body</button>
+                      <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'header' }]" @click="caseDrawerHistoryPreviewTab = 'header'">Header</button>
+                      <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'console' }]" @click="caseDrawerHistoryPreviewTab = 'console'">控制台</button>
+                      <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'actualRequest' }]" @click="caseDrawerHistoryPreviewTab = 'actualRequest'">实际请求</button>
+                    </div>
+
+                    <div class="ms-like-response-body">
+                      <MonacoCodeEditor
+                        v-if="caseDrawerHistoryPreviewTab === 'body'"
+                        :model-value="caseDrawerHistoryBodyPreview"
+                        :language="caseDrawerHistoryBodyLanguage"
+                        :read-only="true"
+                        :show-format-button="false"
+                        :fit-content="true"
+                        :max-fit-content-height="1000"
+                        height="100%"
+                      />
+                      <MonacoCodeEditor
+                        v-else-if="caseDrawerHistoryPreviewTab === 'header'"
+                        :model-value="caseDrawerHistoryHeadersPreview"
+                        language="json"
+                        :read-only="true"
+                        :show-format-button="false"
+                        :fit-content="true"
+                        :max-fit-content-height="1000"
+                        height="100%"
+                      />
+                      <MonacoCodeEditor
+                        v-else-if="caseDrawerHistoryPreviewTab === 'console'"
+                        :model-value="caseDrawerHistoryConsolePreview"
+                        language="text"
+                        :read-only="true"
+                        :show-format-button="false"
+                        :fit-content="true"
+                        :max-fit-content-height="1000"
+                        height="100%"
+                      />
+                      <MonacoCodeEditor
+                        v-else-if="caseDrawerHistoryPreviewTab === 'actualRequest'"
+                        :model-value="caseDrawerHistoryActualRequestPreview"
+                        language="json"
+                        :read-only="true"
+                        :show-format-button="false"
+                        :fit-content="true"
+                        :max-fit-content-height="1000"
+                        height="100%"
+                      />
+                    </div>
+                  </template>
+                </div>
+              </div>
+              <div v-else class="case-drawer-history-placeholder">
+                <div class="case-drawer-history-empty">变更历史即将支持</div>
+              </div>
             </template>
 
             <template #response>
-              <div class="ms-like-response-shell case-drawer-response-shell">
+              <div v-if="caseDrawerViewTab === 'detail'" class="ms-like-response-shell case-drawer-response-shell">
                 <div class="ms-like-response-header">
                   <div class="ms-like-response-title">响应内容</div>
                   <div v-if="!caseDrawerShowResponseEmptyState" class="ms-like-response-metrics">
@@ -4500,7 +4773,7 @@ function formatTimeLabel(value?: string | null) {
                         <span></span>
                       </div>
                     </div>
-                    <div class="ms-like-response-empty-text">点击 <span>发送</span> 获取响应内容</div>
+                    <div class="ms-like-response-empty-text">点击 <span>{{ caseDrawerPrimaryActionLabel }}</span> 获取响应内容</div>
                   </div>
                 </div>
                 <template v-else>
@@ -5302,6 +5575,52 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-method.method-trace {
   color: #8b5cf6;
+}
+
+.case-drawer-readonly-section :deep(.processor-toolbar),
+.case-drawer-readonly-section :deep(.assertion-toolbar),
+.case-drawer-readonly-section :deep(.processor-detail-actions),
+.case-drawer-readonly-section :deep(.assertion-detail-actions),
+.case-drawer-readonly-section :deep(.processor-list-actions),
+.case-drawer-readonly-section :deep(.assertion-list-actions),
+.case-drawer-readonly-section :deep(.extractor-panel-header .add-row-button),
+.case-drawer-readonly-section :deep(.assertion-table .add-row-button),
+.case-drawer-readonly-section :deep(.editor-actions),
+.case-drawer-readonly-section :deep(.extractor-more-trigger),
+.case-drawer-readonly-section :deep(.extractor-delete-trigger),
+.case-drawer-readonly-section :deep(.fast-extraction-suffix-button) {
+  display: none !important;
+}
+
+.case-drawer-readonly-section :deep(.processor-sidebar .el-switch),
+.case-drawer-readonly-section :deep(.assertion-sidebar .el-switch),
+.case-drawer-readonly-section :deep(.processor-detail .el-input__wrapper),
+.case-drawer-readonly-section :deep(.processor-detail .el-textarea__inner),
+.case-drawer-readonly-section :deep(.processor-detail .el-select__wrapper),
+.case-drawer-readonly-section :deep(.processor-detail .el-input-number),
+.case-drawer-readonly-section :deep(.processor-detail .el-radio-group),
+.case-drawer-readonly-section :deep(.assertion-detail .el-checkbox),
+.case-drawer-readonly-section :deep(.assertion-detail .el-input__wrapper),
+.case-drawer-readonly-section :deep(.assertion-detail .el-textarea__inner),
+.case-drawer-readonly-section :deep(.assertion-detail .el-select__wrapper),
+.case-drawer-readonly-section :deep(.assertion-detail .el-input-number),
+.case-drawer-readonly-section :deep(.assertion-detail .el-radio-group),
+.case-drawer-readonly-section :deep(.assertion-detail .fast-extraction-suffix-button) {
+  pointer-events: none;
+}
+
+.case-drawer-readonly-section :deep(.processor-detail .monaco-editor textarea),
+.case-drawer-readonly-section :deep(.assertion-detail .monaco-editor textarea) {
+  pointer-events: none;
+}
+
+.case-drawer-readonly-section :deep(.processor-detail .el-input__wrapper),
+.case-drawer-readonly-section :deep(.processor-detail .el-select__wrapper),
+.case-drawer-readonly-section :deep(.processor-detail .el-input-number),
+.case-drawer-readonly-section :deep(.assertion-detail .el-input__wrapper),
+.case-drawer-readonly-section :deep(.assertion-detail .el-select__wrapper),
+.case-drawer-readonly-section :deep(.assertion-detail .el-input-number) {
+  background: #f8fafc;
 }
 
 .request-method-select {
@@ -6210,6 +6529,100 @@ function formatTimeLabel(value?: string | null) {
 
 .case-drawer-response-shell .response-error-banner {
   margin: 0 16px;
+}
+
+.case-drawer-view-tabs {
+  margin-bottom: 8px;
+}
+
+.case-drawer-history-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 0 12px;
+}
+
+.case-drawer-history-list-shell {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.case-drawer-history-list-header,
+.case-drawer-history-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.4fr) 76px 72px 92px minmax(120px, 1fr) 92px;
+  gap: 12px;
+  align-items: center;
+  padding: 0 16px;
+}
+
+.case-drawer-history-list-header {
+  min-height: 40px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  background: #f8fafc;
+  border-bottom: 1px solid var(--el-border-color-light);
+}
+
+.case-drawer-history-row {
+  width: 100%;
+  min-height: 46px;
+  border: 0;
+  border-bottom: 1px solid #f2f4f7;
+  background: #fff;
+  text-align: left;
+  color: var(--el-text-color-primary);
+  cursor: pointer;
+}
+
+.case-drawer-history-row:last-child {
+  border-bottom: 0;
+}
+
+.case-drawer-history-row:hover {
+  background: #f8fbff;
+}
+
+.case-drawer-history-row.active {
+  background: #eef4ff;
+}
+
+.case-drawer-history-result {
+  font-weight: 600;
+}
+
+.case-drawer-history-result.is-success {
+  color: #16a34a;
+}
+
+.case-drawer-history-result.is-failed {
+  color: #dc2626;
+}
+
+.case-drawer-history-loading,
+.case-drawer-history-empty,
+.case-drawer-history-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.case-drawer-history-detail-shell {
+  min-height: 320px;
+}
+
+.case-drawer-history-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 0 16px 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 
 .case-drawer-body-editor {

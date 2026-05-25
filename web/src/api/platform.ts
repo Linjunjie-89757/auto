@@ -3,6 +3,8 @@ import type {
   ApiDebugDefinitionPayload,
   ApiDefinitionCaseDetail,
   ApiDefinitionCaseItem,
+  ApiDefinitionCaseRunHistoryDetail,
+  ApiDefinitionCaseRunHistoryItem,
   ApiResponse,
   ApiDefinitionDetail,
   ApiDefinitionItem,
@@ -647,6 +649,12 @@ export const platformApi = {
   },
   getApiDefinitionCaseDetail(workspaceCode: string, id: number) {
     return request<ApiDefinitionCaseDetail>(`/automation/api/cases/${id}`, { workspaceCode })
+  },
+  getApiDefinitionCaseRunHistory(workspaceCode: string, id: number) {
+    return request<PageResponse<ApiDefinitionCaseRunHistoryItem>>(`/automation/api/cases/${id}/run-history`, { workspaceCode })
+  },
+  getApiDefinitionCaseRunHistoryDetail(workspaceCode: string, historyId: number) {
+    return request<ApiDefinitionCaseRunHistoryDetail>(`/automation/api/cases/run-history/${historyId}`, { workspaceCode })
   },
   createApiDefinitionCase(workspaceCode: string, payload: SaveApiDefinitionCasePayload) {
     return request<ApiDefinitionCaseDetail>('/automation/api/cases', {

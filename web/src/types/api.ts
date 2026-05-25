@@ -668,6 +668,31 @@ export interface ApiDefinitionCaseDetail extends ApiDefinitionCaseItem {
   createdAt: string | null
 }
 
+export interface ApiDefinitionCaseRunHistoryItem {
+  id: number
+  workspaceCode: string
+  workspaceName: string
+  caseId: number
+  definitionId: number
+  caseName: string
+  reportId: number
+  result: string
+  failureSummary: string | null
+  statusCode: number | null
+  durationMs: number | null
+  responseSize: number | null
+  environmentId: number | null
+  environmentName: string | null
+  variableSetId: number | null
+  variableSetName: string | null
+  operator: string | null
+  createdAt: string | null
+}
+
+export interface ApiDefinitionCaseRunHistoryDetail extends ApiDefinitionCaseRunHistoryItem {
+  stepResults: ApiRunStepResult[]
+}
+
 export type ApiScenarioStepResourceType = 'DEFINITION' | 'CASE'
 
 export interface ApiScenarioStep {

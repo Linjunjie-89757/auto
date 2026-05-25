@@ -105,6 +105,22 @@ public class ApiAutomationController {
         return ApiResponse.ok(apiAutomationService.getCase(id, workspaceCode));
     }
 
+    @GetMapping("/cases/{id}/run-history")
+    public ApiResponse<PageResponse<ApiDefinitionCaseRunHistoryItem>> listCaseRunHistory(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(apiAutomationService.listCaseRunHistory(id, workspaceCode));
+    }
+
+    @GetMapping("/cases/run-history/{historyId}")
+    public ApiResponse<ApiDefinitionCaseRunHistoryDetail> getCaseRunHistoryDetail(
+            @PathVariable Long historyId,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(apiAutomationService.getCaseRunHistoryDetail(historyId, workspaceCode));
+    }
+
     @PostMapping("/cases")
     public ApiResponse<ApiDefinitionCaseDetail> createCase(
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,

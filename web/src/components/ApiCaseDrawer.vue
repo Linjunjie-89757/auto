@@ -19,6 +19,9 @@ const props = defineProps<{
   canWrite: boolean
   saving: boolean
   isEdit: boolean
+  readOnly?: boolean
+  primaryActionLabel?: string
+  showFooter?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -34,6 +37,9 @@ const emit = defineEmits<{
 }>()
 
 const submitLabel = computed(() => (props.isEdit ? '保存' : '创建'))
+const resolvedPrimaryActionLabel = computed(() => props.primaryActionLabel || '发送')
+const resolvedShowFooter = computed(() => props.showFooter ?? true)
+const resolvedReadOnly = computed(() => props.readOnly === true)
 
 function handleDrawerModelValueChange(value: boolean) {
   if (!value) {
@@ -110,6 +116,7 @@ function handleSubmitClick() {
         <div class="api-case-drawer-name-row">
           <el-input
             :model-value="props.caseName"
+            :disabled="resolvedReadOnly"
             maxlength="255"
             show-word-limit
             placeholder="请输入用例名称"
@@ -117,13 +124,14 @@ function handleSubmitClick() {
             @update:model-value="updateCaseName"
           />
           <el-button type="primary" :disabled="!props.canDebug" :loading="props.saving" @click="emit('debug')">
-            发送
+            {{ resolvedPrimaryActionLabel }}
           </el-button>
         </div>
 
         <div class="api-case-drawer-meta-row">
           <el-select
             :model-value="props.priority"
+            :disabled="resolvedReadOnly"
             class="api-case-drawer-meta-field"
             placeholder="优先级"
             @update:model-value="updatePriority"
@@ -132,6 +140,7 @@ function handleSubmitClick() {
           </el-select>
           <el-select
             :model-value="props.status"
+            :disabled="resolvedReadOnly"
             class="api-case-drawer-meta-field"
             placeholder="状态"
             @update:model-value="updateStatus"
@@ -140,6 +149,7 @@ function handleSubmitClick() {
           </el-select>
           <el-input
             :model-value="props.tagsInput"
+            :disabled="resolvedReadOnly"
             class="api-case-drawer-tags-field"
             placeholder="添加标签，回车结束"
             @update:model-value="updateTagsInput"
@@ -157,7 +167,7 @@ function handleSubmitClick() {
         </div>
       </div>
 
-      <div class="api-case-drawer-footer">
+      <div v-if="resolvedShowFooter" class="api-case-drawer-footer">
         <el-button @click="handleCloseClick">取消</el-button>
         <el-button type="primary" :disabled="!props.canWrite" :loading="props.saving" @click="handleSubmitClick">
           {{ submitLabel }}
@@ -228,7 +238,8 @@ function handleSubmitClick() {
   height: 32px;
   padding: 0;
   border-radius: 8px;
-  color: #667085;
+  color: rgba(102, 112, 133, 0.4);
+  transition: color 0.18s ease, background-color 0.18s ease;
 }
 
 .api-case-drawer-close:hover,
@@ -255,7 +266,7 @@ function handleSubmitClick() {
 
 .api-case-drawer-scroll::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: #d0d5dd;
+  background: rgba(148, 163, 184, 0.72);
 }
 
 .api-case-drawer-scroll::-webkit-scrollbar-track {
@@ -263,163 +274,80 @@ function handleSubmitClick() {
 }
 
 .api-case-drawer-summary-card {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0;
+  padding: 0 2px;
 }
 
 .api-case-drawer-summary-main {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .api-case-drawer-summary-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
 }
 
 .api-case-drawer-method-tag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex: 0 0 auto;
-  min-width: 50px;
-  height: 30px;
-  padding: 0 12px;
-  border: 1px solid #e4e7ec;
-  border-radius: 4px;
-  background: #fff;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
 }
 
 .api-case-drawer-summary-path {
   min-width: 0;
-  color: #344054;
   font-size: 13px;
   line-height: 20px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: #475467;
+  word-break: break-all;
 }
 
 .api-case-drawer-name-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
   align-items: center;
+  gap: 12px;
 }
 
-.api-case-drawer-name-input,
-.api-case-drawer-meta-field,
-.api-case-drawer-tags-field {
-  min-width: 0;
+.api-case-drawer-name-input :deep(.el-input__wrapper),
+.api-case-drawer-meta-field :deep(.el-select__wrapper),
+.api-case-drawer-tags-field :deep(.el-input__wrapper) {
+  min-height: 36px;
 }
 
 .api-case-drawer-meta-row {
   display: grid;
-  grid-template-columns: 160px 1fr minmax(220px, 1.2fr);
-  gap: 8px;
-  align-items: center;
-}
-
-.api-case-drawer-name-row :deep(.el-button) {
-  min-height: 38px;
-  padding-inline: 16px;
+  grid-template-columns: 140px 140px minmax(0, 1fr);
+  gap: 12px;
 }
 
 .api-case-drawer-tabs,
 .api-case-drawer-body,
 .api-case-drawer-response {
-  display: block;
-  width: 100%;
   min-width: 0;
-}
-
-.api-case-drawer-body,
-.api-case-drawer-response {
-  flex: 0 0 auto;
 }
 
 .api-case-drawer-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
-  padding: 12px 16px 16px;
-  border-top: 1px solid var(--el-border-color-light);
-  background: #fff;
-  box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.05);
-}
-
-:deep(.api-case-drawer .el-input__wrapper),
-:deep(.api-case-drawer .el-select__wrapper),
-:deep(.api-case-drawer .el-input-number .el-input__wrapper) {
-  min-height: 40px;
-}
-
-:deep(.api-case-drawer .el-button) {
-  min-height: 40px;
-  padding-inline: 18px;
-}
-
-:deep(.api-case-drawer-footer .el-button) {
-  min-width: 88px;
-  padding-inline: 0;
-}
-
-:deep(.api-case-drawer .el-input__count) {
-  font-size: 12px;
-}
-
-.api-case-drawer-method-tag.request-method-get {
-  color: #16a34a;
-  border-color: #bbf7d0;
-  background: #f7fef9;
-}
-
-.api-case-drawer-method-tag.request-method-post {
-  color: #f97316;
-  border-color: #fed7aa;
-  background: #fffaf5;
-}
-
-.api-case-drawer-method-tag.request-method-put,
-.api-case-drawer-method-tag.request-method-options,
-.api-case-drawer-method-tag.request-method-head {
-  color: #3b82f6;
-  border-color: #bfdbfe;
-  background: #f7fbff;
-}
-
-.api-case-drawer-method-tag.request-method-delete {
-  color: #dc2626;
-  border-color: #fecaca;
-  background: #fff7f7;
-}
-
-.api-case-drawer-method-tag.request-method-patch {
-  color: #ec4899;
-  border-color: #fbcfe8;
-  background: #fff7fb;
-}
-
-.api-case-drawer-method-tag.request-method-trace {
-  color: #8b5cf6;
-  border-color: #ddd6fe;
-  background: #faf8ff;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(15, 23, 42, 0.06);
+  box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.04);
+  background: rgba(255, 255, 255, 0.96);
 }
 
 @media (max-width: 960px) {
-  .api-case-drawer-name-row,
   .api-case-drawer-meta-row {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 1fr;
+  }
+
+  .api-case-drawer-name-row {
+    grid-template-columns: 1fr;
   }
 }
 </style>

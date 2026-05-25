@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS tb_api_definition_case_run_history (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    workspace_id BIGINT NOT NULL,
+    definition_id BIGINT NOT NULL,
+    case_id BIGINT NOT NULL,
+    report_id BIGINT NOT NULL,
+    case_name VARCHAR(255) NOT NULL,
+    run_result VARCHAR(32) NOT NULL,
+    failure_summary TEXT,
+    operator_name VARCHAR(255),
+    environment_id BIGINT,
+    environment_name VARCHAR(255),
+    variable_set_id BIGINT,
+    variable_set_name VARCHAR(255),
+    status_code INT,
+    duration_ms BIGINT,
+    response_size BIGINT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

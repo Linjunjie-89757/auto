@@ -263,6 +263,51 @@ public final class ApiAutomationModels {
     ) {
     }
 
+    public record ApiDefinitionCaseRunHistoryItem(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            Long caseId,
+            Long definitionId,
+            String caseName,
+            Long reportId,
+            String result,
+            String failureSummary,
+            Integer statusCode,
+            Long durationMs,
+            Long responseSize,
+            Long environmentId,
+            String environmentName,
+            Long variableSetId,
+            String variableSetName,
+            String operator,
+            LocalDateTime createdAt
+    ) {
+    }
+
+    public record ApiDefinitionCaseRunHistoryDetail(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            Long caseId,
+            Long definitionId,
+            String caseName,
+            Long reportId,
+            String result,
+            String failureSummary,
+            Integer statusCode,
+            Long durationMs,
+            Long responseSize,
+            Long environmentId,
+            String environmentName,
+            Long variableSetId,
+            String variableSetName,
+            String operator,
+            LocalDateTime createdAt,
+            List<ApiRunStepResultResponse> stepResults
+    ) {
+    }
+
     public record ApiScenarioStepInput(
             String stepName,
             String resourceType,

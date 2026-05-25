@@ -56,6 +56,7 @@ import type {
 type RequestEditorResourceType = 'definition' | 'case'
 type CaseDrawerMode = 'create' | 'edit' | 'run'
 type CaseDrawerViewTab = 'detail' | 'runHistory' | 'changeHistory'
+type CaseDrawerHistoryView = 'list' | 'detail'
 type ResponsePreviewTab = 'body' | 'header' | 'console' | 'actualRequest'
 type ApiRequestEditorDetail = ApiDefinitionDetail & {
   resourceType: RequestEditorResourceType
@@ -151,6 +152,7 @@ const caseDrawerRequestTab = ref<RequestContentTab>('body')
 const caseDrawerViewTab = ref<CaseDrawerViewTab>('detail')
 const caseDrawerResponsePreviewTab = ref<ResponsePreviewTab>('body')
 const caseDrawerHistoryPreviewTab = ref<ResponsePreviewTab>('body')
+const caseDrawerHistoryView = ref<CaseDrawerHistoryView>('list')
 const caseDrawerDebugReportId = ref<number | null>(null)
 const caseDrawerDebugFailureSummary = ref('')
 const caseDrawerDebugStepResults = ref<ApiRunStepResult[]>([])
@@ -833,6 +835,8 @@ const caseDrawerSelectedHistoryContentType = computed(() => caseDrawerSelectedHi
 const caseDrawerSelectedHistoryBody = computed(() => caseDrawerSelectedHistoryStep.value?.response?.body ?? '')
 const caseDrawerSelectedHistoryHeaders = computed(() => caseDrawerSelectedHistoryStep.value?.response?.headers ?? {})
 const caseDrawerSelectedHistoryError = computed(() => caseDrawerSelectedHistoryStep.value?.errorMessage || caseDrawerRunHistoryDetail.value?.failureSummary || '')
+const caseDrawerSelectedHistoryRequestHeaders = computed(() => caseDrawerSelectedHistoryStep.value?.request?.headers ?? {})
+const caseDrawerSelectedHistoryRequestBody = computed(() => caseDrawerSelectedHistoryStep.value?.request?.body ?? '')
 const shouldShowResponsePanel = computed(() => {
   if (showCaseListContent.value) {
     return false
@@ -1103,6 +1107,29 @@ const caseDrawerHistoryBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
   }
   return 'text'
 })
+const caseDrawerHistoryRequestBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
+  const headers = caseDrawerSelectedHistoryRequestHeaders.value
+  const contentType = Object.entries(headers)
+    .find(([key]) => key.toLowerCase() === 'content-type')?.[1]
+    ?.toLowerCase() ?? ''
+  const body = caseDrawerSelectedHistoryRequestBody.value.trim()
+  if (contentType.includes('json')) return 'json'
+  if (contentType.includes('xml') || contentType.includes('html')) return 'xml'
+  if (!body) return 'text'
+  if ((body.startsWith('{') && body.endsWith('}')) || (body.startsWith('[') && body.endsWith(']'))) {
+    try {
+      JSON.parse(body)
+      return 'json'
+    }
+    catch {
+      return 'text'
+    }
+  }
+  if (body.startsWith('<') && body.endsWith('>')) {
+    return 'xml'
+  }
+  return 'text'
+})
 
 const responseBodyPreview = computed(() => currentResponseBody.value || '')
 const responseHeadersPreview = computed(() => JSON.stringify(currentResponseHeaders.value, null, 2))
@@ -1110,6 +1137,8 @@ const caseDrawerResponseBodyPreview = computed(() => caseDrawerResponseBody.valu
 const caseDrawerResponseHeadersPreview = computed(() => JSON.stringify(caseDrawerResponseHeaders.value, null, 2))
 const caseDrawerHistoryBodyPreview = computed(() => caseDrawerSelectedHistoryBody.value || '')
 const caseDrawerHistoryHeadersPreview = computed(() => JSON.stringify(caseDrawerSelectedHistoryHeaders.value, null, 2))
+const caseDrawerHistoryRequestHeadersPreview = computed(() => JSON.stringify(caseDrawerSelectedHistoryRequestHeaders.value, null, 2))
+const caseDrawerHistoryRequestBodyPreview = computed(() => caseDrawerSelectedHistoryRequestBody.value || '')
 function buildRunConsolePreview(
   debugError: string,
   processorResults: ApiRunStepResult['processorResults'],
@@ -1197,19 +1226,6 @@ const caseDrawerActualRequestPreview = computed(() => buildActualRequestPreview(
     ),
     body: getModeBodyText(caseDrawerForm.requestConfig.body.type, caseDrawerForm) || null,
   }))
-const caseDrawerHistoryActualRequestPreview = computed(() => buildActualRequestPreview(
-  caseDrawerSelectedHistoryStep.value?.request,
-  {
-    method: caseDrawerForm.requestConfig.method || caseDrawerForm.method || 'GET',
-    url: caseDrawerForm.requestConfig.path || caseDrawerForm.path || '',
-    headers: Object.fromEntries(
-      caseDrawerForm.requestConfig.headers
-        .filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false)
-        .map(item => [item.key, item.value]),
-    ),
-    body: getModeBodyText(caseDrawerForm.requestConfig.body.type, caseDrawerForm) || null,
-  },
-))
 const caseDrawerTagsInput = computed({
   get: () => readTagInput(caseDrawerForm.tags),
   set: (value: string) => updateTagInput(caseDrawerForm, value),
@@ -1913,6 +1929,7 @@ function resetCaseDrawerRunHistoryState() {
   caseDrawerRunHistoryDetail.value = null
   selectedCaseDrawerRunHistoryId.value = null
   caseDrawerHistoryPreviewTab.value = 'body'
+  caseDrawerHistoryView.value = 'list'
 }
 
 function syncCaseDrawerDebugStateFromTab(tab?: RequestEditorTab | null) {
@@ -1933,6 +1950,7 @@ function updateCaseDrawerDebugState(reportId: number | null, failureSummary: str
 
 async function selectCaseDrawerRunHistory(historyId: number | null) {
   selectedCaseDrawerRunHistoryId.value = historyId
+  caseDrawerHistoryView.value = historyId ? 'detail' : 'list'
   if (!historyId) {
     caseDrawerRunHistoryDetail.value = null
     return
@@ -1955,6 +1973,10 @@ function handleCaseDrawerHistoryRowClick(row: ApiDefinitionCaseRunHistoryItem) {
   void selectCaseDrawerRunHistory(row.id)
 }
 
+function backToCaseDrawerHistoryList() {
+  caseDrawerHistoryView.value = 'list'
+}
+
 async function loadCaseDrawerRunHistory(caseId?: number | null, preferredHistoryId?: number | null) {
   if (!caseId) {
     resetCaseDrawerRunHistoryState()
@@ -1964,11 +1986,21 @@ async function loadCaseDrawerRunHistory(caseId?: number | null, preferredHistory
   try {
     const response = await platformApi.getApiDefinitionCaseRunHistory(workspaceCode.value, caseId)
     caseDrawerRunHistoryItems.value = response.items || []
-    const targetId = preferredHistoryId
-      ?? (selectedCaseDrawerRunHistoryId.value && caseDrawerRunHistoryItems.value.some(item => item.id === selectedCaseDrawerRunHistoryId.value)
-        ? selectedCaseDrawerRunHistoryId.value
-        : caseDrawerRunHistoryItems.value[0]?.id ?? null)
-    await selectCaseDrawerRunHistory(targetId)
+    if (preferredHistoryId) {
+      await selectCaseDrawerRunHistory(preferredHistoryId)
+      return
+    }
+    if (caseDrawerHistoryView.value === 'detail' && selectedCaseDrawerRunHistoryId.value) {
+      const selectedStillExists = caseDrawerRunHistoryItems.value.some(item => item.id === selectedCaseDrawerRunHistoryId.value)
+      if (selectedStillExists) {
+        await selectCaseDrawerRunHistory(selectedCaseDrawerRunHistoryId.value)
+        return
+      }
+    }
+    selectedCaseDrawerRunHistoryId.value = null
+    caseDrawerRunHistoryDetail.value = null
+    caseDrawerHistoryPreviewTab.value = 'body'
+    caseDrawerHistoryView.value = 'list'
   }
   catch (error) {
     resetCaseDrawerRunHistoryState()
@@ -4658,7 +4690,7 @@ function formatTimeLabel(value?: string | null) {
                 </template>
               </div>
               <div v-else-if="caseDrawerViewTab === 'runHistory'" class="case-drawer-history-panel">
-                <div class="case-drawer-history-list-shell">
+                <div v-if="caseDrawerHistoryView === 'list'" class="case-drawer-history-list-shell">
                   <div v-if="caseDrawerRunHistoryLoading" class="case-drawer-history-loading">加载中...</div>
                   <el-table
                     v-else
@@ -4724,13 +4756,18 @@ function formatTimeLabel(value?: string | null) {
                   </el-table>
                 </div>
 
-                <div class="ms-like-response-shell case-drawer-history-detail-shell">
+                <div v-else class="ms-like-response-shell case-drawer-history-detail-shell">
                   <div class="ms-like-response-header">
-                    <div class="ms-like-response-title">执行详情</div>
-                    <div v-if="caseDrawerRunHistoryDetail" class="ms-like-response-metrics">
-                      <span>状态 {{ caseDrawerSelectedHistoryStatusCode ?? '-' }}</span>
-                      <span>耗时 {{ caseDrawerSelectedHistoryDuration ?? '-' }}<template v-if="caseDrawerSelectedHistoryDuration !== null"> ms</template></span>
-                      <span>大小 {{ caseDrawerSelectedHistorySize }}</span>
+                    <div class="case-drawer-history-detail-title">
+                      <el-button text size="small" class="case-drawer-history-back-button" @click="backToCaseDrawerHistoryList">← 执行历史</el-button>
+                      <div class="ms-like-response-title">执行详情</div>
+                    </div>
+                    <div class="case-drawer-history-detail-head-right">
+                      <div v-if="caseDrawerRunHistoryDetail" class="ms-like-response-metrics">
+                        <span>状态 {{ caseDrawerSelectedHistoryStatusCode ?? '-' }}</span>
+                        <span>耗时 {{ caseDrawerSelectedHistoryDuration ?? '-' }}<template v-if="caseDrawerSelectedHistoryDuration !== null"> ms</template></span>
+                        <span>大小 {{ caseDrawerSelectedHistorySize }}</span>
+                      </div>
                     </div>
                   </div>
 
@@ -4743,57 +4780,81 @@ function formatTimeLabel(value?: string | null) {
                   <div v-if="caseDrawerRunHistoryDetailLoading" class="case-drawer-history-loading">加载中...</div>
                   <div v-else-if="!caseDrawerRunHistoryDetail" class="case-drawer-history-empty">选择一条执行记录查看详情</div>
                   <template v-else>
-                    <div v-if="caseDrawerSelectedHistoryError" class="response-error-banner">
-                      {{ caseDrawerSelectedHistoryError }}
-                    </div>
-                    <div class="ms-like-response-tabs">
-                      <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'body' }]" @click="caseDrawerHistoryPreviewTab = 'body'">Body</button>
-                      <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'header' }]" @click="caseDrawerHistoryPreviewTab = 'header'">Header</button>
-                      <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'console' }]" @click="caseDrawerHistoryPreviewTab = 'console'">控制台</button>
-                      <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'actualRequest' }]" @click="caseDrawerHistoryPreviewTab = 'actualRequest'">实际请求</button>
+                    <div class="case-drawer-history-section">
+                      <div class="case-drawer-history-section-title">实际请求</div>
+                      <div class="case-drawer-history-request-grid">
+                        <div class="case-drawer-history-request-block">
+                          <div class="case-drawer-history-request-label">Request Header</div>
+                          <MonacoCodeEditor
+                            :model-value="caseDrawerHistoryRequestHeadersPreview"
+                            language="json"
+                            :read-only="true"
+                            :show-format-button="false"
+                            :fit-content="true"
+                            :max-fit-content-height="1000"
+                            height="100%"
+                          />
+                        </div>
+                        <div class="case-drawer-history-request-block">
+                          <div class="case-drawer-history-request-label">Request Body</div>
+                          <div v-if="!caseDrawerHistoryRequestBodyPreview" class="case-drawer-history-empty case-drawer-history-request-empty">本次请求未发送请求体</div>
+                          <MonacoCodeEditor
+                            v-else
+                            :model-value="caseDrawerHistoryRequestBodyPreview"
+                            :language="caseDrawerHistoryRequestBodyLanguage"
+                            :read-only="true"
+                            :show-format-button="false"
+                            :fit-content="true"
+                            :max-fit-content-height="1000"
+                            height="100%"
+                          />
+                        </div>
+                      </div>
                     </div>
 
-                    <div class="ms-like-response-body">
-                      <MonacoCodeEditor
-                        v-if="caseDrawerHistoryPreviewTab === 'body'"
-                        :model-value="caseDrawerHistoryBodyPreview"
-                        :language="caseDrawerHistoryBodyLanguage"
-                        :read-only="true"
-                        :show-format-button="false"
-                        :fit-content="true"
-                        :max-fit-content-height="1000"
-                        height="100%"
-                      />
-                      <MonacoCodeEditor
-                        v-else-if="caseDrawerHistoryPreviewTab === 'header'"
-                        :model-value="caseDrawerHistoryHeadersPreview"
-                        language="json"
-                        :read-only="true"
-                        :show-format-button="false"
-                        :fit-content="true"
-                        :max-fit-content-height="1000"
-                        height="100%"
-                      />
-                      <MonacoCodeEditor
-                        v-else-if="caseDrawerHistoryPreviewTab === 'console'"
-                        :model-value="caseDrawerHistoryConsolePreview"
-                        language="text"
-                        :read-only="true"
-                        :show-format-button="false"
-                        :fit-content="true"
-                        :max-fit-content-height="1000"
-                        height="100%"
-                      />
-                      <MonacoCodeEditor
-                        v-else-if="caseDrawerHistoryPreviewTab === 'actualRequest'"
-                        :model-value="caseDrawerHistoryActualRequestPreview"
-                        language="json"
-                        :read-only="true"
-                        :show-format-button="false"
-                        :fit-content="true"
-                        :max-fit-content-height="1000"
-                        height="100%"
-                      />
+                    <div class="case-drawer-history-section">
+                      <div class="case-drawer-history-section-title">响应结果</div>
+                      <div v-if="caseDrawerSelectedHistoryError" class="response-error-banner">
+                        {{ caseDrawerSelectedHistoryError }}
+                      </div>
+                      <div class="ms-like-response-tabs">
+                        <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'body' }]" @click="caseDrawerHistoryPreviewTab = 'body'">Body</button>
+                        <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'header' }]" @click="caseDrawerHistoryPreviewTab = 'header'">Header</button>
+                        <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'console' }]" @click="caseDrawerHistoryPreviewTab = 'console'">控制台</button>
+                      </div>
+
+                      <div class="ms-like-response-body">
+                        <MonacoCodeEditor
+                          v-if="caseDrawerHistoryPreviewTab === 'body'"
+                          :model-value="caseDrawerHistoryBodyPreview"
+                          :language="caseDrawerHistoryBodyLanguage"
+                          :read-only="true"
+                          :show-format-button="false"
+                          :fit-content="true"
+                          :max-fit-content-height="1000"
+                          height="100%"
+                        />
+                        <MonacoCodeEditor
+                          v-else-if="caseDrawerHistoryPreviewTab === 'header'"
+                          :model-value="caseDrawerHistoryHeadersPreview"
+                          language="json"
+                          :read-only="true"
+                          :show-format-button="false"
+                          :fit-content="true"
+                          :max-fit-content-height="1000"
+                          height="100%"
+                        />
+                        <MonacoCodeEditor
+                          v-else
+                          :model-value="caseDrawerHistoryConsolePreview"
+                          language="text"
+                          :read-only="true"
+                          :show-format-button="false"
+                          :fit-content="true"
+                          :max-fit-content-height="1000"
+                          height="100%"
+                        />
+                      </div>
                     </div>
                   </template>
                 </div>
@@ -6641,6 +6702,26 @@ function formatTimeLabel(value?: string | null) {
   color: var(--el-color-primary);
 }
 
+.case-drawer-history-detail-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.case-drawer-history-back-button {
+  padding-inline: 0;
+  color: var(--el-color-primary);
+  font-weight: 500;
+}
+
+.case-drawer-history-detail-head-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
 .case-drawer-history-loading,
 .case-drawer-history-empty,
 .case-drawer-history-placeholder {
@@ -6663,6 +6744,43 @@ function formatTimeLabel(value?: string | null) {
 
 .case-drawer-history-detail-shell {
   min-height: 320px;
+}
+
+.case-drawer-history-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 16px 12px;
+}
+
+.case-drawer-history-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #101828;
+}
+
+.case-drawer-history-request-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.case-drawer-history-request-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.case-drawer-history-request-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.case-drawer-history-request-empty {
+  min-height: 120px;
+  border: 1px dashed var(--el-border-color-light);
+  border-radius: 8px;
+  background: #fafafa;
 }
 
 .case-drawer-history-meta {

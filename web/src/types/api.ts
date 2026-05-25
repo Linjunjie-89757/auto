@@ -756,6 +756,13 @@ export interface ApiRequestSnapshot {
   method: string
   url: string
   headers: Record<string, string>
+  queryParams?: ApiKeyValue[] | null
+  cookies?: ApiKeyValue[] | null
+  bodyType?: string | null
+  bodyContentType?: string | null
+  bodyFormItems?: ApiKeyValue[] | null
+  bodyFileName?: string | null
+  bodyFileContentType?: string | null
   body: string | null
 }
 

@@ -1071,7 +1071,19 @@ public class ApiAutomationService {
                     response.body(),
                     response.headers().firstValue("content-type").orElse(null)
             );
-            ApiRequestSnapshot requestSnapshot = new ApiRequestSnapshot(request.method(), request.url(), sentRequest.headers(), request.body());
+            ApiRequestSnapshot requestSnapshot = new ApiRequestSnapshot(
+                    request.method(),
+                    request.url(),
+                    sentRequest.headers(),
+                    defaultList(resolvedConfig.queryParams()),
+                    defaultList(resolvedConfig.cookies()),
+                    request.bodyConfig() == null ? null : request.bodyConfig().type(),
+                    request.bodyConfig() == null ? null : request.bodyConfig().contentType(),
+                    request.bodyConfig() == null ? List.of() : defaultList(request.bodyConfig().formItems()),
+                    request.bodyConfig() == null ? null : request.bodyConfig().fileName(),
+                    request.bodyConfig() == null ? null : request.bodyConfig().contentType(),
+                    request.body()
+            );
             executeProcessors("POST", postProcessors, definition.getWorkspaceId(), requestConfig, requestSnapshot, responseSnapshot, environment, variables, processorResults, extractionResults);
 
             List<ApiAssertionResult> assertionResults = evaluateAssertions(assertions, requestSnapshot, responseSnapshot, durationMs, variables);

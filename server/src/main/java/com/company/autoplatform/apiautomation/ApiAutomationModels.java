@@ -456,6 +456,13 @@ public final class ApiAutomationModels {
             String method,
             String url,
             Map<String, String> headers,
+            List<ApiKeyValueInput> queryParams,
+            List<ApiKeyValueInput> cookies,
+            String bodyType,
+            String bodyContentType,
+            List<ApiKeyValueInput> bodyFormItems,
+            String bodyFileName,
+            String bodyFileContentType,
             String body
     ) {
     }

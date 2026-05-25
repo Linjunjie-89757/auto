@@ -58,6 +58,7 @@ type CaseDrawerMode = 'create' | 'edit' | 'run'
 type CaseDrawerViewTab = 'detail' | 'runHistory' | 'changeHistory'
 type CaseDrawerHistoryView = 'list' | 'detail'
 type ResponsePreviewTab = 'body' | 'header' | 'console' | 'actualRequest'
+type HistoryRequestPreviewTab = 'header' | 'body'
 type ApiRequestEditorDetail = ApiDefinitionDetail & {
   resourceType: RequestEditorResourceType
   definitionId: number | null
@@ -152,6 +153,7 @@ const caseDrawerRequestTab = ref<RequestContentTab>('body')
 const caseDrawerViewTab = ref<CaseDrawerViewTab>('detail')
 const caseDrawerResponsePreviewTab = ref<ResponsePreviewTab>('body')
 const caseDrawerHistoryPreviewTab = ref<ResponsePreviewTab>('body')
+const caseDrawerHistoryRequestPreviewTab = ref<HistoryRequestPreviewTab>('body')
 const caseDrawerHistoryView = ref<CaseDrawerHistoryView>('list')
 const caseDrawerDebugReportId = ref<number | null>(null)
 const caseDrawerDebugFailureSummary = ref('')
@@ -837,6 +839,13 @@ const caseDrawerSelectedHistoryHeaders = computed(() => caseDrawerSelectedHistor
 const caseDrawerSelectedHistoryError = computed(() => caseDrawerSelectedHistoryStep.value?.errorMessage || caseDrawerRunHistoryDetail.value?.failureSummary || '')
 const caseDrawerSelectedHistoryRequestHeaders = computed(() => caseDrawerSelectedHistoryStep.value?.request?.headers ?? {})
 const caseDrawerSelectedHistoryRequestBody = computed(() => caseDrawerSelectedHistoryStep.value?.request?.body ?? '')
+const caseDrawerSelectedHistoryRequestQueryParams = computed(() => caseDrawerSelectedHistoryStep.value?.request?.queryParams ?? [])
+const caseDrawerSelectedHistoryRequestCookies = computed(() => caseDrawerSelectedHistoryStep.value?.request?.cookies ?? [])
+const caseDrawerSelectedHistoryRequestBodyType = computed(() => caseDrawerSelectedHistoryStep.value?.request?.bodyType ?? '')
+const caseDrawerSelectedHistoryRequestBodyContentType = computed(() => caseDrawerSelectedHistoryStep.value?.request?.bodyContentType ?? '')
+const caseDrawerSelectedHistoryRequestBodyFormItems = computed(() => caseDrawerSelectedHistoryStep.value?.request?.bodyFormItems ?? [])
+const caseDrawerSelectedHistoryRequestBodyFileName = computed(() => caseDrawerSelectedHistoryStep.value?.request?.bodyFileName ?? '')
+const caseDrawerSelectedHistoryRequestBodyFileContentType = computed(() => caseDrawerSelectedHistoryStep.value?.request?.bodyFileContentType ?? '')
 const shouldShowResponsePanel = computed(() => {
   if (showCaseListContent.value) {
     return false
@@ -1139,6 +1148,9 @@ const caseDrawerHistoryBodyPreview = computed(() => caseDrawerSelectedHistoryBod
 const caseDrawerHistoryHeadersPreview = computed(() => JSON.stringify(caseDrawerSelectedHistoryHeaders.value, null, 2))
 const caseDrawerHistoryRequestHeadersPreview = computed(() => JSON.stringify(caseDrawerSelectedHistoryRequestHeaders.value, null, 2))
 const caseDrawerHistoryRequestBodyPreview = computed(() => caseDrawerSelectedHistoryRequestBody.value || '')
+const caseDrawerHistoryRequestQueryParamsPreview = computed(() => JSON.stringify(caseDrawerSelectedHistoryRequestQueryParams.value, null, 2))
+const caseDrawerHistoryRequestCookiesPreview = computed(() => JSON.stringify(caseDrawerSelectedHistoryRequestCookies.value, null, 2))
+const caseDrawerHistoryRequestBodyFormItemsPreview = computed(() => JSON.stringify(caseDrawerSelectedHistoryRequestBodyFormItems.value, null, 2))
 function buildRunConsolePreview(
   debugError: string,
   processorResults: ApiRunStepResult['processorResults'],
@@ -1929,7 +1941,12 @@ function resetCaseDrawerRunHistoryState() {
   caseDrawerRunHistoryDetail.value = null
   selectedCaseDrawerRunHistoryId.value = null
   caseDrawerHistoryPreviewTab.value = 'body'
+  caseDrawerHistoryRequestPreviewTab.value = 'body'
   caseDrawerHistoryView.value = 'list'
+}
+
+function getPreferredHistoryRequestPreviewTab() {
+  return caseDrawerSelectedHistoryRequestBody.value.trim() ? 'body' : 'header'
 }
 
 function syncCaseDrawerDebugStateFromTab(tab?: RequestEditorTab | null) {
@@ -1959,6 +1976,7 @@ async function selectCaseDrawerRunHistory(historyId: number | null) {
   try {
     caseDrawerRunHistoryDetail.value = await platformApi.getApiDefinitionCaseRunHistoryDetail(workspaceCode.value, historyId)
     caseDrawerHistoryPreviewTab.value = 'body'
+    caseDrawerHistoryRequestPreviewTab.value = getPreferredHistoryRequestPreviewTab()
   }
   catch (error) {
     caseDrawerRunHistoryDetail.value = null
@@ -2000,6 +2018,7 @@ async function loadCaseDrawerRunHistory(caseId?: number | null, preferredHistory
     selectedCaseDrawerRunHistoryId.value = null
     caseDrawerRunHistoryDetail.value = null
     caseDrawerHistoryPreviewTab.value = 'body'
+    caseDrawerHistoryRequestPreviewTab.value = 'body'
     caseDrawerHistoryView.value = 'list'
   }
   catch (error) {
@@ -4760,7 +4779,6 @@ function formatTimeLabel(value?: string | null) {
                   <div class="ms-like-response-header">
                     <div class="case-drawer-history-detail-title">
                       <el-button text size="small" class="case-drawer-history-back-button" @click="backToCaseDrawerHistoryList">← 执行历史</el-button>
-                      <div class="ms-like-response-title">执行详情</div>
                     </div>
                     <div class="case-drawer-history-detail-head-right">
                       <div v-if="caseDrawerRunHistoryDetail" class="ms-like-response-metrics">
@@ -4782,9 +4800,24 @@ function formatTimeLabel(value?: string | null) {
                   <template v-else>
                     <div class="case-drawer-history-section">
                       <div class="case-drawer-history-section-title">实际请求</div>
-                      <div class="case-drawer-history-request-grid">
-                        <div class="case-drawer-history-request-block">
-                          <div class="case-drawer-history-request-label">Request Header</div>
+                      <div class="ms-like-response-tabs case-drawer-history-request-tabs">
+                        <button
+                          v-if="caseDrawerSelectedHistoryRequestHeaders && Object.keys(caseDrawerSelectedHistoryRequestHeaders).length"
+                          :class="['ms-like-top-tab', { active: caseDrawerHistoryRequestPreviewTab === 'header' }]"
+                          @click="caseDrawerHistoryRequestPreviewTab = 'header'"
+                        >
+                          Header
+                        </button>
+                        <button
+                          v-if="caseDrawerSelectedHistoryRequestBody || caseDrawerSelectedHistoryRequestQueryParams.length || caseDrawerSelectedHistoryRequestCookies.length || caseDrawerSelectedHistoryRequestBodyFormItems.length || caseDrawerSelectedHistoryRequestBodyType"
+                          :class="['ms-like-top-tab', { active: caseDrawerHistoryRequestPreviewTab === 'body' }]"
+                          @click="caseDrawerHistoryRequestPreviewTab = 'body'"
+                        >
+                          Body
+                        </button>
+                      </div>
+                      <div class="ms-like-response-body case-drawer-history-request-body">
+                        <template v-if="caseDrawerHistoryRequestPreviewTab === 'header'">
                           <MonacoCodeEditor
                             :model-value="caseDrawerHistoryRequestHeadersPreview"
                             language="json"
@@ -4794,21 +4827,75 @@ function formatTimeLabel(value?: string | null) {
                             :max-fit-content-height="1000"
                             height="100%"
                           />
-                        </div>
-                        <div class="case-drawer-history-request-block">
-                          <div class="case-drawer-history-request-label">Request Body</div>
-                          <div v-if="!caseDrawerHistoryRequestBodyPreview" class="case-drawer-history-empty case-drawer-history-request-empty">本次请求未发送请求体</div>
-                          <MonacoCodeEditor
-                            v-else
-                            :model-value="caseDrawerHistoryRequestBodyPreview"
-                            :language="caseDrawerHistoryRequestBodyLanguage"
-                            :read-only="true"
-                            :show-format-button="false"
-                            :fit-content="true"
-                            :max-fit-content-height="1000"
-                            height="100%"
-                          />
-                        </div>
+                        </template>
+                        <template v-else>
+                          <div v-if="caseDrawerSelectedHistoryRequestQueryParams.length" class="case-drawer-history-request-block">
+                            <div class="case-drawer-history-request-label">Query</div>
+                            <MonacoCodeEditor
+                              :model-value="caseDrawerHistoryRequestQueryParamsPreview"
+                              language="json"
+                              :read-only="true"
+                              :show-format-button="false"
+                              :fit-content="true"
+                              :max-fit-content-height="1000"
+                              height="100%"
+                            />
+                          </div>
+                          <div v-if="caseDrawerSelectedHistoryRequestCookies.length" class="case-drawer-history-request-block">
+                            <div class="case-drawer-history-request-label">Cookies</div>
+                            <MonacoCodeEditor
+                              :model-value="caseDrawerHistoryRequestCookiesPreview"
+                              language="json"
+                              :read-only="true"
+                              :show-format-button="false"
+                              :fit-content="true"
+                              :max-fit-content-height="1000"
+                              height="100%"
+                            />
+                          </div>
+                          <div v-if="caseDrawerSelectedHistoryRequestBodyType" class="case-drawer-history-request-block">
+                            <div class="case-drawer-history-request-label">Body Type</div>
+                            <div class="case-drawer-history-request-value">{{ caseDrawerSelectedHistoryRequestBodyType }}</div>
+                          </div>
+                          <div v-if="caseDrawerSelectedHistoryRequestBodyContentType" class="case-drawer-history-request-block">
+                            <div class="case-drawer-history-request-label">Body Content-Type</div>
+                            <div class="case-drawer-history-request-value">{{ caseDrawerSelectedHistoryRequestBodyContentType }}</div>
+                          </div>
+                          <div v-if="caseDrawerSelectedHistoryRequestBodyFormItems.length" class="case-drawer-history-request-block">
+                            <div class="case-drawer-history-request-label">Body Form</div>
+                            <MonacoCodeEditor
+                              :model-value="caseDrawerHistoryRequestBodyFormItemsPreview"
+                              language="json"
+                              :read-only="true"
+                              :show-format-button="false"
+                              :fit-content="true"
+                              :max-fit-content-height="1000"
+                              height="100%"
+                            />
+                          </div>
+                          <div v-if="caseDrawerSelectedHistoryRequestBodyFileName" class="case-drawer-history-request-block">
+                            <div class="case-drawer-history-request-label">Body File</div>
+                            <div class="case-drawer-history-request-value">
+                              {{ caseDrawerSelectedHistoryRequestBodyFileName }}
+                              <template v-if="caseDrawerSelectedHistoryRequestBodyFileContentType">
+                                ({{ caseDrawerSelectedHistoryRequestBodyFileContentType }})
+                              </template>
+                            </div>
+                          </div>
+                          <div class="case-drawer-history-request-block">
+                            <div v-if="!caseDrawerHistoryRequestBodyPreview" class="case-drawer-history-empty case-drawer-history-request-empty">本次请求未发送请求体</div>
+                            <MonacoCodeEditor
+                              v-else
+                              :model-value="caseDrawerHistoryRequestBodyPreview"
+                              :language="caseDrawerHistoryRequestBodyLanguage"
+                              :read-only="true"
+                              :show-format-button="false"
+                              :fit-content="true"
+                              :max-fit-content-height="1000"
+                              height="100%"
+                            />
+                          </div>
+                        </template>
                       </div>
                     </div>
 
@@ -6705,14 +6792,21 @@ function formatTimeLabel(value?: string | null) {
 .case-drawer-history-detail-title {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   min-width: 0;
 }
 
 .case-drawer-history-back-button {
-  padding-inline: 0;
-  color: var(--el-color-primary);
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #2563eb;
   font-weight: 500;
+}
+
+.case-drawer-history-back-button:hover {
+  background: #dbeafe;
 }
 
 .case-drawer-history-detail-head-right {
@@ -6760,9 +6854,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .case-drawer-history-request-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
+  display: none;
 }
 
 .case-drawer-history-request-block {
@@ -6781,6 +6873,14 @@ function formatTimeLabel(value?: string | null) {
   border: 1px dashed var(--el-border-color-light);
   border-radius: 8px;
   background: #fafafa;
+}
+
+.case-drawer-history-request-tabs {
+  margin-bottom: -2px;
+}
+
+.case-drawer-history-request-body {
+  min-height: 220px;
 }
 
 .case-drawer-history-meta {

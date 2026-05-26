@@ -22,6 +22,7 @@ import MonacoCodeEditor from './MonacoCodeEditor.vue'
 import TableSettingsDrawer from './TableSettingsDrawer.vue'
 import type {
   ApiAssertionConfig,
+  ApiAssertionResult,
   ApiAuthConfig,
   ApiAuthCredential,
   ApiDebugCasePayload,
@@ -58,7 +59,7 @@ type RequestEditorResourceType = 'definition' | 'case'
 type CaseDrawerMode = 'create' | 'edit' | 'run'
 type CaseDrawerViewTab = 'detail' | 'runHistory' | 'changeHistory'
 type CaseDrawerHistoryView = 'list' | 'detail'
-type ResponsePreviewTab = 'body' | 'header' | 'console' | 'actualRequest'
+type ResponsePreviewTab = 'body' | 'header' | 'console' | 'actualRequest' | 'assertions'
 type HistoryRequestPreviewTab = 'header' | 'body'
 type ApiRequestEditorDetail = ApiDefinitionDetail & {
   resourceType: RequestEditorResourceType
@@ -147,7 +148,7 @@ const definitionSaveDialogVisible = ref(false)
 const batchAddDrawerVisible = ref(false)
 const activeTab = ref<'definitions' | 'scenarios' | 'execution' | 'reports' | 'settings'>('definitions')
 const activeRequestTab = ref<RequestContentTab>('body')
-const responsePreviewTab = ref<'body' | 'header' | 'console' | 'actualRequest'>('body')
+const responsePreviewTab = ref<ResponsePreviewTab>('body')
 const caseDrawerVisible = ref(false)
 const caseDrawerEditorKey = ref('')
 const caseDrawerRequestTab = ref<RequestContentTab>('body')
@@ -379,6 +380,7 @@ const currentDefinitionCases = computed(() => {
   }
   return apiCases.value.filter(item => item.definitionId === definitionId)
 })
+const currentDefinitionCaseCount = computed(() => currentDefinitionCases.value.length)
 const caseListColumns = computed<TableSettingsColumn[]>(() => [
   { key: 'id', label: 'ID', required: true, defaultVisible: true },
   { key: 'name', label: '用例名称', required: true, defaultVisible: true },
@@ -794,6 +796,92 @@ function formatResponseSize(body?: string | null) {
   return body ? `${new Blob([body]).size} B` : '0 B'
 }
 
+function getStatusTone(statusCode: number | null | undefined) {
+  if (statusCode == null) return 'neutral'
+  if (statusCode >= 200 && statusCode < 300) return 'success'
+  if (statusCode >= 400) return 'failed'
+  return 'neutral'
+}
+
+function getDurationTone(durationMs: number | null | undefined) {
+  return durationMs != null && durationMs >= 1000 ? 'slow' : 'neutral'
+}
+
+function getCaseRunResultPresentation(result?: string | null) {
+  const normalized = (result || '').toUpperCase()
+  if (normalized === 'PASSED') {
+    return { label: '通过', tone: 'passed' }
+  }
+  if (normalized === 'NOT_PASSED') {
+    return { label: '不通过', tone: 'not-passed' }
+  }
+  if (normalized === 'NO_ASSERTION') {
+    return { label: '无断言', tone: 'no-assertion' }
+  }
+  if (normalized.includes('FAIL') || normalized.includes('ERROR')) {
+    return { label: '失败', tone: 'failed' }
+  }
+  return { label: '无断言', tone: 'no-assertion' }
+}
+
+function getAssertionRunResultPresentation(assertionResults: ApiRunStepResult['assertionResults'], errorMessage?: string | null) {
+  if (!assertionResults.length) {
+    if (errorMessage) {
+      return { label: '失败', tone: 'failed', visible: true }
+    }
+    return { label: '', tone: 'no-assertion', visible: false }
+  }
+  if (assertionResults.some(item => !item.success)) {
+    return { label: '不通过', tone: 'not-passed', visible: true }
+  }
+  return { label: '通过', tone: 'passed', visible: true }
+}
+
+function assertionTypeLabel(type?: string | null) {
+  const normalized = (type || '').toUpperCase()
+  const labels: Record<string, string> = {
+    RESPONSE_CODE: '状态码',
+    STATUS_CODE: '状态码',
+    RESPONSE_HEADER: '响应头',
+    RESPONSE_BODY: '响应体',
+    RESPONSE_TIME: '响应时间',
+    VARIABLE: '变量',
+    SCRIPT: '脚本',
+  }
+  return labels[normalized] || type || '-'
+}
+
+function assertionConditionLabel(condition?: string | null) {
+  const normalized = (condition || '').toUpperCase()
+  const labels: Record<string, string> = {
+    EQUALS: '等于',
+    NOT_EQUALS: '不等于',
+    CONTAINS: '包含',
+    NOT_CONTAINS: '不包含',
+    STARTS_WITH: '开头是',
+    ENDS_WITH: '结尾是',
+    GREATER_THAN: '大于',
+    GREATER_THAN_OR_EQUALS: '大于等于',
+    LESS_THAN: '小于',
+    LT_OR_EQUALS: '小于等于',
+    REGEX: '正则匹配',
+    EMPTY: '为空',
+    NOT_EMPTY: '不为空',
+    EXISTS: '存在',
+    NOT_EXISTS: '不存在',
+    UNCHECKED: '不校验',
+  }
+  return labels[normalized] || condition || '-'
+}
+
+function assertionResultTone(assertion: ApiAssertionResult) {
+  return assertion.success ? 'passed' : 'not-passed'
+}
+
+function assertionResultLabel(assertion: ApiAssertionResult) {
+  return assertion.success ? '通过' : '不通过'
+}
+
 function formatStoredResponseSize(size?: number | null) {
   if (size == null) {
     return '-'
@@ -813,10 +901,15 @@ const currentResponseStep = computed(() => {
 const currentResponseStatusCode = computed(() => currentResponseStep.value?.response?.statusCode ?? null)
 const currentResponseDuration = computed(() => currentResponseStep.value?.durationMs ?? null)
 const currentResponseSize = computed(() => formatResponseSize(currentResponseStep.value?.response?.body))
+const currentResponseStatusTone = computed(() => getStatusTone(currentResponseStatusCode.value))
+const currentResponseDurationTone = computed(() => getDurationTone(currentResponseDuration.value))
 const currentResponseContentType = computed(() => currentResponseStep.value?.response?.contentType ?? '')
 const currentResponseBody = computed(() => currentResponseStep.value?.response?.body ?? '')
 const currentResponseHeaders = computed(() => currentResponseStep.value?.response?.headers ?? {})
 const currentAssertionResults = computed(() => currentResponseStep.value?.assertionResults ?? [])
+const currentAssertionResultPresentation = computed(() =>
+  getAssertionRunResultPresentation(currentAssertionResults.value, currentDebugError.value),
+)
 const currentExtractionResults = computed(() => currentResponseStep.value?.extractionResults ?? [])
 const currentProcessorResults = computed(() => currentResponseStep.value?.processorResults ?? [])
 const currentDebugError = computed(() => currentResponseStep.value?.errorMessage || activeRequestEditorTab.value?.debugFailureSummary || '')
@@ -825,10 +918,15 @@ const caseDrawerResponseStep = computed(() => pickPreferredRunStep(caseDrawerDeb
 const caseDrawerResponseStatusCode = computed(() => caseDrawerResponseStep.value?.response?.statusCode ?? null)
 const caseDrawerResponseDuration = computed(() => caseDrawerResponseStep.value?.durationMs ?? null)
 const caseDrawerResponseSize = computed(() => formatResponseSize(caseDrawerResponseStep.value?.response?.body))
+const caseDrawerResponseStatusTone = computed(() => getStatusTone(caseDrawerResponseStatusCode.value))
+const caseDrawerResponseDurationTone = computed(() => getDurationTone(caseDrawerResponseDuration.value))
 const caseDrawerResponseContentType = computed(() => caseDrawerResponseStep.value?.response?.contentType ?? '')
 const caseDrawerResponseBody = computed(() => caseDrawerResponseStep.value?.response?.body ?? '')
 const caseDrawerResponseHeaders = computed(() => caseDrawerResponseStep.value?.response?.headers ?? {})
 const caseDrawerAssertionResults = computed(() => caseDrawerResponseStep.value?.assertionResults ?? [])
+const caseDrawerAssertionResultPresentation = computed(() =>
+  getAssertionRunResultPresentation(caseDrawerAssertionResults.value, caseDrawerDebugError.value),
+)
 const caseDrawerExtractionResults = computed(() => caseDrawerResponseStep.value?.extractionResults ?? [])
 const caseDrawerProcessorResults = computed(() => caseDrawerResponseStep.value?.processorResults ?? [])
 const caseDrawerDebugError = computed(() => caseDrawerResponseStep.value?.errorMessage || caseDrawerDebugFailureSummary.value || '')
@@ -843,43 +941,17 @@ const caseDrawerSelectedHistoryContentType = computed(() => caseDrawerSelectedHi
 const caseDrawerSelectedHistoryBody = computed(() => caseDrawerSelectedHistoryStep.value?.response?.body ?? '')
 const caseDrawerSelectedHistoryHeaders = computed(() => caseDrawerSelectedHistoryStep.value?.response?.headers ?? {})
 const caseDrawerSelectedHistoryError = computed(() => caseDrawerSelectedHistoryStep.value?.errorMessage || caseDrawerRunHistoryDetail.value?.failureSummary || '')
-const caseDrawerSelectedHistoryResult = computed(() => {
-  const rawResult = (caseDrawerRunHistoryDetail.value?.result || '').toUpperCase()
-  if (rawResult.includes('FAIL')) {
-    return 'failed'
-  }
-  if (rawResult.includes('SUCCESS') || rawResult.includes('PASS')) {
-    return 'success'
-  }
-  if (caseDrawerSelectedHistoryStep.value?.success === false) {
-    return 'failed'
-  }
-  return 'success'
-})
-const caseDrawerSelectedHistoryResultLabel = computed(() => caseDrawerSelectedHistoryResult.value === 'success' ? '成功' : '失败')
-const caseDrawerSelectedHistoryStatusTone = computed(() => {
-  const statusCode = caseDrawerSelectedHistoryStatusCode.value
-  if (statusCode == null) {
-    return 'neutral'
-  }
-  if (statusCode >= 200 && statusCode < 300) {
-    return 'success'
-  }
-  if (statusCode >= 400) {
-    return 'failed'
-  }
-  return 'neutral'
-})
-const caseDrawerSelectedHistoryDurationTone = computed(() => {
-  const duration = caseDrawerSelectedHistoryDuration.value
-  return duration != null && duration >= 1000 ? 'slow' : 'neutral'
-})
+const caseDrawerSelectedHistoryResultPresentation = computed(() => getCaseRunResultPresentation(caseDrawerRunHistoryDetail.value?.result))
+const caseDrawerSelectedHistoryResult = computed(() => caseDrawerSelectedHistoryResultPresentation.value.tone)
+const caseDrawerSelectedHistoryResultLabel = computed(() => caseDrawerSelectedHistoryResultPresentation.value.label)
+const caseDrawerSelectedHistoryStatusTone = computed(() => getStatusTone(caseDrawerSelectedHistoryStatusCode.value))
+const caseDrawerSelectedHistoryDurationTone = computed(() => getDurationTone(caseDrawerSelectedHistoryDuration.value))
+const caseDrawerSelectedHistoryAssertionResults = computed(() => caseDrawerSelectedHistoryStep.value?.assertionResults ?? [])
 const caseDrawerSelectedHistoryRequestHeaders = computed(() => caseDrawerSelectedHistoryStep.value?.request?.headers ?? {})
 const caseDrawerSelectedHistoryRequestBody = computed(() => caseDrawerSelectedHistoryStep.value?.request?.body ?? '')
 const caseDrawerSelectedHistoryRequestQueryParams = computed(() => caseDrawerSelectedHistoryStep.value?.request?.queryParams ?? [])
 const caseDrawerSelectedHistoryRequestCookies = computed(() => caseDrawerSelectedHistoryStep.value?.request?.cookies ?? [])
 const caseDrawerSelectedHistoryRequestBodyType = computed(() => caseDrawerSelectedHistoryStep.value?.request?.bodyType ?? '')
-const caseDrawerSelectedHistoryRequestBodyContentType = computed(() => caseDrawerSelectedHistoryStep.value?.request?.bodyContentType ?? '')
 const caseDrawerSelectedHistoryRequestBodyFormItems = computed(() => caseDrawerSelectedHistoryStep.value?.request?.bodyFormItems ?? [])
 const caseDrawerSelectedHistoryRequestBodyFileName = computed(() => caseDrawerSelectedHistoryStep.value?.request?.bodyFileName ?? '')
 const caseDrawerSelectedHistoryRequestBodyFileContentType = computed(() => caseDrawerSelectedHistoryStep.value?.request?.bodyFileContentType ?? '')
@@ -891,6 +963,9 @@ const shouldShowResponsePanel = computed(() => {
 })
 const queryEnabledCount = computed(() =>
   definitionForm.requestConfig.queryParams.filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false).length,
+)
+const assertionEnabledCount = computed(() =>
+  definitionForm.assertions.filter(item => item.enabled !== false).length,
 )
 
 function selectableKeyValueRows(items: ApiKeyValue[]) {
@@ -930,6 +1005,9 @@ const bodyFormTableSelectionModel = computed({
 
 const caseDrawerQueryEnabledCount = computed(() =>
   caseDrawerForm.requestConfig.queryParams.filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false).length,
+)
+const caseDrawerAssertionEnabledCount = computed(() =>
+  caseDrawerForm.assertions.filter(item => item.enabled !== false).length,
 )
 
 const caseDrawerQueryTableSelectionModel = computed({
@@ -4057,9 +4135,15 @@ function formatTimeLabel(value?: string | null) {
                 <button :class="['ms-like-top-tab', { active: activeRequestTab === 'auth' }]" @click="setActiveRequestContentTab('auth')">Auth</button>
                 <button data-testid="request-tab-pre" :class="['ms-like-top-tab', { active: activeRequestTab === 'pre' }]" @click="setActiveRequestContentTab('pre')">前置处理</button>
                 <button data-testid="request-tab-post" :class="['ms-like-top-tab', { active: activeRequestTab === 'post' }]" @click="setActiveRequestContentTab('post')">后置处理</button>
-                <button data-testid="request-tab-tests" :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="setActiveRequestContentTab('tests')">断言</button>
+                <button data-testid="request-tab-tests" :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="setActiveRequestContentTab('tests')">
+                  断言
+                  <span v-if="assertionEnabledCount" class="ms-like-tab-badge">{{ assertionEnabledCount }}</span>
+                </button>
                 <button :class="['ms-like-top-tab', { active: activeRequestTab === 'settings' }]" @click="setActiveRequestContentTab('settings')">&#35774;&#32622;</button>
-                <button v-if="activeRequestEditorTab?.resourceType === 'definition'" :class="['ms-like-top-tab', { active: activeRequestTab === 'cases' }]" @click="setActiveRequestContentTab('cases')">用例</button>
+                <button v-if="activeRequestEditorTab?.resourceType === 'definition'" :class="['ms-like-top-tab', { active: activeRequestTab === 'cases' }]" @click="setActiveRequestContentTab('cases')">
+                  用例
+                  <span v-if="currentDefinitionCaseCount" class="ms-like-tab-badge">{{ currentDefinitionCaseCount }}</span>
+                </button>
               </div>
 
               <div v-if="showCaseListContent" class="ms-like-request-body">
@@ -4537,8 +4621,11 @@ function formatTimeLabel(value?: string | null) {
               <div class="ms-like-response-header">
                 <div class="ms-like-response-title">响应内容</div>
                 <div v-if="!showResponseEmptyState" class="ms-like-response-metrics">
-                  <span>状态 {{ currentResponseStatusCode ?? '-' }}</span>
-                  <span>耗时 {{ currentResponseDuration ?? '-' }}<template v-if="currentResponseDuration !== null"> ms</template></span>
+                  <span v-if="currentAssertionResultPresentation.visible" :class="['ms-like-result-pill', `is-${currentAssertionResultPresentation.tone}`]">
+                    {{ currentAssertionResultPresentation.label }}
+                  </span>
+                  <span :class="['ms-like-response-metric', `is-${currentResponseStatusTone}`]">状态 {{ currentResponseStatusCode ?? '-' }}</span>
+                  <span :class="['ms-like-response-metric', `is-${currentResponseDurationTone}`]">耗时 {{ currentResponseDuration ?? '-' }}<template v-if="currentResponseDuration !== null"> ms</template></span>
                   <span>大小 {{ currentResponseSize }}</span>
                 </div>
               </div>
@@ -4565,6 +4652,7 @@ function formatTimeLabel(value?: string | null) {
                   <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'header' }]" @click="responsePreviewTab = 'header'">Header</button>
                   <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'console' }]" @click="responsePreviewTab = 'console'">控制台</button>
                   <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'actualRequest' }]" @click="responsePreviewTab = 'actualRequest'">实际请求</button>
+                  <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'assertions' }]" @click="responsePreviewTab = 'assertions'">断言</button>
                 </div>
 
                 <div class="ms-like-response-body">
@@ -4608,6 +4696,34 @@ function formatTimeLabel(value?: string | null) {
                       :max-fit-content-height="1000"
                       height="100%"
                     />
+                    <div v-else class="assertion-result-panel">
+                      <div v-if="!currentAssertionResults.length" class="assertion-result-empty">当前请求未配置断言</div>
+                      <el-table v-else :data="currentAssertionResults" size="small" class="assertion-result-table">
+                        <el-table-column label="断言名称" min-width="140" show-overflow-tooltip>
+                          <template #default="{ row }">{{ row.name || assertionTypeLabel(row.type) }}</template>
+                        </el-table-column>
+                        <el-table-column label="断言对象" width="96">
+                          <template #default="{ row }">{{ assertionTypeLabel(row.type) }}</template>
+                        </el-table-column>
+                        <el-table-column label="条件" width="92">
+                          <template #default="{ row }">{{ assertionConditionLabel(row.condition) }}</template>
+                        </el-table-column>
+                        <el-table-column label="期望值" min-width="120" show-overflow-tooltip>
+                          <template #default="{ row }">{{ row.expectedValue || '-' }}</template>
+                        </el-table-column>
+                        <el-table-column label="实际值" min-width="120" show-overflow-tooltip>
+                          <template #default="{ row }">{{ row.actualValue || '-' }}</template>
+                        </el-table-column>
+                        <el-table-column label="结果" width="78">
+                          <template #default="{ row }">
+                            <span :class="['case-drawer-history-result', `is-${assertionResultTone(row)}`]">{{ assertionResultLabel(row) }}</span>
+                          </template>
+                        </el-table-column>
+                        <el-table-column label="失败原因" min-width="160" show-overflow-tooltip>
+                          <template #default="{ row }">{{ row.success ? '-' : row.message || '-' }}</template>
+                        </el-table-column>
+                      </el-table>
+                    </div>
                 </div>
               </template>
             </div>
@@ -4661,7 +4777,10 @@ function formatTimeLabel(value?: string | null) {
                 <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'auth' }]" @click="setCaseDrawerRequestContentTab('auth')">Auth</button>
                 <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'pre' }]" @click="setCaseDrawerRequestContentTab('pre')">前置处理</button>
                 <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'post' }]" @click="setCaseDrawerRequestContentTab('post')">后置处理</button>
-                <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'tests' }]" @click="setCaseDrawerRequestContentTab('tests')">断言</button>
+                <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'tests' }]" @click="setCaseDrawerRequestContentTab('tests')">
+                  断言
+                  <span v-if="caseDrawerAssertionEnabledCount" class="ms-like-tab-badge">{{ caseDrawerAssertionEnabledCount }}</span>
+                </button>
                 <button :class="['ms-like-top-tab', { active: caseDrawerRequestTab === 'settings' }]" @click="setCaseDrawerRequestContentTab('settings')">设置</button>
               </div>
             </template>
@@ -5096,14 +5215,16 @@ function formatTimeLabel(value?: string | null) {
                     </el-table-column>
                     <el-table-column label="结果" width="78">
                       <template #default="{ row }">
-                        <span :class="['case-drawer-history-result', row.result === 'SUCCESS' ? 'is-success' : 'is-failed']">
-                          {{ row.result === 'SUCCESS' ? '成功' : '失败' }}
+                        <span :class="['case-drawer-history-result', `is-${getCaseRunResultPresentation(row.result).tone}`]">
+                          {{ getCaseRunResultPresentation(row.result).label }}
                         </span>
                       </template>
                     </el-table-column>
                     <el-table-column label="状态码" width="78" align="center">
                       <template #default="{ row }">
-                        {{ row.statusCode ?? '-' }}
+                        <span :class="['ms-like-response-metric', `is-${getStatusTone(row.statusCode)}`]">
+                          {{ row.statusCode ?? '-' }}
+                        </span>
                       </template>
                     </el-table-column>
                     <el-table-column label="耗时" width="92">
@@ -5151,11 +5272,11 @@ function formatTimeLabel(value?: string | null) {
                     </div>
                     <div class="case-drawer-history-detail-head-right">
                       <div v-if="caseDrawerRunHistoryDetail" class="ms-like-response-metrics">
-                        <span :class="['case-drawer-history-result-pill', `is-${caseDrawerSelectedHistoryResult}`]">
+                        <span :class="['ms-like-result-pill', `is-${caseDrawerSelectedHistoryResult}`]">
                           {{ caseDrawerSelectedHistoryResultLabel }}
                         </span>
-                        <span :class="['case-drawer-history-metric', `is-${caseDrawerSelectedHistoryStatusTone}`]">状态 {{ caseDrawerSelectedHistoryStatusCode ?? '-' }}</span>
-                        <span :class="['case-drawer-history-metric', `is-${caseDrawerSelectedHistoryDurationTone}`]">耗时 {{ caseDrawerSelectedHistoryDuration ?? '-' }}<template v-if="caseDrawerSelectedHistoryDuration !== null"> ms</template></span>
+                        <span :class="['ms-like-response-metric', `is-${caseDrawerSelectedHistoryStatusTone}`]">状态 {{ caseDrawerSelectedHistoryStatusCode ?? '-' }}</span>
+                        <span :class="['ms-like-response-metric', `is-${caseDrawerSelectedHistoryDurationTone}`]">耗时 {{ caseDrawerSelectedHistoryDuration ?? '-' }}<template v-if="caseDrawerSelectedHistoryDuration !== null"> ms</template></span>
                         <span>大小 {{ caseDrawerSelectedHistorySize }}</span>
                       </div>
                     </div>
@@ -5225,14 +5346,6 @@ function formatTimeLabel(value?: string | null) {
                               height="100%"
                             />
                           </div>
-                          <div v-if="caseDrawerSelectedHistoryRequestBodyType" class="case-drawer-history-request-block">
-                            <div class="case-drawer-history-request-label">Body Type</div>
-                            <div class="case-drawer-history-request-value">{{ caseDrawerSelectedHistoryRequestBodyType }}</div>
-                          </div>
-                          <div v-if="caseDrawerSelectedHistoryRequestBodyContentType" class="case-drawer-history-request-block">
-                            <div class="case-drawer-history-request-label">Body Content-Type</div>
-                            <div class="case-drawer-history-request-value">{{ caseDrawerSelectedHistoryRequestBodyContentType }}</div>
-                          </div>
                           <div v-if="caseDrawerSelectedHistoryRequestBodyFormItems.length" class="case-drawer-history-request-block">
                             <div class="case-drawer-history-request-label">Body Form</div>
                             <MonacoCodeEditor
@@ -5280,6 +5393,7 @@ function formatTimeLabel(value?: string | null) {
                         <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'body' }]" @click="caseDrawerHistoryPreviewTab = 'body'">Body</button>
                         <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'header' }]" @click="caseDrawerHistoryPreviewTab = 'header'">Header</button>
                         <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'console' }]" @click="caseDrawerHistoryPreviewTab = 'console'">控制台</button>
+                        <button :class="['ms-like-top-tab', { active: caseDrawerHistoryPreviewTab === 'assertions' }]" @click="caseDrawerHistoryPreviewTab = 'assertions'">断言</button>
                       </div>
 
                       <div class="ms-like-response-body">
@@ -5304,7 +5418,7 @@ function formatTimeLabel(value?: string | null) {
                           height="100%"
                         />
                         <MonacoCodeEditor
-                          v-else
+                          v-else-if="caseDrawerHistoryPreviewTab === 'console'"
                           :model-value="caseDrawerHistoryConsolePreview"
                           language="text"
                           :read-only="true"
@@ -5313,6 +5427,34 @@ function formatTimeLabel(value?: string | null) {
                           :max-fit-content-height="1000"
                           height="100%"
                         />
+                        <div v-else class="assertion-result-panel">
+                          <div v-if="!caseDrawerSelectedHistoryAssertionResults.length" class="assertion-result-empty">当前请求未配置断言</div>
+                          <el-table v-else :data="caseDrawerSelectedHistoryAssertionResults" size="small" class="assertion-result-table">
+                            <el-table-column label="断言名称" min-width="140" show-overflow-tooltip>
+                              <template #default="{ row }">{{ row.name || assertionTypeLabel(row.type) }}</template>
+                            </el-table-column>
+                            <el-table-column label="断言对象" width="96">
+                              <template #default="{ row }">{{ assertionTypeLabel(row.type) }}</template>
+                            </el-table-column>
+                            <el-table-column label="条件" width="92">
+                              <template #default="{ row }">{{ assertionConditionLabel(row.condition) }}</template>
+                            </el-table-column>
+                            <el-table-column label="期望值" min-width="120" show-overflow-tooltip>
+                              <template #default="{ row }">{{ row.expectedValue || '-' }}</template>
+                            </el-table-column>
+                            <el-table-column label="实际值" min-width="120" show-overflow-tooltip>
+                              <template #default="{ row }">{{ row.actualValue || '-' }}</template>
+                            </el-table-column>
+                            <el-table-column label="结果" width="78">
+                              <template #default="{ row }">
+                                <span :class="['case-drawer-history-result', `is-${assertionResultTone(row)}`]">{{ assertionResultLabel(row) }}</span>
+                              </template>
+                            </el-table-column>
+                            <el-table-column label="失败原因" min-width="160" show-overflow-tooltip>
+                              <template #default="{ row }">{{ row.success ? '-' : row.message || '-' }}</template>
+                            </el-table-column>
+                          </el-table>
+                        </div>
                       </div>
                     </div>
                   </template>
@@ -5359,8 +5501,11 @@ function formatTimeLabel(value?: string | null) {
                 <div class="ms-like-response-header">
                   <div class="ms-like-response-title">响应内容</div>
                   <div v-if="!caseDrawerShowResponseEmptyState" class="ms-like-response-metrics">
-                    <span>状态 {{ caseDrawerResponseStatusCode ?? '-' }}</span>
-                    <span>耗时 {{ caseDrawerResponseDuration ?? '-' }}<template v-if="caseDrawerResponseDuration !== null"> ms</template></span>
+                    <span v-if="caseDrawerAssertionResultPresentation.visible" :class="['ms-like-result-pill', `is-${caseDrawerAssertionResultPresentation.tone}`]">
+                      {{ caseDrawerAssertionResultPresentation.label }}
+                    </span>
+                    <span :class="['ms-like-response-metric', `is-${caseDrawerResponseStatusTone}`]">状态 {{ caseDrawerResponseStatusCode ?? '-' }}</span>
+                    <span :class="['ms-like-response-metric', `is-${caseDrawerResponseDurationTone}`]">耗时 {{ caseDrawerResponseDuration ?? '-' }}<template v-if="caseDrawerResponseDuration !== null"> ms</template></span>
                     <span>大小 {{ caseDrawerResponseSize }}</span>
                   </div>
                 </div>
@@ -5387,6 +5532,7 @@ function formatTimeLabel(value?: string | null) {
                     <button :class="['ms-like-top-tab', { active: caseDrawerResponsePreviewTab === 'header' }]" @click="caseDrawerResponsePreviewTab = 'header'">Header</button>
                     <button :class="['ms-like-top-tab', { active: caseDrawerResponsePreviewTab === 'console' }]" @click="caseDrawerResponsePreviewTab = 'console'">控制台</button>
                     <button :class="['ms-like-top-tab', { active: caseDrawerResponsePreviewTab === 'actualRequest' }]" @click="caseDrawerResponsePreviewTab = 'actualRequest'">实际请求</button>
+                    <button :class="['ms-like-top-tab', { active: caseDrawerResponsePreviewTab === 'assertions' }]" @click="caseDrawerResponsePreviewTab = 'assertions'">断言</button>
                   </div>
 
                   <div class="ms-like-response-body">
@@ -5430,6 +5576,34 @@ function formatTimeLabel(value?: string | null) {
                       :max-fit-content-height="1000"
                       height="100%"
                     />
+                    <div v-else class="assertion-result-panel">
+                      <div v-if="!caseDrawerAssertionResults.length" class="assertion-result-empty">当前请求未配置断言</div>
+                      <el-table v-else :data="caseDrawerAssertionResults" size="small" class="assertion-result-table">
+                        <el-table-column label="断言名称" min-width="140" show-overflow-tooltip>
+                          <template #default="{ row }">{{ row.name || assertionTypeLabel(row.type) }}</template>
+                        </el-table-column>
+                        <el-table-column label="断言对象" width="96">
+                          <template #default="{ row }">{{ assertionTypeLabel(row.type) }}</template>
+                        </el-table-column>
+                        <el-table-column label="条件" width="92">
+                          <template #default="{ row }">{{ assertionConditionLabel(row.condition) }}</template>
+                        </el-table-column>
+                        <el-table-column label="期望值" min-width="120" show-overflow-tooltip>
+                          <template #default="{ row }">{{ row.expectedValue || '-' }}</template>
+                        </el-table-column>
+                        <el-table-column label="实际值" min-width="120" show-overflow-tooltip>
+                          <template #default="{ row }">{{ row.actualValue || '-' }}</template>
+                        </el-table-column>
+                        <el-table-column label="结果" width="78">
+                          <template #default="{ row }">
+                            <span :class="['case-drawer-history-result', `is-${assertionResultTone(row)}`]">{{ assertionResultLabel(row) }}</span>
+                          </template>
+                        </el-table-column>
+                        <el-table-column label="失败原因" min-width="160" show-overflow-tooltip>
+                          <template #default="{ row }">{{ row.success ? '-' : row.message || '-' }}</template>
+                        </el-table-column>
+                      </el-table>
+                    </div>
                   </div>
                 </template>
               </div>
@@ -6508,6 +6682,7 @@ function formatTimeLabel(value?: string | null) {
   color: #4b5563;
   padding: 10px 14px;
   font-size: 13px;
+  line-height: 1;
 }
 
 .ms-like-editor-tab.active,
@@ -6529,10 +6704,23 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-editor-tab-label {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  height: 18px;
+  line-height: 1;
   max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ms-like-editor-tab .ms-like-method {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  line-height: 1;
+  flex: 0 0 auto;
 }
 
 .ms-like-editor-tab-dot {
@@ -7087,6 +7275,18 @@ function formatTimeLabel(value?: string | null) {
   font-size: 12px;
 }
 
+.ms-like-response-metric.is-success {
+  color: #039855;
+}
+
+.ms-like-response-metric.is-failed {
+  color: #d92d20;
+}
+
+.ms-like-response-metric.is-slow {
+  color: #dc6803;
+}
+
 .ms-like-response-body {
   min-height: 0;
   overflow: visible;
@@ -7215,15 +7415,23 @@ function formatTimeLabel(value?: string | null) {
   font-weight: 600;
 }
 
-.case-drawer-history-result.is-success {
+.case-drawer-history-result.is-passed {
   color: #16a34a;
+}
+
+.case-drawer-history-result.is-not-passed {
+  color: #dc6803;
+}
+
+.case-drawer-history-result.is-no-assertion {
+  color: var(--el-text-color-secondary);
 }
 
 .case-drawer-history-result.is-failed {
   color: #dc2626;
 }
 
-.case-drawer-history-result-pill {
+.ms-like-result-pill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -7235,26 +7443,44 @@ function formatTimeLabel(value?: string | null) {
   line-height: 1;
 }
 
-.case-drawer-history-result-pill.is-success {
+.ms-like-result-pill.is-passed {
   background: #ecfdf3;
   color: #039855;
 }
 
-.case-drawer-history-result-pill.is-failed {
+.ms-like-result-pill.is-not-passed {
+  background: #fff7ed;
+  color: #dc6803;
+}
+
+.ms-like-result-pill.is-no-assertion {
+  background: #f5f7fa;
+  color: var(--el-text-color-secondary);
+}
+
+.ms-like-result-pill.is-failed {
   background: #fef3f2;
   color: #d92d20;
 }
 
-.case-drawer-history-metric.is-success {
-  color: #039855;
+.assertion-result-panel {
+  padding: 0;
 }
 
-.case-drawer-history-metric.is-failed {
-  color: #d92d20;
+.assertion-result-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  border: 1px dashed var(--el-border-color-light);
+  border-radius: 8px;
+  background: #fafafa;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 
-.case-drawer-history-metric.is-slow {
-  color: #dc6803;
+.assertion-result-table {
+  width: 100%;
 }
 
 .case-drawer-history-detail-button {

@@ -78,6 +78,10 @@ import static com.company.autoplatform.apiautomation.ApiAutomationModels.*;
 public class ApiAutomationService {
 
     private static final String API_ENV_TYPE = "API";
+    private static final String RESULT_PASSED = "PASSED";
+    private static final String RESULT_NOT_PASSED = "NOT_PASSED";
+    private static final String RESULT_NO_ASSERTION = "NO_ASSERTION";
+    private static final String RESULT_FAILED = "FAILED";
     private static final String API_VARIABLE_SET_TYPE = "API_VARIABLE_SET";
     private static final String SCENARIO_RESOURCE_TYPE_DEFINITION = "DEFINITION";
     private static final String SCENARIO_RESOURCE_TYPE_CASE = "CASE";
@@ -875,6 +879,7 @@ public class ApiAutomationService {
 
     private ApiDefinitionCaseRunHistoryItem toCaseRunHistoryItem(ApiDefinitionCaseRunHistoryEntity entity) {
         WorkspaceEntity workspace = workspaceService.requireWorkspaceById(entity.getWorkspaceId());
+        List<ApiRunStepResultResponse> stepResults = listRunStepResponses(entity.getReportId());
         return new ApiDefinitionCaseRunHistoryItem(
                 entity.getId(),
                 workspace.getWorkspaceCode(),
@@ -883,7 +888,7 @@ public class ApiAutomationService {
                 entity.getDefinitionId(),
                 entity.getCaseName(),
                 entity.getReportId(),
-                entity.getRunResult(),
+                resolveCaseRunDisplayResult(entity.getRunResult(), stepResults),
                 entity.getFailureSummary(),
                 entity.getStatusCode(),
                 entity.getDurationMs(),
@@ -899,12 +904,7 @@ public class ApiAutomationService {
 
     private ApiDefinitionCaseRunHistoryDetail toCaseRunHistoryDetail(ApiDefinitionCaseRunHistoryEntity entity) {
         WorkspaceEntity workspace = workspaceService.requireWorkspaceById(entity.getWorkspaceId());
-        List<ApiRunStepResultResponse> stepResults = runStepResultMapper.selectList(new LambdaQueryWrapper<ApiRunStepResultEntity>()
-                        .eq(ApiRunStepResultEntity::getReportId, entity.getReportId())
-                        .orderByAsc(ApiRunStepResultEntity::getStepOrder))
-                .stream()
-                .map(this::toRunStepResponse)
-                .toList();
+        List<ApiRunStepResultResponse> stepResults = listRunStepResponses(entity.getReportId());
         return new ApiDefinitionCaseRunHistoryDetail(
                 entity.getId(),
                 workspace.getWorkspaceCode(),
@@ -913,7 +913,7 @@ public class ApiAutomationService {
                 entity.getDefinitionId(),
                 entity.getCaseName(),
                 entity.getReportId(),
-                entity.getRunResult(),
+                resolveCaseRunDisplayResult(entity.getRunResult(), stepResults),
                 entity.getFailureSummary(),
                 entity.getStatusCode(),
                 entity.getDurationMs(),
@@ -1017,6 +1017,41 @@ public class ApiAutomationService {
                 entity.getErrorMessage(),
                 entity.getCreatedAt()
         );
+    }
+
+    private List<ApiRunStepResultResponse> listRunStepResponses(Long reportId) {
+        return runStepResultMapper.selectList(new LambdaQueryWrapper<ApiRunStepResultEntity>()
+                        .eq(ApiRunStepResultEntity::getReportId, reportId)
+                        .orderByAsc(ApiRunStepResultEntity::getStepOrder))
+                .stream()
+                .map(this::toRunStepResponse)
+                .toList();
+    }
+
+    private String resolveCaseRunDisplayResult(String runResult, List<ApiRunStepResultResponse> stepResults) {
+        List<ApiAssertionResult> assertionResults = stepResults.stream()
+                .flatMap(step -> defaultList(step.assertionResults()).stream())
+                .toList();
+        if (!assertionResults.isEmpty()) {
+            if (assertionResults.stream().anyMatch(assertion -> !assertion.success())) {
+                return RESULT_NOT_PASSED;
+            }
+            if (hasExecutionFailure(runResult, stepResults)) {
+                return RESULT_FAILED;
+            }
+            return RESULT_PASSED;
+        }
+        return hasExecutionFailure(runResult, stepResults) ? RESULT_FAILED : RESULT_NO_ASSERTION;
+    }
+
+    private boolean hasExecutionFailure(String runResult, List<ApiRunStepResultResponse> stepResults) {
+        return isFailedRunResult(runResult)
+                || stepResults.stream().anyMatch(step -> !step.success() || (step.errorMessage() != null && !step.errorMessage().isBlank()));
+    }
+
+    private boolean isFailedRunResult(String runResult) {
+        String normalized = Optional.ofNullable(runResult).orElse("").trim().toUpperCase(Locale.ROOT);
+        return normalized.contains("FAIL") || normalized.contains("ERROR");
     }
 
     private ExecutionContext buildExecutionContext(Long workspaceId, Long environmentId, Long variableSetId) {

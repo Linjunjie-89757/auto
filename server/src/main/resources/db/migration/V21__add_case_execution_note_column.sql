@@ -1,1 +1,1 @@
-ALTER TABLE tb_case_info ADD COLUMN execution_note TEXT;
+-- execution_note already exists in V1__init_schema.sql; keep this as a version placeholder

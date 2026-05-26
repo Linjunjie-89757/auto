@@ -121,6 +121,14 @@ public class ApiAutomationController {
         return ApiResponse.ok(apiAutomationService.getCaseRunHistoryDetail(historyId, workspaceCode));
     }
 
+    @GetMapping("/cases/{id}/change-history")
+    public ApiResponse<PageResponse<ApiDefinitionCaseChangeHistoryItem>> listCaseChangeHistory(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(apiAutomationService.listCaseChangeHistory(id, workspaceCode));
+    }
+
     @PostMapping("/cases")
     public ApiResponse<ApiDefinitionCaseDetail> createCase(
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,

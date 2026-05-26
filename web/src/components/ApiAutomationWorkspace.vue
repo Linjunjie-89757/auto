@@ -26,6 +26,7 @@ import type {
   ApiAuthCredential,
   ApiDebugCasePayload,
   ApiDefinitionCaseDetail,
+  ApiDefinitionCaseChangeHistoryItem,
   ApiDefinitionCaseItem,
   ApiDefinitionCaseRunHistoryDetail,
   ApiDefinitionCaseRunHistoryItem,
@@ -163,6 +164,8 @@ const caseDrawerRunHistoryItems = ref<ApiDefinitionCaseRunHistoryItem[]>([])
 const caseDrawerRunHistoryDetailLoading = ref(false)
 const caseDrawerRunHistoryDetail = ref<ApiDefinitionCaseRunHistoryDetail | null>(null)
 const selectedCaseDrawerRunHistoryId = ref<number | null>(null)
+const caseDrawerChangeHistoryLoading = ref(false)
+const caseDrawerChangeHistoryItems = ref<ApiDefinitionCaseChangeHistoryItem[]>([])
 const batchAddMode = ref<BatchAddMode>('query')
 const batchAddInput = ref('')
 const batchAddContext = ref<'main' | 'case'>('main')
@@ -343,9 +346,11 @@ const bugForm = reactive<CreateBugPayload & { workspaceCode: string; reportId: n
 
 const writableWorkspaces = computed(() => workspaces.value.filter(item => !item.allScope && canWriteWorkspace(item.code)))
 const canWriteDefinition = computed(() => canWriteTarget(definitionForm.workspaceCode))
+const hasDefinitionRequestUrl = computed(() => !!definitionForm.requestConfig.path?.trim())
+const canSaveActiveEditor = computed(() => canWriteDefinition.value && hasDefinitionRequestUrl.value)
 const canDebugDefinition = computed(() => canWriteDefinition.value
   && !!definitionForm.requestConfig.method?.trim()
-  && !!definitionForm.requestConfig.path?.trim())
+  && hasDefinitionRequestUrl.value)
 const canWriteScenario = computed(() => canWriteTarget(scenarioForm.workspaceCode))
 const canWriteEnvironment = computed(() => canWriteTarget(environmentForm.workspaceCode))
 const canWriteVariableSet = computed(() => canWriteTarget(variableSetForm.workspaceCode))
@@ -421,6 +426,7 @@ const caseDrawerPrimaryActionLabel = computed(() => (caseDrawerReadOnly.value ? 
 const caseDrawerShowFooter = computed(() => !caseDrawerReadOnly.value)
 const showCaseListContent = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && activeRequestTab.value === 'cases')
 const visibleRequestEditorTabs = computed(() => requestEditorTabs.value.filter(item => item.resourceType === 'definition'))
+const canCreateCaseForCurrentDefinition = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && !!definitionForm.id)
 
 const scenarioDirectoryOptions = computed(() => uniqueNonEmpty(scenarios.value.map(item => item.directoryName)))
 const activeOwnerOptions = computed(() => users.value.filter(item => item.status === 1))
@@ -837,6 +843,37 @@ const caseDrawerSelectedHistoryContentType = computed(() => caseDrawerSelectedHi
 const caseDrawerSelectedHistoryBody = computed(() => caseDrawerSelectedHistoryStep.value?.response?.body ?? '')
 const caseDrawerSelectedHistoryHeaders = computed(() => caseDrawerSelectedHistoryStep.value?.response?.headers ?? {})
 const caseDrawerSelectedHistoryError = computed(() => caseDrawerSelectedHistoryStep.value?.errorMessage || caseDrawerRunHistoryDetail.value?.failureSummary || '')
+const caseDrawerSelectedHistoryResult = computed(() => {
+  const rawResult = (caseDrawerRunHistoryDetail.value?.result || '').toUpperCase()
+  if (rawResult.includes('FAIL')) {
+    return 'failed'
+  }
+  if (rawResult.includes('SUCCESS') || rawResult.includes('PASS')) {
+    return 'success'
+  }
+  if (caseDrawerSelectedHistoryStep.value?.success === false) {
+    return 'failed'
+  }
+  return 'success'
+})
+const caseDrawerSelectedHistoryResultLabel = computed(() => caseDrawerSelectedHistoryResult.value === 'success' ? '成功' : '失败')
+const caseDrawerSelectedHistoryStatusTone = computed(() => {
+  const statusCode = caseDrawerSelectedHistoryStatusCode.value
+  if (statusCode == null) {
+    return 'neutral'
+  }
+  if (statusCode >= 200 && statusCode < 300) {
+    return 'success'
+  }
+  if (statusCode >= 400) {
+    return 'failed'
+  }
+  return 'neutral'
+})
+const caseDrawerSelectedHistoryDurationTone = computed(() => {
+  const duration = caseDrawerSelectedHistoryDuration.value
+  return duration != null && duration >= 1000 ? 'slow' : 'neutral'
+})
 const caseDrawerSelectedHistoryRequestHeaders = computed(() => caseDrawerSelectedHistoryStep.value?.request?.headers ?? {})
 const caseDrawerSelectedHistoryRequestBody = computed(() => caseDrawerSelectedHistoryStep.value?.request?.body ?? '')
 const caseDrawerSelectedHistoryRequestQueryParams = computed(() => caseDrawerSelectedHistoryStep.value?.request?.queryParams ?? [])
@@ -1872,6 +1909,9 @@ async function setCaseDrawerViewTab(tab: CaseDrawerViewTab) {
   if (tab === 'runHistory' && caseDrawerForm.id && !caseDrawerRunHistoryItems.value.length && !caseDrawerRunHistoryLoading.value) {
     await loadCaseDrawerRunHistory(caseDrawerForm.id)
   }
+  if (tab === 'changeHistory' && caseDrawerForm.id && !caseDrawerChangeHistoryItems.value.length && !caseDrawerChangeHistoryLoading.value) {
+    await loadCaseDrawerChangeHistory(caseDrawerForm.id)
+  }
 }
 
 function applyEditorDetailToForm(detail: ApiRequestEditorDetail, options?: { markSaved?: boolean }) {
@@ -1943,6 +1983,11 @@ function resetCaseDrawerRunHistoryState() {
   caseDrawerHistoryPreviewTab.value = 'body'
   caseDrawerHistoryRequestPreviewTab.value = 'body'
   caseDrawerHistoryView.value = 'list'
+}
+
+function resetCaseDrawerChangeHistoryState() {
+  caseDrawerChangeHistoryLoading.value = false
+  caseDrawerChangeHistoryItems.value = []
 }
 
 function getPreferredHistoryRequestPreviewTab() {
@@ -2027,6 +2072,25 @@ async function loadCaseDrawerRunHistory(caseId?: number | null, preferredHistory
   }
   finally {
     caseDrawerRunHistoryLoading.value = false
+  }
+}
+
+async function loadCaseDrawerChangeHistory(caseId?: number | null) {
+  if (!caseId) {
+    resetCaseDrawerChangeHistoryState()
+    return
+  }
+  caseDrawerChangeHistoryLoading.value = true
+  try {
+    const response = await platformApi.getApiDefinitionCaseChangeHistory(workspaceCode.value, caseId)
+    caseDrawerChangeHistoryItems.value = response.items || []
+  }
+  catch (error) {
+    resetCaseDrawerChangeHistoryState()
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    caseDrawerChangeHistoryLoading.value = false
   }
 }
 
@@ -2168,6 +2232,9 @@ async function closeCaseDrawer() {
 }
 
 function buildCaseDraftFromCurrentDefinition(options?: { fromSavedDefinition?: boolean }) {
+  if (definitionForm.resourceType !== 'definition' || !definitionForm.id) {
+    throw new Error('请先保存接口，再创建用例')
+  }
   const snapshot = cloneEditorDetail(definitionForm)
   snapshot.resourceType = 'case'
   snapshot.id = 0
@@ -2218,7 +2285,14 @@ async function openCaseEditor(id: number, options?: { mode?: Extract<CaseDrawerM
 }
 
 function openCaseDraftFromDefinition(options?: { fromSavedDefinition?: boolean }) {
-  const detail = buildCaseDraftFromCurrentDefinition(options)
+  let detail: ApiRequestEditorDetail
+  try {
+    detail = buildCaseDraftFromCurrentDefinition(options)
+  }
+  catch (error) {
+    ElMessage.warning((error as Error).message)
+    return
+  }
   const tab = makeRequestEditorTab(detail)
   requestEditorTabs.value.push(tab)
   caseDrawerSourceEditorKey.value = activeRequestEditorKey.value
@@ -2746,6 +2820,249 @@ async function createDefinitionModule(node: DefinitionDirectoryTreeNode) {
   }
 }
 
+function getDefinitionsInDefinitionModule(node: DefinitionDirectoryTreeNode) {
+  const modulePath = (node.fullPath || '').trim()
+  if (node.type !== 'module' || !modulePath) {
+    return []
+  }
+  return definitions.value.filter((item) => {
+    if (item.workspaceCode !== node.workspaceCode) {
+      return false
+    }
+    const directoryName = (item.directoryName || '').trim()
+    return directoryName === modulePath || directoryName.startsWith(`${modulePath}/`)
+  })
+}
+
+function replaceDefinitionModulePath(currentPath: string, sourcePath: string, targetPath: string) {
+  if (currentPath === sourcePath) {
+    return targetPath
+  }
+  const suffix = currentPath.slice(sourcePath.length + 1)
+  return targetPath ? `${targetPath}/${suffix}` : ''
+}
+
+function syncOpenDefinitionDirectoryDetails(details: ApiDefinitionDetail[]) {
+  const detailMap = new Map(details.map(item => [item.id, toEditorDetailFromDefinition(item)]))
+  for (const tab of requestEditorTabs.value) {
+    if (tab.resourceType !== 'definition' || !tab.resourceId) {
+      continue
+    }
+    const updated = detailMap.get(tab.resourceId)
+    if (!updated) {
+      continue
+    }
+    if (tab.isDirty) {
+      tab.draft.directoryName = updated.directoryName
+      if (tab.key === activeRequestEditorKey.value) {
+        definitionForm.directoryName = updated.directoryName
+      }
+      continue
+    }
+    tab.draft = cloneEditorDetail(updated)
+    tab.savedFingerprint = fingerprintDefinitionDetail(updated)
+    tab.isDirty = false
+    tab.title = updated.name || '\u65b0\u5efa\u8bf7\u6c42'
+    tab.method = updated.requestConfig.method || updated.method || 'GET'
+    if (tab.key === activeRequestEditorKey.value) {
+      applyEditorDetailToForm(updated, { markSaved: true })
+    }
+  }
+}
+
+async function updateDefinitionModuleDirectories(
+  node: DefinitionDirectoryTreeNode,
+  resolveNextPath: (currentPath: string) => string,
+) {
+  const targets = getDefinitionsInDefinitionModule(node)
+  if (!targets.length) {
+    ElMessage.warning('当前目录下没有可更新的请求')
+    return []
+  }
+
+  saving.value = true
+  try {
+    const updatedDetails: ApiDefinitionDetail[] = []
+    for (const item of targets) {
+      const detail = await platformApi.getApiDefinitionDetail(workspaceCode.value, item.id)
+      const editorDetail = toEditorDetailFromDefinition(detail)
+      editorDetail.directoryName = resolveNextPath((detail.directoryName || '').trim())
+      const updated = await platformApi.updateApiDefinition(
+        workspaceCode.value,
+        detail.id,
+        buildDefinitionMutationPayloadFor(editorDetail),
+      )
+      updatedDetails.push(updated)
+    }
+    await refreshData()
+    syncOpenDefinitionDirectoryDetails(updatedDetails)
+    return updatedDetails
+  }
+  finally {
+    saving.value = false
+  }
+}
+
+async function renameDefinitionModule(node: DefinitionDirectoryTreeNode) {
+  if (node.type !== 'module' || !node.fullPath || !canWriteWorkspace(node.workspaceCode)) {
+    return
+  }
+  try {
+    const { value } = await ElMessageBox.prompt('请输入目录名称', '重命名', {
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+      inputValue: node.label,
+      inputPattern: /\S+/,
+      inputErrorMessage: '目录名称不能为空',
+    })
+    const nextName = value.trim()
+    if (nextName.includes('/')) {
+      ElMessage.error('目录名称不能包含 /')
+      return
+    }
+    if (nextName === node.label) {
+      return
+    }
+    const sourcePath = node.fullPath
+    const parts = sourcePath.split('/')
+    parts[parts.length - 1] = nextName
+    const nextPath = parts.join('/')
+    const nextKey = `definition-module:${node.workspaceCode}:${nextPath}`
+    if (findDefinitionTreeNode(nextKey)) {
+      ElMessage.error('同级目录已存在')
+      return
+    }
+    await updateDefinitionModuleDirectories(
+      node,
+      currentPath => replaceDefinitionModulePath(currentPath, sourcePath, nextPath),
+    )
+    selectedDefinitionTreeKey.value = nextKey
+    expandDefinitionTreeToKey(nextKey)
+    ElMessage.success('目录已重命名')
+  }
+  catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error((error as Error).message)
+    }
+  }
+}
+
+async function deleteDefinitionModule(node: DefinitionDirectoryTreeNode) {
+  if (node.type !== 'module' || !node.fullPath || !canWriteWorkspace(node.workspaceCode)) {
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确认删除目录“${node.label}”吗？目录下的请求会移动到根目录，请求本身不会删除。`,
+      '删除目录',
+      { type: 'warning' },
+    )
+    await updateDefinitionModuleDirectories(node, () => '')
+    selectedDefinitionTreeKey.value = `definition-workspace:${node.workspaceCode}`
+    ElMessage.success('目录已删除')
+  }
+  catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error((error as Error).message)
+    }
+  }
+}
+
+function handleDefinitionModuleAction(command: string, node: DefinitionDirectoryTreeNode) {
+  if (command === 'rename') {
+    void renameDefinitionModule(node)
+    return
+  }
+  void deleteDefinitionModule(node)
+}
+
+async function renameDefinitionRequest(node: DefinitionDirectoryTreeNode) {
+  if (node.type !== 'request' || !node.definitionId || !canWriteWorkspace(node.workspaceCode)) {
+    return
+  }
+  try {
+    const { value } = await ElMessageBox.prompt('请输入请求名称', '重命名', {
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+      inputValue: node.label,
+      inputPattern: /\S+/,
+      inputErrorMessage: '请求名称不能为空',
+    })
+    const nextName = value.trim()
+    if (nextName === node.label) {
+      return
+    }
+    const detail = await platformApi.getApiDefinitionDetail(workspaceCode.value, node.definitionId)
+    const editorDetail = toEditorDetailFromDefinition(detail)
+    editorDetail.name = nextName
+    const updated = await platformApi.updateApiDefinition(
+      workspaceCode.value,
+      detail.id,
+      buildDefinitionMutationPayloadFor(editorDetail),
+    )
+    await refreshData()
+    const updatedEditorDetail = toEditorDetailFromDefinition(updated)
+    const openedTab = requestEditorTabs.value.find(item => item.resourceType === 'definition' && item.resourceId === updated.id)
+    if (openedTab) {
+      openedTab.title = updated.name
+      openedTab.draft.name = updated.name
+      if (!openedTab.isDirty) {
+        openedTab.draft = cloneEditorDetail(updatedEditorDetail)
+        openedTab.savedFingerprint = fingerprintDefinitionDetail(updatedEditorDetail)
+      }
+    }
+    if (openedTab?.key === activeRequestEditorKey.value) {
+      definitionForm.name = updated.name
+      if (!openedTab.isDirty) {
+        applyEditorDetailToForm(updatedEditorDetail, { markSaved: true })
+      }
+    }
+    selectedDefinitionTreeKey.value = `definition-request:${updated.id}`
+    ElMessage.success('请求已重命名')
+  }
+  catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error((error as Error).message)
+    }
+  }
+}
+
+async function deleteDefinitionRequest(node: DefinitionDirectoryTreeNode) {
+  if (node.type !== 'request' || !node.definitionId || !canWriteWorkspace(node.workspaceCode)) {
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`确认删除接口“${node.label}”吗？删除后不可恢复。`, '删除接口', { type: 'warning' })
+    await platformApi.deleteApiDefinition(workspaceCode.value, node.definitionId)
+    const closingTab = requestEditorTabs.value.find(item => item.resourceType === 'definition' && item.resourceId === node.definitionId)
+    selectedDefinitionId.value = null
+    await refreshData()
+    if (closingTab) {
+      closingTab.isDirty = false
+      await closeRequestEditorTab(closingTab.key)
+    }
+    if (selectedDefinitionTreeKey.value === node.key) {
+      selectedDefinitionTreeKey.value = node.fullPath
+        ? `definition-module:${node.workspaceCode}:${node.fullPath}`
+        : `definition-workspace:${node.workspaceCode}`
+    }
+    ElMessage.success('接口已删除')
+  }
+  catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error((error as Error).message)
+    }
+  }
+}
+
+function handleDefinitionRequestAction(command: string, node: DefinitionDirectoryTreeNode) {
+  if (command === 'rename') {
+    void renameDefinitionRequest(node)
+    return
+  }
+  void deleteDefinitionRequest(node)
+}
+
 function addScenarioStep() {
   scenarioForm.steps.push(emptyScenarioStep())
 }
@@ -2842,13 +3159,7 @@ async function ensureCaseDefinitionSavedFor(form: ApiRequestEditorDetail) {
   if (form.definitionId) {
     return form.definitionId
   }
-  const payload = buildDefinitionMutationPayloadFor(form)
-  payload.name = (form.definitionName || form.name || '').trim()
-    || `${form.requestConfig.method || 'GET'} ${form.requestConfig.path.trim()}`
-  const detail = await platformApi.createApiDefinition(workspaceCode.value, payload)
-  form.definitionId = detail.id
-  form.definitionName = detail.name
-  return detail.id
+  throw new Error('请先保存接口，再创建用例')
 }
 
 async function ensureCaseDefinitionSaved() {
@@ -3601,7 +3912,7 @@ function formatTimeLabel(value?: string | null) {
                         <span class="ms-like-directory-count">{{ data.count }}</span>
                       </template>
                     </div>
-                    <div v-if="data.type !== 'request'" class="ms-like-directory-actions" @click.stop>
+                    <div class="ms-like-directory-actions" @click.stop>
                       <el-button
                         v-if="data.type === 'root'"
                         text
@@ -3612,13 +3923,65 @@ function formatTimeLabel(value?: string | null) {
                         <el-icon class="tree-collapse-icon"><Fold /></el-icon>
                       </el-button>
                       <el-button
-                        v-if="(data.type === 'workspace' || data.type === 'module' || (!isAllScope && data.type === 'root')) && canWriteWorkspace(data.type === 'root' ? workspaceCode : data.workspaceCode)"
+                        v-if="(data.type === 'workspace' || data.type === 'module') && canWriteWorkspace(data.workspaceCode)"
                         text
                         class="tree-icon-button"
                         @click.stop="createDefinitionModule(data)"
                       >
                         <el-icon><Plus /></el-icon>
                       </el-button>
+                      <el-dropdown
+                        v-if="data.type === 'module' && canWriteWorkspace(data.workspaceCode)"
+                        trigger="click"
+                        popper-class="definition-tree-action-menu"
+                        @command="(command: string | number | object) => handleDefinitionModuleAction(String(command), data)"
+                      >
+                        <el-button
+                          text
+                          class="tree-icon-button definition-tree-more-button"
+                          title="更多操作"
+                          aria-label="更多操作"
+                          @click.stop
+                        >
+                          <el-icon><MoreFilled /></el-icon>
+                        </el-button>
+                        <template #dropdown>
+                          <el-dropdown-menu>
+                            <el-dropdown-item command="rename" class="definition-tree-action-item">
+                              重命名
+                            </el-dropdown-item>
+                            <el-dropdown-item command="delete" class="definition-tree-action-item definition-tree-action-danger">
+                              删除
+                            </el-dropdown-item>
+                          </el-dropdown-menu>
+                        </template>
+                      </el-dropdown>
+                      <el-dropdown
+                        v-if="data.type === 'request' && data.definitionId && canWriteWorkspace(data.workspaceCode)"
+                        trigger="click"
+                        popper-class="definition-tree-action-menu"
+                        @command="(command: string | number | object) => handleDefinitionRequestAction(String(command), data)"
+                      >
+                        <el-button
+                          text
+                          class="tree-icon-button definition-tree-more-button"
+                          title="更多操作"
+                          aria-label="更多操作"
+                          @click.stop
+                        >
+                          <el-icon><MoreFilled /></el-icon>
+                        </el-button>
+                        <template #dropdown>
+                          <el-dropdown-menu>
+                            <el-dropdown-item command="rename" class="definition-tree-action-item">
+                              重命名
+                            </el-dropdown-item>
+                            <el-dropdown-item command="delete" class="definition-tree-action-item definition-tree-action-danger">
+                              删除
+                            </el-dropdown-item>
+                          </el-dropdown-menu>
+                        </template>
+                      </el-dropdown>
                     </div>
                   </div>
                 </template>
@@ -3672,7 +4035,7 @@ function formatTimeLabel(value?: string | null) {
                 <el-button type="primary" :disabled="!canDebugDefinition" :loading="saving" @click="debugActiveEditor">
                   &#21457;&#36865;
                 </el-button>
-                <el-dropdown split-button :disabled="!canWriteDefinition" :loading="saving" data-testid="definition-save-button" @click="saveActiveEditor">
+                <el-dropdown split-button :disabled="!canSaveActiveEditor" :loading="saving" data-testid="definition-save-button" @click="saveActiveEditor">
                   &#20445;&#23384;
                   <template #dropdown>
                     <el-dropdown-menu>
@@ -3702,7 +4065,13 @@ function formatTimeLabel(value?: string | null) {
               <div v-if="showCaseListContent" class="ms-like-request-body">
                 <div class="request-section case-list-panel">
                   <div class="editor-actions left">
-                    <el-button type="primary" @click="openCaseDraftFromDefinition()">新建用例</el-button>
+                    <el-button
+                      type="primary"
+                      :title="canCreateCaseForCurrentDefinition ? '新建用例' : '请先保存接口，再创建用例'"
+                      @click="openCaseDraftFromDefinition()"
+                    >
+                      新建用例
+                    </el-button>
                   </div>
                   <div v-if="!currentDefinitionCases.length" class="empty-hint">当前接口下还没有用例</div>
                   <div v-else class="case-list-table-wrap">
@@ -4782,8 +5151,11 @@ function formatTimeLabel(value?: string | null) {
                     </div>
                     <div class="case-drawer-history-detail-head-right">
                       <div v-if="caseDrawerRunHistoryDetail" class="ms-like-response-metrics">
-                        <span>状态 {{ caseDrawerSelectedHistoryStatusCode ?? '-' }}</span>
-                        <span>耗时 {{ caseDrawerSelectedHistoryDuration ?? '-' }}<template v-if="caseDrawerSelectedHistoryDuration !== null"> ms</template></span>
+                        <span :class="['case-drawer-history-result-pill', `is-${caseDrawerSelectedHistoryResult}`]">
+                          {{ caseDrawerSelectedHistoryResultLabel }}
+                        </span>
+                        <span :class="['case-drawer-history-metric', `is-${caseDrawerSelectedHistoryStatusTone}`]">状态 {{ caseDrawerSelectedHistoryStatusCode ?? '-' }}</span>
+                        <span :class="['case-drawer-history-metric', `is-${caseDrawerSelectedHistoryDurationTone}`]">耗时 {{ caseDrawerSelectedHistoryDuration ?? '-' }}<template v-if="caseDrawerSelectedHistoryDuration !== null"> ms</template></span>
                         <span>大小 {{ caseDrawerSelectedHistorySize }}</span>
                       </div>
                     </div>
@@ -4946,8 +5318,39 @@ function formatTimeLabel(value?: string | null) {
                   </template>
                 </div>
               </div>
-              <div v-else class="case-drawer-history-placeholder">
-                <div class="case-drawer-history-empty">变更历史即将支持</div>
+              <div v-else class="case-drawer-history-panel">
+                <div v-if="caseDrawerChangeHistoryLoading" class="case-drawer-history-loading">加载中...</div>
+                <el-table
+                  v-else
+                  :data="caseDrawerChangeHistoryItems"
+                  size="small"
+                  class="case-drawer-history-table case-drawer-change-history-table"
+                  row-key="id"
+                >
+                  <el-table-column label="时间" min-width="162" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      {{ formatTimeLabel(row.createdAt) }}
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="动作" width="92" align="center">
+                    <template #default="{ row }">
+                      <span class="case-drawer-change-history-action">{{ row.changeType }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作人" min-width="110" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      {{ row.operatorName || '-' }}
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="摘要" min-width="240" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      {{ row.changeSummary || '-' }}
+                    </template>
+                  </el-table-column>
+                  <template #empty>
+                    <div class="case-drawer-history-table-empty">暂无变更历史</div>
+                  </template>
+                </el-table>
               </div>
             </template>
 
@@ -5676,6 +6079,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-directory-node:hover .ms-like-directory-actions,
+.ms-like-directory-node:focus-within .ms-like-directory-actions,
 .ms-like-directory-node.is-root .ms-like-directory-actions {
   opacity: 1;
 }
@@ -5709,6 +6113,41 @@ function formatTimeLabel(value?: string | null) {
   width: 24px;
   height: 24px;
   padding: 0;
+}
+
+.definition-tree-more-button {
+  border-radius: 4px;
+  color: #667085;
+}
+
+.definition-tree-more-button:hover,
+.definition-tree-more-button:focus-visible {
+  background: #f4effc;
+  color: #7c3aed;
+}
+
+:global(.definition-tree-action-menu) {
+  min-width: 86px;
+}
+
+:global(.definition-tree-action-menu .el-dropdown-menu) {
+  padding: 6px;
+}
+
+:global(.definition-tree-action-menu .definition-tree-action-item) {
+  min-width: 72px;
+  justify-content: center;
+  padding: 8px 14px;
+  line-height: 1.2;
+}
+
+:global(.definition-tree-action-menu .definition-tree-action-danger) {
+  color: #e5484d;
+}
+
+:global(.definition-tree-action-menu .definition-tree-action-danger:hover) {
+  background: #fff1f1;
+  color: #d92d20;
 }
 
 .tree-collapse-icon {
@@ -6784,6 +7223,40 @@ function formatTimeLabel(value?: string | null) {
   color: #dc2626;
 }
 
+.case-drawer-history-result-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.case-drawer-history-result-pill.is-success {
+  background: #ecfdf3;
+  color: #039855;
+}
+
+.case-drawer-history-result-pill.is-failed {
+  background: #fef3f2;
+  color: #d92d20;
+}
+
+.case-drawer-history-metric.is-success {
+  color: #039855;
+}
+
+.case-drawer-history-metric.is-failed {
+  color: #d92d20;
+}
+
+.case-drawer-history-metric.is-slow {
+  color: #dc6803;
+}
+
 .case-drawer-history-detail-button {
   padding-inline: 0;
   color: var(--el-color-primary);
@@ -6855,6 +7328,25 @@ function formatTimeLabel(value?: string | null) {
 
 .case-drawer-history-request-grid {
   display: none;
+}
+
+.case-drawer-change-history-table {
+  margin: 0 16px 12px;
+  width: calc(100% - 32px);
+}
+
+.case-drawer-change-history-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #f4f7ff;
+  color: #3953d3;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .case-drawer-history-request-block {

@@ -145,6 +145,11 @@ async function loadWorkspaces() {
 }
 
 watch(() => authStore.currentUser?.id, loadWorkspaces)
+watch(isPublicRoute, (publicRoute) => {
+  if (!publicRoute) {
+    void loadWorkspaces()
+  }
+})
 watch(() => route.query.workspace, async () => {
   if (!authStore.isAuthenticated || workspaceOptions.value.length === 0) {
     return

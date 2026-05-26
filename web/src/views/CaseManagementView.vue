@@ -4,14 +4,11 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft,
   ArrowRight,
-  Delete,
-  Edit,
   Folder,
   FolderOpened,
   Fold,
   MoreFilled,
   Plus,
-  Rank,
   RefreshRight,
   Setting,
 } from '@element-plus/icons-vue'
@@ -1392,23 +1389,24 @@ onMounted(bootstrap)
                 <el-dropdown
                   v-if="data.type === 'module' && canWriteWorkspace(data.workspaceCode)"
                   trigger="click"
+                  popper-class="case-tree-action-menu"
                   @command="(command: string | number | object) => handleModuleAction(String(command), data)"
                 >
-                  <el-button text class="tree-icon-button" @click.stop>
+                  <el-button
+                    text
+                    class="tree-icon-button tree-more-button"
+                    title="更多操作"
+                    aria-label="更多操作"
+                    @click.stop
+                  >
                     <el-icon><MoreFilled /></el-icon>
                   </el-button>
                   <template #dropdown>
                     <el-dropdown-menu>
-                      <el-dropdown-item command="rename">
-                        <el-icon><Edit /></el-icon>
+                      <el-dropdown-item command="rename" class="case-tree-action-item">
                         重命名
                       </el-dropdown-item>
-                      <el-dropdown-item command="move">
-                        <el-icon><Rank /></el-icon>
-                        移动到
-                      </el-dropdown-item>
-                      <el-dropdown-item command="delete">
-                        <el-icon><Delete /></el-icon>
+                      <el-dropdown-item command="delete" class="case-tree-action-item case-tree-action-danger">
                         删除
                       </el-dropdown-item>
                     </el-dropdown-menu>
@@ -1933,10 +1931,8 @@ onMounted(bootstrap)
   opacity: 0;
   transition: opacity 0.15s ease;
 }
-.tree-node:hover .tree-node-actions {
-  opacity: 1;
-}
-.case-tree :deep(.el-tree-node:first-child > .el-tree-node__content .tree-node-actions) {
+.tree-node:hover .tree-node-actions,
+.tree-node:focus-within .tree-node-actions {
   opacity: 1;
 }
 .tree-icon-button {
@@ -1944,8 +1940,36 @@ onMounted(bootstrap)
   height: 24px;
   padding: 0;
 }
+.tree-more-button {
+  border-radius: 4px;
+  color: #667085;
+}
+.tree-more-button:hover,
+.tree-more-button:focus-visible {
+  background: #f4effc;
+  color: #7c3aed;
+}
 .tree-collapse-icon {
   color: var(--text-subtle);
+}
+:global(.case-tree-action-menu) {
+  min-width: 86px;
+}
+:global(.case-tree-action-menu .el-dropdown-menu) {
+  padding: 6px;
+}
+:global(.case-tree-action-menu .case-tree-action-item) {
+  min-width: 72px;
+  justify-content: center;
+  padding: 8px 14px;
+  line-height: 1.2;
+}
+:global(.case-tree-action-menu .case-tree-action-danger) {
+  color: #e5484d;
+}
+:global(.case-tree-action-menu .case-tree-action-danger:hover) {
+  background: #fff1f1;
+  color: #d92d20;
 }
 .batch-toolbar-meta {
   font-size: 13px;

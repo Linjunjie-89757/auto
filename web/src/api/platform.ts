@@ -2,6 +2,7 @@ import type {
   ApiDebugCasePayload,
   ApiDebugDefinitionPayload,
   ApiDefinitionCaseDetail,
+  ApiDefinitionCaseChangeHistoryItem,
   ApiDefinitionCaseItem,
   ApiDefinitionCaseRunHistoryDetail,
   ApiDefinitionCaseRunHistoryItem,
@@ -655,6 +656,9 @@ export const platformApi = {
   },
   getApiDefinitionCaseRunHistoryDetail(workspaceCode: string, historyId: number) {
     return request<ApiDefinitionCaseRunHistoryDetail>(`/automation/api/cases/run-history/${historyId}`, { workspaceCode })
+  },
+  getApiDefinitionCaseChangeHistory(workspaceCode: string, id: number) {
+    return request<PageResponse<ApiDefinitionCaseChangeHistoryItem>>(`/automation/api/cases/${id}/change-history`, { workspaceCode })
   },
   createApiDefinitionCase(workspaceCode: string, payload: SaveApiDefinitionCasePayload) {
     return request<ApiDefinitionCaseDetail>('/automation/api/cases', {

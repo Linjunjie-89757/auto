@@ -308,6 +308,21 @@ public final class ApiAutomationModels {
     ) {
     }
 
+    public record ApiDefinitionCaseChangeHistoryItem(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            Long caseId,
+            Long definitionId,
+            String caseName,
+            String changeType,
+            String changeSummary,
+            Long operatorId,
+            String operatorName,
+            LocalDateTime createdAt
+    ) {
+    }
+
     public record ApiScenarioStepInput(
             String stepName,
             String resourceType,

@@ -693,6 +693,20 @@ export interface ApiDefinitionCaseRunHistoryDetail extends ApiDefinitionCaseRunH
   stepResults: ApiRunStepResult[]
 }
 
+export interface ApiDefinitionCaseChangeHistoryItem {
+  id: number
+  workspaceCode: string
+  workspaceName: string
+  caseId: number
+  definitionId: number
+  caseName: string
+  changeType: string
+  changeSummary: string | null
+  operatorId: number | null
+  operatorName: string | null
+  createdAt: string | null
+}
+
 export type ApiScenarioStepResourceType = 'DEFINITION' | 'CASE'
 
 export interface ApiScenarioStep {

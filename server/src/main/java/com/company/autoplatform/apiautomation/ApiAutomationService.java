@@ -2,6 +2,7 @@ package com.company.autoplatform.apiautomation;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.company.autoplatform.auth.CurrentUserContext;
+import com.company.autoplatform.auth.CurrentUserPrincipal;
 import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.common.NotFoundException;
 import com.company.autoplatform.common.PageResponse;
@@ -86,6 +87,7 @@ public class ApiAutomationService {
 
     private final ApiDefinitionMapper definitionMapper;
     private final ApiDefinitionCaseMapper caseMapper;
+    private final ApiDefinitionCaseChangeHistoryMapper caseChangeHistoryMapper;
     private final ApiDefinitionCaseRunHistoryMapper caseRunHistoryMapper;
     private final ApiScenarioMapper scenarioMapper;
     private final ApiRunStepResultMapper runStepResultMapper;
@@ -102,6 +104,7 @@ public class ApiAutomationService {
     public ApiAutomationService(
             ApiDefinitionMapper definitionMapper,
             ApiDefinitionCaseMapper caseMapper,
+            ApiDefinitionCaseChangeHistoryMapper caseChangeHistoryMapper,
             ApiDefinitionCaseRunHistoryMapper caseRunHistoryMapper,
             ApiScenarioMapper scenarioMapper,
             ApiRunStepResultMapper runStepResultMapper,
@@ -116,6 +119,7 @@ public class ApiAutomationService {
     ) {
         this.definitionMapper = definitionMapper;
         this.caseMapper = caseMapper;
+        this.caseChangeHistoryMapper = caseChangeHistoryMapper;
         this.caseRunHistoryMapper = caseRunHistoryMapper;
         this.scenarioMapper = scenarioMapper;
         this.runStepResultMapper = runStepResultMapper;
@@ -175,6 +179,18 @@ public class ApiAutomationService {
         return toCaseDetail(entity);
     }
 
+    public PageResponse<ApiDefinitionCaseChangeHistoryItem> listCaseChangeHistory(Long caseId, String workspaceCode) {
+        ApiDefinitionCaseEntity apiCase = requireCase(caseId);
+        validateReadable(apiCase.getWorkspaceId(), workspaceCode, "Current workspace cannot access the case");
+        List<ApiDefinitionCaseChangeHistoryItem> items = caseChangeHistoryMapper.selectList(new LambdaQueryWrapper<ApiDefinitionCaseChangeHistoryEntity>()
+                        .eq(ApiDefinitionCaseChangeHistoryEntity::getCaseId, caseId)
+                        .orderByDesc(ApiDefinitionCaseChangeHistoryEntity::getCreatedAt))
+                .stream()
+                .map(this::toCaseChangeHistoryItem)
+                .toList();
+        return new PageResponse<>(items, items.size());
+    }
+
     public PageResponse<ApiDefinitionCaseRunHistoryItem> listCaseRunHistory(Long caseId, String workspaceCode) {
         ApiDefinitionCaseEntity apiCase = requireCase(caseId);
         validateReadable(apiCase.getWorkspaceId(), workspaceCode, "Current workspace cannot access the case");
@@ -228,6 +244,7 @@ public class ApiAutomationService {
         entity.setCreatedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
         caseMapper.insert(entity);
+        recordCaseChangeHistory(entity, "CREATE", "创建用例");
         return toCaseDetail(entity);
     }
 
@@ -244,6 +261,7 @@ public class ApiAutomationService {
         fillCaseEntity(entity, workspace, definition, request);
         entity.setUpdatedAt(LocalDateTime.now());
         caseMapper.updateById(entity);
+        recordCaseChangeHistory(entity, "UPDATE", "更新用例");
         return toCaseDetail(entity);
     }
 
@@ -675,6 +693,39 @@ public class ApiAutomationService {
                 "Failed to serialize case pre-processors"));
         entity.setPostprocessorsJson(ApiAutomationJsonSupport.toJson(normalizeProcessors(request.postProcessors(), "POST"),
                 "Failed to serialize case post-processors"));
+    }
+
+    private void recordCaseChangeHistory(ApiDefinitionCaseEntity entity, String changeType, String changeSummary) {
+        CurrentUserPrincipal currentUser = CurrentUserContext.require();
+        ApiDefinitionCaseChangeHistoryEntity history = new ApiDefinitionCaseChangeHistoryEntity();
+        history.setWorkspaceId(entity.getWorkspaceId());
+        history.setDefinitionId(entity.getDefinitionId());
+        history.setCaseId(entity.getId());
+        history.setCaseName(entity.getCaseName());
+        history.setChangeType(changeType);
+        history.setChangeSummary(changeSummary);
+        history.setOperatorId(currentUser.userId());
+        history.setOperatorName(currentUser.displayName());
+        history.setCreatedAt(LocalDateTime.now());
+        history.setUpdatedAt(LocalDateTime.now());
+        caseChangeHistoryMapper.insert(history);
+    }
+
+    private ApiDefinitionCaseChangeHistoryItem toCaseChangeHistoryItem(ApiDefinitionCaseChangeHistoryEntity entity) {
+        WorkspaceEntity workspace = workspaceService.requireWorkspaceById(entity.getWorkspaceId());
+        return new ApiDefinitionCaseChangeHistoryItem(
+                entity.getId(),
+                workspace.getWorkspaceCode(),
+                workspace.getWorkspaceName(),
+                entity.getCaseId(),
+                entity.getDefinitionId(),
+                entity.getCaseName(),
+                entity.getChangeType(),
+                entity.getChangeSummary(),
+                entity.getOperatorId(),
+                entity.getOperatorName(),
+                entity.getCreatedAt()
+        );
     }
 
     private void fillScenarioEntity(ApiScenarioEntity entity, WorkspaceEntity workspace, SaveApiScenarioRequest request) {

@@ -293,9 +293,44 @@ function handleSubmitClick() {
 
 .api-case-drawer-method-tag {
   flex: 0 0 auto;
-  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: #fff;
+  font-size: 13px;
   font-weight: 600;
-  line-height: 20px;
+  line-height: 1;
+}
+
+.api-case-drawer-method-tag.request-method-get {
+  color: #16a34a;
+}
+
+.api-case-drawer-method-tag.request-method-post {
+  color: #f97316;
+}
+
+.api-case-drawer-method-tag.request-method-put,
+.api-case-drawer-method-tag.request-method-options,
+.api-case-drawer-method-tag.request-method-head {
+  color: #3b82f6;
+}
+
+.api-case-drawer-method-tag.request-method-delete {
+  color: #dc2626;
+}
+
+.api-case-drawer-method-tag.request-method-patch {
+  color: #ec4899;
+}
+
+.api-case-drawer-method-tag.request-method-trace {
+  color: #8b5cf6;
 }
 
 .api-case-drawer-summary-path {

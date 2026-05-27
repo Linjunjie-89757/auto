@@ -1,14 +1,21 @@
 ﻿<script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { Directive } from 'vue'
 import {
+  ArrowDown,
+  ArrowUp,
+  CaretRight,
   Close,
+  Delete,
+  EditPen,
   Fold,
   Folder,
   FolderOpened,
   MoreFilled,
   Plus,
   Setting,
+  RefreshRight,
+  Search,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
@@ -39,12 +46,16 @@ import type {
   ApiKeyValue,
   ApiProcessorConfig,
   ApiProcessorExtractorConfig,
+  ApiRequestConfig,
   ApiDebugDefinitionPayload,
   ApiRunPayload,
   ApiRunStepResult,
   ApiScenarioDetail,
   ApiScenarioItem,
+  ApiScenarioModuleItem,
+  ApiScenarioAssertionConfig,
   ApiScenarioStep,
+  ApiScenarioStepType,
   ApiVariableItem,
   ApiVariableSetItem,
   CreateBugPayload,
@@ -59,8 +70,23 @@ type RequestEditorResourceType = 'definition' | 'case'
 type CaseDrawerMode = 'create' | 'edit' | 'run'
 type CaseDrawerViewTab = 'detail' | 'runHistory' | 'changeHistory'
 type CaseDrawerHistoryView = 'list' | 'detail'
+type ScenarioDetailTab = 'basic' | 'steps' | 'params' | 'assertions' | 'history' | 'settings'
 type ResponsePreviewTab = 'body' | 'header' | 'console' | 'actualRequest' | 'assertions'
 type HistoryRequestPreviewTab = 'header' | 'body'
+type ScenarioAddStepAction =
+  | 'IMPORT_SYSTEM_API'
+  | 'CUSTOM_REQUEST'
+  | 'LOOP_CONTROLLER'
+  | 'IF_CONTROLLER'
+  | 'ONCE_ONLY_CONTROLLER'
+  | 'SCRIPT'
+  | 'CONSTANT_TIMER'
+type ScenarioImportTab = 'api' | 'case' | 'scenario'
+type ScenarioStepDrawerMode = 'create' | 'edit'
+type ScenarioScriptDrawerTab = 'script' | 'assertions'
+type RequestConfigHost = {
+  requestConfig: ApiRequestConfig
+}
 type ApiRequestEditorDetail = ApiDefinitionDetail & {
   resourceType: RequestEditorResourceType
   definitionId: number | null
@@ -85,6 +111,39 @@ type RequestEditorTab = {
   debugStepResults: ApiRunStepResult[]
 }
 
+type ScenarioEditorTab = {
+  key: string
+  id: number | null
+  title: string
+}
+
+type ScenarioModuleTreeNode = {
+  key: string
+  type: 'root' | 'workspace' | 'module'
+  id: number | null
+  name: string
+  scenarioCount: number
+  workspaceCode: string
+  children: ScenarioModuleTreeNode[]
+}
+
+type FlatScenarioStep = {
+  step: ApiScenarioStep
+  path: number[]
+  level: number
+}
+
+type ScenarioImportTreeNode = {
+  key: string
+  type: 'root' | 'workspace' | 'module'
+  label: string
+  workspaceCode: string
+  modulePath: string | null
+  moduleId: number | null
+  count: number
+  children: ScenarioImportTreeNode[]
+}
+
 const requestMethodOptions = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'TRACE'] as const
 const queryParamTypeOptions = ['string', 'integer', 'number', 'boolean'] as const
 const bodyParamTypeOptions = ['string', 'integer', 'number', 'boolean'] as const
@@ -95,6 +154,31 @@ const requestAuthTypeOptions = [
 ] as const
 const casePriorityOptions = ['P0', 'P1', 'P2', 'P3'] as const
 const caseStatusOptions = ['进行中', '已完成', '已废弃'] as const
+const scenarioPriorityOptions = ['P0', 'P1', 'P2', 'P3'] as const
+const scenarioStatusOptions = [
+  { label: '未开始', value: 'NOT_STARTED' },
+  { label: '进行中', value: 'IN_PROGRESS' },
+  { label: '已完成', value: 'COMPLETED' },
+  { label: '已归档', value: 'ARCHIVED' },
+] as const
+const scenarioStepTypeOptions: Array<{ label: string; value: ApiScenarioStepType }> = [
+  { label: '接口', value: 'API' },
+  { label: '接口用例', value: 'API_CASE' },
+  { label: '自定义请求', value: 'CUSTOM_REQUEST' },
+  { label: '引用场景', value: 'API_SCENARIO' },
+  { label: '条件控制器', value: 'IF_CONTROLLER' },
+  { label: '循环控制器', value: 'LOOP_CONTROLLER' },
+  { label: '仅一次控制器', value: 'ONCE_ONLY_CONTROLLER' },
+  { label: '固定等待', value: 'CONSTANT_TIMER' },
+  { label: '脚本', value: 'SCRIPT' },
+]
+const scenarioAssertionTypeOptions: Array<{ label: string; value: ApiScenarioAssertionConfig['assertionType'] }> = [
+  { label: '全部步骤通过', value: 'ALL_STEPS_PASSED' },
+  { label: '失败数等于', value: 'FAILED_COUNT_EQUALS' },
+  { label: '失败数小于等于', value: 'FAILED_COUNT_LTE' },
+  { label: '总耗时小于', value: 'TOTAL_DURATION_LT' },
+  { label: '执行步骤数等于', value: 'STEP_COUNT_EQUALS' },
+]
 const CASE_LIST_PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50] as const
 
 type DefinitionDirectoryTreeNode = {
@@ -115,6 +199,7 @@ type RequestContentTab = 'params' | 'headers' | 'body' | 'auth' | 'pre' | 'post'
 
 const DEFINITION_TREE_ROOT_KEY = 'definition-root'
 const DEFINITION_TREE_UNASSIGNED_KEY = 'definition-unassigned'
+const SCENARIO_MODULE_ROOT_KEY = 'scenario-module-all'
 
 const { workspaceCode, isAllScope } = useWorkspace()
 const { canWriteWorkspace } = useWorkspaceAccess()
@@ -181,6 +266,7 @@ const activeAssertionId = ref<string | null>(null)
 const definitions = ref<ApiDefinitionItem[]>([])
 const apiCases = ref<ApiDefinitionCaseItem[]>([])
 const scenarios = ref<ApiScenarioItem[]>([])
+const scenarioModules = ref<ApiScenarioModuleItem[]>([])
 const environments = ref<ApiEnvironmentItem[]>([])
 const variableSets = ref<ApiVariableSetItem[]>([])
 const dbConnections = ref<DbConnectionItem[]>([])
@@ -193,16 +279,24 @@ const reportStepResults = ref<ApiRunStepResult[]>([])
 
 const selectedDefinitionId = ref<number | null>(null)
 const selectedScenarioId = ref<number | null>(null)
+const selectedScenarioModuleId = ref<number | null>(null)
+const selectedScenarioWorkspaceCode = ref<string | null>(null)
 const selectedEnvironmentId = ref<number | null>(null)
 const selectedVariableSetId = ref<number | null>(null)
 const selectedReportId = ref<number | null>(null)
 const requestEditorTabs = ref<RequestEditorTab[]>([])
+const scenarioEditorTabs = ref<ScenarioEditorTab[]>([{ key: 'scenario-list', id: null, title: '全部场景' }])
 const activeRequestEditorKey = ref('')
+const activeScenarioEditorKey = ref('scenario-list')
+const activeScenarioDetailTab = ref<ScenarioDetailTab>('steps')
+const scenarioLastRunStepResults = ref<ApiRunStepResult[]>([])
 const caseDrawerSourceEditorKey = ref('')
 const requestEditorSyncing = ref(false)
 const selectedDefinitionTreeKey = ref(DEFINITION_TREE_ROOT_KEY)
 const definitionTreeRenderKey = ref(0)
 const expandedDefinitionTreeKeys = ref<string[]>([DEFINITION_TREE_ROOT_KEY])
+const scenarioModuleTreeRenderKey = ref(0)
+const expandedScenarioModuleTreeKeys = ref<string[]>([SCENARIO_MODULE_ROOT_KEY])
 
 const definitionFilters = reactive({
   keyword: '',
@@ -218,8 +312,41 @@ const definitionSaveForm = reactive({
 
 const scenarioFilters = reactive({
   keyword: '',
-  directory: '',
+  status: '',
 })
+const scenarioModuleKeyword = ref('')
+const scenarioViewMode = ref('ALL')
+const scenarioImportDrawerVisible = ref(false)
+const scenarioImportActiveTab = ref<ScenarioImportTab>('api')
+const scenarioImportTreeKeyword = ref('')
+const scenarioImportKeyword = ref('')
+const scenarioImportWorkspaceCode = ref('')
+const scenarioImportProtocol = ref('HTTP')
+const selectedScenarioImportTreeKey = ref('scenario-import-all')
+const scenarioImportSelectedDefinitionIds = ref<number[]>([])
+const scenarioImportSelectedCaseIds = ref<number[]>([])
+const scenarioImportSelectedScenarioIds = ref<number[]>([])
+const scenarioImportLoading = ref(false)
+const scenarioCustomRequestDrawerVisible = ref(false)
+const scenarioCustomRequestDrawerMode = ref<ScenarioStepDrawerMode>('create')
+const scenarioCustomRequestEditingPath = ref<number[]>([])
+const scenarioCustomRequestActiveTab = ref<RequestContentTab>('headers')
+const scenarioCustomRequestTitleEditing = ref(false)
+const scenarioCustomRequestHasCustomStepName = ref(false)
+const scenarioCustomRequestActivePreProcessorId = ref<string | null>(null)
+const scenarioCustomRequestActivePostProcessorId = ref<string | null>(null)
+const scenarioCustomRequestActiveAssertionId = ref<string | null>(null)
+const scenarioScriptDrawerVisible = ref(false)
+const scenarioScriptDrawerMode = ref<ScenarioStepDrawerMode>('create')
+const scenarioScriptEditingPath = ref<number[]>([])
+const scenarioScriptActiveTab = ref<ScenarioScriptDrawerTab>('script')
+const scenarioScriptActiveAssertionId = ref<string | null>(null)
+const scenarioSystemRequestDrawerVisible = ref(false)
+const scenarioSystemRequestDrawerLoading = ref(false)
+const scenarioSystemRequestDetail = ref<ApiRequestEditorDetail | null>(null)
+const scenarioSystemRequestActiveTab = ref<RequestContentTab>('headers')
+const scenarioStepNameEditingId = ref('')
+const scenarioStepNameDraft = ref('')
 
 const definitionForm = reactive<ApiRequestEditorDetail>({
   id: 0,
@@ -284,6 +411,10 @@ const scenarioForm = reactive<ApiScenarioDetail>({
   workspaceName: '',
   name: '',
   directoryName: '',
+  moduleId: null,
+  moduleName: null,
+  priority: 'P1',
+  status: 'IN_PROGRESS',
   description: '',
   tags: [],
   stepCount: 0,
@@ -295,7 +426,51 @@ const scenarioForm = reactive<ApiScenarioDetail>({
   updatedAt: null,
   createdAt: null,
   relatedCaseId: null,
+  scenarioVariables: [],
+  scenarioAssertions: [],
   steps: [],
+})
+
+const scenarioCustomRequestForm = reactive<ApiScenarioStep>({
+  id: '',
+  stepName: '',
+  stepType: 'CUSTOM_REQUEST',
+  resourceType: null,
+  resourceId: null,
+  enabled: true,
+  requestConfig: emptyApiRequestConfig(),
+  assertions: [],
+  preProcessors: [],
+  postProcessors: [],
+  delayMs: null,
+  conditionType: 'EXPRESSION',
+  conditionExpression: '',
+  loopType: 'FIXED',
+  loopCount: null,
+  foreachExpression: '',
+  script: '',
+  children: [],
+})
+
+const scenarioScriptForm = reactive<ApiScenarioStep>({
+  id: '',
+  stepName: '',
+  stepType: 'SCRIPT',
+  resourceType: null,
+  resourceId: null,
+  enabled: true,
+  requestConfig: null,
+  assertions: [],
+  preProcessors: [],
+  postProcessors: [],
+  delayMs: null,
+  conditionType: 'EXPRESSION',
+  conditionExpression: '',
+  loopType: 'FIXED',
+  loopCount: null,
+  foreachExpression: '',
+  script: '',
+  children: [],
 })
 
 const environmentForm = reactive<ApiEnvironmentItem>({
@@ -430,7 +605,139 @@ const showCaseListContent = computed(() => activeRequestEditorTab.value?.resourc
 const visibleRequestEditorTabs = computed(() => requestEditorTabs.value.filter(item => item.resourceType === 'definition'))
 const canCreateCaseForCurrentDefinition = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && !!definitionForm.id)
 
-const scenarioDirectoryOptions = computed(() => uniqueNonEmpty(scenarios.value.map(item => item.directoryName)))
+const scenarioModuleTree = computed<ScenarioModuleTreeNode[]>(() => {
+  const workspaceCodes = isAllScope.value
+    ? Array.from(new Set([
+      ...workspaces.value.map(item => item.code),
+      ...scenarios.value.map(item => item.workspaceCode),
+      ...scenarioModules.value.map(item => item.workspaceCode),
+    ])).filter(Boolean)
+    : [workspaceCode.value]
+  const keyword = scenarioModuleKeyword.value.trim().toLowerCase()
+  const workspaceNodes = workspaceCodes.map((code) => {
+    const workspaceName = getScenarioWorkspaceName(code)
+    const allModuleChildren = scenarioModules.value
+      .filter(item => item.workspaceCode === code)
+      .map(toScenarioModuleTreeNode)
+    const children = keyword && !workspaceName.toLowerCase().includes(keyword)
+      ? allModuleChildren.filter(node => matchesScenarioModuleKeyword(node, scenarioModuleKeyword.value))
+      : allModuleChildren
+    return {
+      key: `scenario-workspace:${code}`,
+      type: 'workspace' as const,
+      id: null,
+      name: workspaceName,
+      scenarioCount: scenarios.value.filter(item => item.workspaceCode === code).length,
+      workspaceCode: code,
+      children,
+    }
+  }).filter(node => !keyword || node.name.toLowerCase().includes(keyword) || node.children.length)
+  return [{
+    key: SCENARIO_MODULE_ROOT_KEY,
+    type: 'root',
+    id: null,
+    name: '全部场景',
+    scenarioCount: scenarios.value.length,
+    workspaceCode: isAllScope.value ? 'ALL' : workspaceCode.value,
+    children: workspaceNodes,
+  }]
+})
+const selectedScenarioModuleTreeKey = computed(() => {
+  if (selectedScenarioModuleId.value != null) {
+    return `scenario-module-${selectedScenarioModuleId.value}`
+  }
+  return selectedScenarioWorkspaceCode.value
+    ? `scenario-workspace:${selectedScenarioWorkspaceCode.value}`
+    : SCENARIO_MODULE_ROOT_KEY
+})
+const flatScenarioModules = computed(() => flattenScenarioModules(scenarioModules.value))
+const selectedScenarioModuleItem = computed(() => (
+  selectedScenarioModuleId.value == null
+    ? null
+    : flatScenarioModules.value.find(item => item.id === selectedScenarioModuleId.value) ?? null
+))
+const selectedScenarioModuleFormName = computed(() => {
+  if (selectedScenarioModuleItem.value) {
+    return selectedScenarioModuleItem.value.name
+  }
+  return ''
+})
+const scenarioModuleOptions = computed(() => flatScenarioModules.value.map(item => ({
+  label: `${'  '.repeat(item.level)}${item.name}`,
+  value: item.id,
+})))
+const scenarioRunHistorySteps = computed(() => scenarioLastRunStepResults.value)
+const scenarioFlatSteps = computed(() => flattenScenarioSteps(scenarioForm.steps || []))
+const scenarioImportWorkspaceOptions = computed(() => {
+  const codes = Array.from(new Set([
+    ...workspaces.value.map(item => item.code),
+    ...definitions.value.map(item => item.workspaceCode),
+    ...apiCases.value.map(item => item.workspaceCode),
+    ...scenarios.value.map(item => item.workspaceCode),
+  ])).filter(Boolean)
+  const scopedCodes = isAllScope.value ? codes : [workspaceCode.value]
+  return scopedCodes.map(code => ({ label: getScenarioWorkspaceName(code), value: code }))
+})
+const activeScenarioImportTreeNode = computed(() => findScenarioImportTreeNode(scenarioImportTree.value, selectedScenarioImportTreeKey.value))
+const scenarioImportTree = computed<ScenarioImportTreeNode[]>(() => buildScenarioImportTree(scenarioImportActiveTab.value))
+const scenarioImportDefinitions = computed(() => {
+  const keyword = scenarioImportKeyword.value.trim().toLowerCase()
+  const node = activeScenarioImportTreeNode.value
+  return definitions.value.filter((item) => {
+    if (scenarioImportWorkspaceCode.value && item.workspaceCode !== scenarioImportWorkspaceCode.value) {
+      return false
+    }
+    if (!matchesScenarioImportDefinitionScope(item, node)) {
+      return false
+    }
+    if (!keyword) {
+      return true
+    }
+    return item.name.toLowerCase().includes(keyword) || item.path.toLowerCase().includes(keyword)
+  })
+})
+const scenarioImportCases = computed(() => {
+  const keyword = scenarioImportKeyword.value.trim().toLowerCase()
+  const node = activeScenarioImportTreeNode.value
+  return apiCases.value.filter((item) => {
+    if (scenarioImportWorkspaceCode.value && item.workspaceCode !== scenarioImportWorkspaceCode.value) {
+      return false
+    }
+    if (!matchesScenarioImportCaseScope(item, node)) {
+      return false
+    }
+    if (!keyword) {
+      return true
+    }
+    return item.name.toLowerCase().includes(keyword) || item.path.toLowerCase().includes(keyword) || item.definitionName.toLowerCase().includes(keyword)
+  })
+})
+const scenarioImportScenarios = computed(() => {
+  const keyword = scenarioImportKeyword.value.trim().toLowerCase()
+  const node = activeScenarioImportTreeNode.value
+  return scenarios.value.filter((item) => {
+    if (item.id === scenarioForm.id) {
+      return false
+    }
+    if (scenarioImportWorkspaceCode.value && item.workspaceCode !== scenarioImportWorkspaceCode.value) {
+      return false
+    }
+    if (!matchesScenarioImportScenarioScope(item, node)) {
+      return false
+    }
+    if (!keyword) {
+      return true
+    }
+    return item.name.toLowerCase().includes(keyword) || (item.moduleName || '').toLowerCase().includes(keyword)
+  })
+})
+const scenarioImportSelectedDefinitionRows = computed(() => definitions.value.filter(item => scenarioImportSelectedDefinitionIds.value.includes(item.id)))
+const scenarioImportSelectedCaseRows = computed(() => apiCases.value.filter(item => scenarioImportSelectedCaseIds.value.includes(item.id)))
+const scenarioImportSelectedScenarioRows = computed(() => scenarios.value.filter(item => scenarioImportSelectedScenarioIds.value.includes(item.id)))
+const scenarioImportSelectedTotal = computed(() =>
+  scenarioImportSelectedDefinitionIds.value.length
+  + scenarioImportSelectedCaseIds.value.length
+  + scenarioImportSelectedScenarioIds.value.length)
 const activeOwnerOptions = computed(() => users.value.filter(item => item.status === 1))
 const definitionOptions = computed(() => definitions.value.map(item => ({
   label: `${item.method} ${item.name}`,
@@ -776,7 +1083,13 @@ const filteredScenarios = computed(() => scenarios.value.filter((item) => {
       return false
     }
   }
-  if (scenarioFilters.directory && (item.directoryName || '') !== scenarioFilters.directory) {
+  if (selectedScenarioWorkspaceCode.value && item.workspaceCode !== selectedScenarioWorkspaceCode.value) {
+    return false
+  }
+  if (selectedScenarioModuleId.value != null && item.moduleId !== selectedScenarioModuleId.value) {
+    return false
+  }
+  if (scenarioFilters.status && item.status !== scenarioFilters.status) {
     return false
   }
   return true
@@ -1025,21 +1338,50 @@ const caseDrawerBodyFormTableSelectionModel = computed({
   set: (enabled: boolean) => toggleTableSelection(caseDrawerForm.requestConfig.body.formItems, enabled),
 })
 
-function isBodyMode(mode: string, form: ApiRequestEditorDetail = definitionForm) {
+function getScenarioCustomRequestConfig() {
+  if (!scenarioCustomRequestForm.requestConfig) {
+    scenarioCustomRequestForm.requestConfig = emptyApiRequestConfig()
+  }
+  return scenarioCustomRequestForm.requestConfig
+}
+
+const scenarioCustomRequestQueryEnabledCount = computed(() =>
+  getScenarioCustomRequestConfig().queryParams.filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false).length,
+)
+const scenarioCustomRequestAssertionEnabledCount = computed(() =>
+  (scenarioCustomRequestForm.assertions || []).filter(item => item.enabled !== false).length,
+)
+
+const scenarioCustomRequestQueryTableSelectionModel = computed({
+  get: () => tableSelectionState(getScenarioCustomRequestConfig().queryParams).checked,
+  set: (enabled: boolean) => toggleTableSelection(getScenarioCustomRequestConfig().queryParams, enabled),
+})
+
+const scenarioCustomRequestHeaderTableSelectionModel = computed({
+  get: () => tableSelectionState(getScenarioCustomRequestConfig().headers).checked,
+  set: (enabled: boolean) => toggleTableSelection(getScenarioCustomRequestConfig().headers, enabled),
+})
+
+const scenarioCustomRequestBodyFormTableSelectionModel = computed({
+  get: () => tableSelectionState(getScenarioCustomRequestConfig().body.formItems).checked,
+  set: (enabled: boolean) => toggleTableSelection(getScenarioCustomRequestConfig().body.formItems, enabled),
+})
+
+function isBodyMode(mode: string, form: RequestConfigHost = definitionForm) {
   if (mode === 'json') return form.requestConfig.body.type === 'RAW_JSON'
   if (mode === 'xml') return form.requestConfig.body.type === 'RAW_XML'
   if (mode === 'raw') return form.requestConfig.body.type === 'RAW_TEXT'
   return form.requestConfig.body.type === mode
 }
 
-function getModeBodyText(type: string, form: ApiRequestEditorDetail = definitionForm) {
+function getModeBodyText(type: string, form: RequestConfigHost = definitionForm) {
   if (type === 'RAW_JSON') return form.requestConfig.body.jsonText || ''
   if (type === 'RAW_XML') return form.requestConfig.body.xmlText || ''
   if (type === 'RAW_TEXT') return form.requestConfig.body.plainText || ''
   return form.requestConfig.body.rawText || ''
 }
 
-function setModeBodyText(type: string, value: string, form: ApiRequestEditorDetail = definitionForm) {
+function setModeBodyText(type: string, value: string, form: RequestConfigHost = definitionForm) {
   if (type === 'RAW_JSON') {
     form.requestConfig.body.jsonText = value
   }
@@ -1052,11 +1394,11 @@ function setModeBodyText(type: string, value: string, form: ApiRequestEditorDeta
   form.requestConfig.body.rawText = value
 }
 
-function syncActiveBodyText(form: ApiRequestEditorDetail = definitionForm) {
+function syncActiveBodyText(form: RequestConfigHost = definitionForm) {
   setModeBodyText(form.requestConfig.body.type, getModeBodyText(form.requestConfig.body.type, form), form)
 }
 
-function setBodyMode(mode: 'NONE' | 'FORM_DATA' | 'FORM_URLENCODED' | 'RAW_JSON' | 'RAW_XML' | 'RAW_TEXT' | 'BINARY', form: ApiRequestEditorDetail = definitionForm) {
+function setBodyMode(mode: 'NONE' | 'FORM_DATA' | 'FORM_URLENCODED' | 'RAW_JSON' | 'RAW_XML' | 'RAW_TEXT' | 'BINARY', form: RequestConfigHost = definitionForm) {
   form.requestConfig.body.type = mode
   if (mode === 'RAW_JSON') {
     form.requestConfig.body.contentType = 'application/json'
@@ -1073,7 +1415,66 @@ function setBodyMode(mode: 'NONE' | 'FORM_DATA' | 'FORM_URLENCODED' | 'RAW_JSON'
   syncActiveBodyText(form)
 }
 
-function getSortableParamList(group: SortableParamGroup, form: ApiRequestEditorDetail = definitionForm) {
+const scenarioCustomRequestHost = computed<RequestConfigHost>(() => ({
+  requestConfig: getScenarioCustomRequestConfig(),
+}))
+const scenarioCustomRequestConfig = computed(() => getScenarioCustomRequestConfig())
+const scenarioCustomRequestPreProcessors = computed({
+  get: () => scenarioCustomRequestForm.preProcessors || [],
+  set: (value: ApiProcessorConfig[]) => {
+    scenarioCustomRequestForm.preProcessors = value
+  },
+})
+const scenarioCustomRequestPostProcessors = computed({
+  get: () => scenarioCustomRequestForm.postProcessors || [],
+  set: (value: ApiProcessorConfig[]) => {
+    scenarioCustomRequestForm.postProcessors = value
+  },
+})
+const scenarioCustomRequestAssertions = computed({
+  get: () => scenarioCustomRequestForm.assertions || [],
+  set: (value: ApiAssertionConfig[]) => {
+    scenarioCustomRequestForm.assertions = value
+  },
+})
+const scenarioScriptContent = computed({
+  get: () => scenarioScriptForm.script || '',
+  set: (value: string) => {
+    scenarioScriptForm.script = value
+  },
+})
+const scenarioScriptAssertions = computed({
+  get: () => scenarioScriptForm.assertions || [],
+  set: (value: ApiAssertionConfig[]) => {
+    scenarioScriptForm.assertions = value
+  },
+})
+const scenarioSystemRequestConfig = computed(() => scenarioSystemRequestDetail.value?.requestConfig || emptyApiRequestConfig())
+const scenarioSystemRequestQueryEnabledCount = computed(() =>
+  scenarioSystemRequestConfig.value.queryParams.filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false).length,
+)
+const scenarioSystemRequestAssertionEnabledCount = computed(() =>
+  (scenarioSystemRequestDetail.value?.assertions || []).filter(item => item.enabled !== false).length,
+)
+const scenarioSystemRequestBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
+  const type = scenarioSystemRequestConfig.value.body.type
+  if (type === 'RAW_JSON') return 'json'
+  if (type === 'RAW_XML') return 'xml'
+  return 'text'
+})
+const scenarioSystemRequestBodyText = computed(() =>
+  getModeBodyText(scenarioSystemRequestConfig.value.body.type, { requestConfig: scenarioSystemRequestConfig.value }),
+)
+
+function isScenarioCustomRequestBodyMode(mode: string) {
+  return isBodyMode(mode, scenarioCustomRequestHost.value)
+}
+
+function setScenarioCustomRequestBodyMode(mode: 'NONE' | 'FORM_DATA' | 'FORM_URLENCODED' | 'RAW_JSON' | 'RAW_XML' | 'RAW_TEXT' | 'BINARY') {
+  setBodyMode(mode, scenarioCustomRequestHost.value)
+}
+
+function getSortableParamList(group: SortableParamGroup, form: RequestConfigHost = definitionForm) {
   switch (group) {
     case 'query':
       return form.requestConfig.queryParams
@@ -1157,6 +1558,11 @@ const caseDrawerActiveBodyRawText = computed({
   set: (value: string) => setModeBodyText(caseDrawerForm.requestConfig.body.type, value, caseDrawerForm),
 })
 
+const scenarioCustomRequestActiveBodyRawText = computed({
+  get: () => getModeBodyText(getScenarioCustomRequestConfig().body.type, scenarioCustomRequestHost.value),
+  set: (value: string) => setModeBodyText(getScenarioCustomRequestConfig().body.type, value, scenarioCustomRequestHost.value),
+})
+
 const activeBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
   const type = definitionForm.requestConfig.body.type
   if (type === 'RAW_JSON') return 'json'
@@ -1166,6 +1572,13 @@ const activeBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
 
 const caseDrawerActiveBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
   const type = caseDrawerForm.requestConfig.body.type
+  if (type === 'RAW_JSON') return 'json'
+  if (type === 'RAW_XML') return 'xml'
+  return 'text'
+})
+
+const scenarioCustomRequestActiveBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
+  const type = getScenarioCustomRequestConfig().body.type
   if (type === 'RAW_JSON') return 'json'
   if (type === 'RAW_XML') return 'xml'
   return 'text'
@@ -1514,7 +1927,12 @@ watch(definitionDirectoryTree, (tree) => {
 onMounted(() => {
   openNewRequestTab()
   caseListSettings.load()
+  document.addEventListener('mousedown', handleScenarioStepNameOutsidePointerDown, true)
   void bootstrap()
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', handleScenarioStepNameOutsidePointerDown, true)
 })
 
 function emptyKeyValue(overrides: Partial<ApiKeyValue> = {}): ApiKeyValue {
@@ -1763,10 +2181,6 @@ function emptyProcessor(type: ApiProcessorConfig['processorType'], stage: 'pre' 
   }
 }
 
-function emptyScenarioStep(): ApiScenarioStep {
-  return { stepName: '', resourceType: 'CASE', resourceId: 0, enabled: true }
-}
-
 function emptyVariable(): ApiVariableItem {
   return { name: '', value: '', sensitive: false }
 }
@@ -1972,6 +2386,297 @@ function setActiveRequestContentTab(tab: RequestContentTab) {
   if (current) {
     current.activeTab = tab
   }
+}
+
+function emptyApiRequestConfig(): ApiRequestConfig {
+  return {
+    method: 'GET',
+    path: '',
+    timeoutMs: 10000,
+    queryParams: [],
+    headers: [],
+    cookies: [],
+    body: { type: 'NONE', rawText: '', formItems: [], contentType: '', fileName: '', binaryBase64: '', jsonText: '', xmlText: '', plainText: '' },
+    authConfig: emptyAuthConfig(),
+  }
+}
+
+function toScenarioModuleTreeNode(module: ApiScenarioModuleItem): ScenarioModuleTreeNode {
+  return {
+    key: `scenario-module-${module.id}`,
+    type: 'module',
+    id: module.id,
+    name: module.name,
+    scenarioCount: module.scenarioCount || 0,
+    workspaceCode: module.workspaceCode,
+    children: (module.children || []).map(toScenarioModuleTreeNode),
+  }
+}
+
+function matchesScenarioModuleKeyword(node: ScenarioModuleTreeNode, keyword: string): boolean {
+  const trimmed = keyword.trim().toLowerCase()
+  if (!trimmed) {
+    return true
+  }
+  return node.name.toLowerCase().includes(trimmed)
+    || node.children.some(child => matchesScenarioModuleKeyword(child, keyword))
+}
+
+function getScenarioWorkspaceName(targetWorkspaceCode: string) {
+  return workspaces.value.find(item => item.code === targetWorkspaceCode)?.name
+    ?? scenarios.value.find(item => item.workspaceCode === targetWorkspaceCode)?.workspaceName
+    ?? scenarioModules.value.find(item => item.workspaceCode === targetWorkspaceCode)?.workspaceName
+    ?? definitions.value.find(item => item.workspaceCode === targetWorkspaceCode)?.workspaceName
+    ?? apiCases.value.find(item => item.workspaceCode === targetWorkspaceCode)?.workspaceName
+    ?? targetWorkspaceCode
+}
+
+function getScenarioImportWorkspaceCodes() {
+  const codes = scenarioImportWorkspaceCode.value
+    ? [scenarioImportWorkspaceCode.value]
+    : (isAllScope.value
+        ? Array.from(new Set([
+          ...workspaces.value.map(item => item.code),
+          ...definitions.value.map(item => item.workspaceCode),
+          ...apiCases.value.map(item => item.workspaceCode),
+          ...scenarios.value.map(item => item.workspaceCode),
+        ])).filter(Boolean)
+        : [workspaceCode.value])
+  return codes
+}
+
+function buildScenarioImportTree(type: ScenarioImportTab): ScenarioImportTreeNode[] {
+  const keyword = scenarioImportTreeKeyword.value.trim().toLowerCase()
+  const workspaceNodes = getScenarioImportWorkspaceCodes().map((code) => {
+    const children = type === 'scenario'
+      ? buildScenarioImportScenarioModuleNodes(code)
+      : buildScenarioImportDefinitionModuleNodes(code, type)
+    const workspaceName = getScenarioWorkspaceName(code)
+    return {
+      key: `scenario-import-workspace:${code}`,
+      type: 'workspace' as const,
+      label: workspaceName,
+      workspaceCode: code,
+      modulePath: null,
+      moduleId: null,
+      count: type === 'api'
+        ? definitions.value.filter(item => item.workspaceCode === code).length
+        : type === 'case'
+          ? apiCases.value.filter(item => item.workspaceCode === code).length
+          : scenarios.value.filter(item => item.workspaceCode === code && item.id !== scenarioForm.id).length,
+      children,
+    }
+  }).filter(node => !keyword || node.label.toLowerCase().includes(keyword) || node.children.length)
+  return [{
+    key: 'scenario-import-all',
+    type: 'root',
+    label: type === 'scenario' ? '全部场景' : '全部接口',
+    workspaceCode: '',
+    modulePath: null,
+    moduleId: null,
+    count: type === 'api'
+      ? definitions.value.length
+      : type === 'case'
+        ? apiCases.value.length
+        : scenarios.value.filter(item => item.id !== scenarioForm.id).length,
+    children: workspaceNodes,
+  }]
+}
+
+function buildScenarioImportDefinitionModuleNodes(targetWorkspaceCode: string, type: 'api' | 'case'): ScenarioImportTreeNode[] {
+  type MutableNode = ScenarioImportTreeNode & { childMap?: Map<string, MutableNode> }
+  const sourceDirectories = type === 'api'
+    ? definitions.value
+      .filter(item => item.workspaceCode === targetWorkspaceCode)
+      .map(item => item.directoryName || '')
+    : apiCases.value
+      .filter(item => item.workspaceCode === targetWorkspaceCode)
+      .map((item) => definitions.value.find(definition => definition.id === item.definitionId)?.directoryName || '')
+  const rootChildren: MutableNode[] = []
+  const rootMap = new Map<string, MutableNode>()
+  const ensureNode = (parentChildren: MutableNode[], parentMap: Map<string, MutableNode>, label: string, fullPath: string) => {
+    let node = parentMap.get(fullPath)
+    if (!node) {
+      node = {
+        key: `scenario-import-definition-module:${targetWorkspaceCode}:${fullPath}`,
+        type: 'module',
+        label,
+        workspaceCode: targetWorkspaceCode,
+        modulePath: fullPath,
+        moduleId: null,
+        count: 0,
+        children: [],
+        childMap: new Map(),
+      }
+      parentMap.set(fullPath, node)
+      parentChildren.push(node)
+    }
+    return node
+  }
+  for (const directory of sourceDirectories) {
+    const path = directory.trim()
+    if (!path) {
+      continue
+    }
+    const segments = path.split('/').map(item => item.trim()).filter(Boolean)
+    let currentChildren = rootChildren
+    let currentMap = rootMap
+    let assembled = ''
+    for (const segment of segments) {
+      assembled = assembled ? `${assembled}/${segment}` : segment
+      const node = ensureNode(currentChildren, currentMap, segment, assembled)
+      node.count += 1
+      currentChildren = node.children as MutableNode[]
+      currentMap = node.childMap ?? new Map<string, MutableNode>()
+    }
+  }
+  return stripScenarioImportChildMap(rootChildren)
+}
+
+function buildScenarioImportScenarioModuleNodes(targetWorkspaceCode: string): ScenarioImportTreeNode[] {
+  const toNode = (module: ApiScenarioModuleItem): ScenarioImportTreeNode => ({
+    key: `scenario-import-scenario-module:${module.id}`,
+    type: 'module',
+    label: module.name,
+    workspaceCode: module.workspaceCode,
+    modulePath: null,
+    moduleId: module.id,
+    count: module.scenarioCount || 0,
+    children: (module.children || []).map(toNode),
+  })
+  const keyword = scenarioImportTreeKeyword.value.trim().toLowerCase()
+  return scenarioModules.value
+    .filter(item => item.workspaceCode === targetWorkspaceCode)
+    .map(toNode)
+    .filter(node => !keyword || matchesScenarioImportTreeKeyword(node, keyword))
+}
+
+function stripScenarioImportChildMap(nodes: Array<ScenarioImportTreeNode & { childMap?: Map<string, ScenarioImportTreeNode> }>): ScenarioImportTreeNode[] {
+  const keyword = scenarioImportTreeKeyword.value.trim().toLowerCase()
+  return nodes
+    .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN'))
+    .map(node => ({
+      key: node.key,
+      type: node.type,
+      label: node.label,
+      workspaceCode: node.workspaceCode,
+      modulePath: node.modulePath,
+      moduleId: node.moduleId,
+      count: node.count,
+      children: stripScenarioImportChildMap(node.children as Array<ScenarioImportTreeNode & { childMap?: Map<string, ScenarioImportTreeNode> }>),
+    }))
+    .filter(node => !keyword || matchesScenarioImportTreeKeyword(node, keyword))
+}
+
+function matchesScenarioImportTreeKeyword(node: ScenarioImportTreeNode, keyword: string): boolean {
+  return node.label.toLowerCase().includes(keyword) || node.children.some(child => matchesScenarioImportTreeKeyword(child, keyword))
+}
+
+function findScenarioImportTreeNode(nodes: ScenarioImportTreeNode[], key: string): ScenarioImportTreeNode | null {
+  for (const node of nodes) {
+    if (node.key === key) {
+      return node
+    }
+    const child = findScenarioImportTreeNode(node.children, key)
+    if (child) {
+      return child
+    }
+  }
+  return null
+}
+
+function matchesScenarioImportDefinitionScope(item: ApiDefinitionItem, node: ScenarioImportTreeNode | null) {
+  if (!node || node.type === 'root') {
+    return true
+  }
+  if (item.workspaceCode !== node.workspaceCode) {
+    return false
+  }
+  if (node.type === 'workspace') {
+    return true
+  }
+  const path = item.directoryName || ''
+  return !!node.modulePath && (path === node.modulePath || path.startsWith(`${node.modulePath}/`))
+}
+
+function matchesScenarioImportCaseScope(item: ApiDefinitionCaseItem, node: ScenarioImportTreeNode | null) {
+  if (!node || node.type === 'root') {
+    return true
+  }
+  if (item.workspaceCode !== node.workspaceCode) {
+    return false
+  }
+  if (node.type === 'workspace') {
+    return true
+  }
+  const definition = definitions.value.find(definitionItem => definitionItem.id === item.definitionId)
+  const path = definition?.directoryName || ''
+  return !!node.modulePath && (path === node.modulePath || path.startsWith(`${node.modulePath}/`))
+}
+
+function matchesScenarioImportScenarioScope(item: ApiScenarioItem, node: ScenarioImportTreeNode | null) {
+  if (!node || node.type === 'root') {
+    return true
+  }
+  if (item.workspaceCode !== node.workspaceCode) {
+    return false
+  }
+  if (node.type === 'workspace') {
+    return true
+  }
+  return item.moduleId === node.moduleId
+}
+
+function flattenScenarioModules(modules: ApiScenarioModuleItem[], level = 0): Array<ApiScenarioModuleItem & { level: number }> {
+  return modules.flatMap(module => [
+    { ...module, level },
+    ...flattenScenarioModules(module.children || [], level + 1),
+  ])
+}
+
+function scenarioStepTypeLabel(type?: string | null) {
+  return scenarioStepTypeOptions.find(item => item.value === type)?.label || '接口'
+}
+
+function scenarioStepTypeBadgeLabel(type?: string | null) {
+  const map: Record<string, string> = {
+    API: '引用 API',
+    API_CASE: '引用 API',
+    CUSTOM_REQUEST: '自定义请求',
+    API_SCENARIO: '引用场景',
+    IF_CONTROLLER: '条件控制器',
+    LOOP_CONTROLLER: '循环控制器',
+    ONCE_ONLY_CONTROLLER: '仅一次控制器',
+    CONSTANT_TIMER: '等待时间',
+    SCRIPT: '脚本操作',
+  }
+  return map[type || ''] || scenarioStepTypeLabel(type)
+}
+
+function scenarioStepDisplayName(step: ApiScenarioStep) {
+  if (step.stepName?.trim()) {
+    return step.stepName
+  }
+  if (step.stepType === 'API') {
+    return definitions.value.find(item => item.id === step.resourceId)?.name || '接口'
+  }
+  if (step.stepType === 'API_CASE') {
+    return apiCases.value.find(item => item.id === step.resourceId)?.name || '接口用例'
+  }
+  if (step.stepType === 'API_SCENARIO') {
+    return scenarios.value.find(item => item.id === step.resourceId)?.name || '场景'
+  }
+  if (step.stepType === 'CUSTOM_REQUEST') {
+    return step.requestConfig?.path || '自定义请求'
+  }
+  if (step.stepType === 'SCRIPT') {
+    return step.script || '脚本操作'
+  }
+  return scenarioStepTypeLabel(step.stepType)
+}
+
+function scenarioStatusLabel(status?: string | null) {
+  return scenarioStatusOptions.find(item => item.value === status)?.label || '进行中'
 }
 
 function setCaseDrawerRequestContentTab(tab: RequestContentTab) {
@@ -2443,12 +3148,19 @@ function defaultEditableWorkspaceCode() {
 }
 
 function resetScenarioForm() {
+  const targetWorkspaceCode = selectedScenarioModuleItem.value?.workspaceCode
+    || selectedScenarioWorkspaceCode.value
+    || defaultEditableWorkspaceCode()
   Object.assign(scenarioForm, {
     id: 0,
-    workspaceCode: defaultEditableWorkspaceCode(),
+    workspaceCode: targetWorkspaceCode,
     workspaceName: '',
     name: '',
     directoryName: '',
+    moduleId: selectedScenarioModuleId.value,
+    moduleName: selectedScenarioModuleFormName.value,
+    priority: 'P1',
+    status: 'IN_PROGRESS',
     description: '',
     tags: [],
     stepCount: 0,
@@ -2460,8 +3172,717 @@ function resetScenarioForm() {
     updatedAt: null,
     createdAt: null,
     relatedCaseId: null,
+    scenarioVariables: [],
+    scenarioAssertions: [],
     steps: [],
   })
+  scenarioLastRunStepResults.value = []
+  openScenarioEditorTab(null)
+}
+
+function openScenarioEditorTab(id: number | null) {
+  const key = id ? `scenario-${id}` : 'scenario-new'
+  const title = id
+    ? scenarios.value.find(item => item.id === id)?.name || scenarioForm.name || '场景详情'
+    : '新建场景'
+  if (!scenarioEditorTabs.value.some(item => item.key === key)) {
+    scenarioEditorTabs.value.push({ key, id, title })
+  }
+  activeScenarioEditorKey.value = key
+  activeScenarioDetailTab.value = 'steps'
+}
+
+function closeScenarioEditorTab(key: string) {
+  if (key === 'scenario-list') {
+    return
+  }
+  const index = scenarioEditorTabs.value.findIndex(item => item.key === key)
+  if (index < 0) {
+    return
+  }
+  scenarioEditorTabs.value.splice(index, 1)
+  if (activeScenarioEditorKey.value === key) {
+    activeScenarioEditorKey.value = 'scenario-list'
+    selectedScenarioId.value = null
+    scenarioLastRunStepResults.value = []
+  }
+}
+
+async function handleScenarioTabChange(name: string | number) {
+  const key = String(name)
+  activeScenarioEditorKey.value = key
+  const tab = scenarioEditorTabs.value.find(item => item.key === key)
+  if (tab?.id) {
+    await selectScenario(tab.id)
+  }
+}
+
+function flattenScenarioSteps(steps: ApiScenarioStep[], basePath: number[] = [], level = 0): FlatScenarioStep[] {
+  return steps.flatMap((step, index) => {
+    const path = [...basePath, index]
+    return [
+      { step, path, level },
+      ...flattenScenarioSteps(step.children || [], path, level + 1),
+    ]
+  })
+}
+
+function getScenarioStepByPath(path: number[]) {
+  let current: ApiScenarioStep | null = null
+  let children = scenarioForm.steps
+  for (const index of path) {
+    current = children[index] ?? null
+    if (!current) {
+      return null
+    }
+    children = current.children || []
+  }
+  return current
+}
+
+function getScenarioStepListByParentPath(parentPath: number[]) {
+  if (!parentPath.length) {
+    return scenarioForm.steps
+  }
+  const parent = getScenarioStepByPath(parentPath)
+  if (!parent) {
+    return scenarioForm.steps
+  }
+  if (!parent.children) {
+    parent.children = []
+  }
+  return parent.children
+}
+
+function emptyScenarioStep(type: ApiScenarioStepType = 'API_CASE'): ApiScenarioStep {
+  return {
+    id: `scenario-step-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    stepName: '',
+    stepType: type,
+    resourceType: type === 'API' ? 'DEFINITION' : type === 'API_CASE' ? 'CASE' : null,
+    resourceId: null,
+    enabled: true,
+    requestConfig: type === 'CUSTOM_REQUEST' ? emptyApiRequestConfig() : null,
+    assertions: [],
+    preProcessors: [],
+    postProcessors: [],
+    delayMs: type === 'CONSTANT_TIMER' ? 1000 : type === 'LOOP_CONTROLLER' ? 0 : null,
+    conditionType: type === 'IF_CONTROLLER' || type === 'LOOP_CONTROLLER' ? 'EXPRESSION' : 'EXPRESSION',
+    conditionExpression: '',
+    loopType: type === 'LOOP_CONTROLLER' ? 'FIXED' : 'FIXED',
+    loopCount: type === 'LOOP_CONTROLLER' ? 1 : null,
+    foreachExpression: '',
+    script: type === 'SCRIPT' ? '' : '',
+    children: isScenarioControllerStep(type) ? [] : [],
+  }
+}
+
+function isScenarioControllerStep(type?: string | null) {
+  return type === 'IF_CONTROLLER' || type === 'LOOP_CONTROLLER' || type === 'ONCE_ONLY_CONTROLLER'
+}
+
+function addScenarioStep(parentPath: number[] = [], type: ApiScenarioStepType = 'API_CASE') {
+  getScenarioStepListByParentPath(parentPath).push(emptyScenarioStep(type))
+}
+
+function cloneScenarioStep(step: ApiScenarioStep): ApiScenarioStep {
+  return JSON.parse(JSON.stringify(step)) as ApiScenarioStep
+}
+
+async function openScenarioSystemRequestDrawer(step: ApiScenarioStep) {
+  if (!step.resourceId || (step.stepType !== 'API' && step.stepType !== 'API_CASE')) {
+    return
+  }
+  scenarioSystemRequestDrawerVisible.value = true
+  scenarioSystemRequestDrawerLoading.value = true
+  scenarioSystemRequestActiveTab.value = 'headers'
+  scenarioSystemRequestDetail.value = null
+  try {
+    const detail = step.stepType === 'API'
+      ? toEditorDetailFromDefinition(await platformApi.getApiDefinitionDetail(workspaceCode.value, step.resourceId))
+      : toEditorDetailFromCase(await platformApi.getApiDefinitionCaseDetail(workspaceCode.value, step.resourceId))
+    hydrateDefinitionKeyValueRows(detail)
+    scenarioSystemRequestDetail.value = detail
+  }
+  catch (error) {
+    scenarioSystemRequestDrawerVisible.value = false
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    scenarioSystemRequestDrawerLoading.value = false
+  }
+}
+
+function handleScenarioAddStepAction(command: string | number | object) {
+  const action = String(command) as ScenarioAddStepAction
+  if (action === 'IMPORT_SYSTEM_API') {
+    openScenarioImportDrawer()
+    return
+  }
+  if (action === 'CUSTOM_REQUEST') {
+    openScenarioCustomRequestDrawer()
+    return
+  }
+  if (action === 'SCRIPT') {
+    openScenarioScriptDrawer()
+    return
+  }
+  const typeMap: Partial<Record<ScenarioAddStepAction, ApiScenarioStepType>> = {
+    LOOP_CONTROLLER: 'LOOP_CONTROLLER',
+    IF_CONTROLLER: 'IF_CONTROLLER',
+    ONCE_ONLY_CONTROLLER: 'ONCE_ONLY_CONTROLLER',
+    CONSTANT_TIMER: 'CONSTANT_TIMER',
+  }
+  const type = typeMap[action]
+  if (type) {
+    addScenarioStep([], type)
+  }
+}
+
+function openScenarioImportDrawer() {
+  scenarioImportDrawerVisible.value = true
+  scenarioImportActiveTab.value = 'api'
+  scenarioImportWorkspaceCode.value = scenarioForm.workspaceCode || defaultEditableWorkspaceCode()
+  resetScenarioImportSelection(false)
+}
+
+function resetScenarioCustomRequestForm() {
+  const next = emptyScenarioStep('CUSTOM_REQUEST')
+  next.stepName = '自定义请求'
+  next.requestConfig = emptyApiRequestConfig()
+  Object.assign(scenarioCustomRequestForm, next)
+  syncKeyValueRows(getScenarioCustomRequestConfig().queryParams, queryParamDefaults())
+  syncKeyValueRows(getScenarioCustomRequestConfig().headers, headerParamDefaults())
+  syncKeyValueRows(getScenarioCustomRequestConfig().body.formItems, bodyFormParamDefaults())
+  scenarioCustomRequestActiveTab.value = 'headers'
+  scenarioCustomRequestTitleEditing.value = false
+  scenarioCustomRequestHasCustomStepName.value = false
+  scenarioCustomRequestActivePreProcessorId.value = null
+  scenarioCustomRequestActivePostProcessorId.value = null
+  scenarioCustomRequestActiveAssertionId.value = null
+}
+
+function openScenarioCustomRequestDrawer(path?: number[]) {
+  scenarioCustomRequestDrawerMode.value = path ? 'edit' : 'create'
+  scenarioCustomRequestEditingPath.value = path ? [...path] : []
+  if (path) {
+    const step = getScenarioStepByPath(path)
+    if (step) {
+      Object.assign(scenarioCustomRequestForm, cloneScenarioStep({
+        ...emptyScenarioStep('CUSTOM_REQUEST'),
+        ...step,
+        requestConfig: step.requestConfig || emptyApiRequestConfig(),
+      }))
+      scenarioCustomRequestHasCustomStepName.value = !!step.stepName?.trim() && step.stepName.trim() !== '自定义请求'
+    }
+  }
+  else {
+    resetScenarioCustomRequestForm()
+  }
+  syncKeyValueRows(getScenarioCustomRequestConfig().queryParams, queryParamDefaults())
+  syncKeyValueRows(getScenarioCustomRequestConfig().headers, headerParamDefaults())
+  syncKeyValueRows(getScenarioCustomRequestConfig().body.formItems, bodyFormParamDefaults())
+  scenarioCustomRequestTitleEditing.value = false
+  scenarioCustomRequestDrawerVisible.value = true
+}
+
+function startScenarioCustomRequestTitleEdit() {
+  if (!scenarioCustomRequestHasCustomStepName.value) {
+    scenarioCustomRequestForm.stepName = ''
+  }
+  scenarioCustomRequestTitleEditing.value = true
+}
+
+function finishScenarioCustomRequestTitleEdit() {
+  const name = scenarioCustomRequestForm.stepName?.trim() || ''
+  scenarioCustomRequestHasCustomStepName.value = !!name
+  if (!name) {
+    scenarioCustomRequestForm.stepName = '自定义请求'
+  }
+  else {
+    scenarioCustomRequestForm.stepName = name
+  }
+  scenarioCustomRequestTitleEditing.value = false
+}
+
+function closeScenarioCustomRequestDrawer() {
+  scenarioCustomRequestDrawerVisible.value = false
+}
+
+function saveScenarioCustomRequestStep(keepOpen = false) {
+  const path = getScenarioCustomRequestConfig().path?.trim()
+  if (!path) {
+    ElMessage.warning('请输入请求 URL')
+    return
+  }
+  const next = cloneScenarioStep(scenarioCustomRequestForm)
+  next.stepType = 'CUSTOM_REQUEST'
+  next.resourceType = null
+  next.resourceId = null
+  next.stepName = next.stepName?.trim() || path
+  scenarioCustomRequestHasCustomStepName.value = next.stepName !== '自定义请求'
+  next.requestConfig = cloneScenarioRequestConfig(getScenarioCustomRequestConfig())
+  if (scenarioCustomRequestDrawerMode.value === 'edit') {
+    const current = getScenarioStepByPath(scenarioCustomRequestEditingPath.value)
+    if (current) {
+      Object.assign(current, next)
+    }
+  }
+  else {
+    scenarioForm.steps.push(next)
+  }
+  ElMessage.success(scenarioCustomRequestDrawerMode.value === 'edit' ? '自定义请求已保存' : '自定义请求已添加')
+  if (keepOpen && scenarioCustomRequestDrawerMode.value === 'create') {
+    resetScenarioCustomRequestForm()
+    return
+  }
+  scenarioCustomRequestDrawerVisible.value = false
+}
+
+function cloneScenarioRequestConfig(config: ApiRequestConfig): ApiRequestConfig {
+  return JSON.parse(JSON.stringify(config)) as ApiRequestConfig
+}
+
+function resetScenarioScriptForm() {
+  const next = emptyScenarioStep('SCRIPT')
+  next.stepName = '脚本操作'
+  next.script = ''
+  Object.assign(scenarioScriptForm, next)
+  scenarioScriptActiveTab.value = 'script'
+  scenarioScriptActiveAssertionId.value = null
+}
+
+function openScenarioScriptDrawer(path?: number[]) {
+  scenarioScriptDrawerMode.value = path ? 'edit' : 'create'
+  scenarioScriptEditingPath.value = path ? [...path] : []
+  if (path) {
+    const step = getScenarioStepByPath(path)
+    if (step) {
+      Object.assign(scenarioScriptForm, cloneScenarioStep({
+        ...emptyScenarioStep('SCRIPT'),
+        ...step,
+      }))
+    }
+  }
+  else {
+    resetScenarioScriptForm()
+  }
+  scenarioScriptDrawerVisible.value = true
+}
+
+function closeScenarioScriptDrawer() {
+  scenarioScriptDrawerVisible.value = false
+}
+
+function saveScenarioScriptStep(keepOpen = false) {
+  if (!scenarioScriptForm.stepName?.trim()) {
+    ElMessage.warning('请输入脚本名称')
+    return
+  }
+  const next = cloneScenarioStep(scenarioScriptForm)
+  next.stepType = 'SCRIPT'
+  next.resourceType = null
+  next.resourceId = null
+  next.stepName = next.stepName.trim()
+  next.script = next.script || ''
+  if (scenarioScriptDrawerMode.value === 'edit') {
+    const current = getScenarioStepByPath(scenarioScriptEditingPath.value)
+    if (current) {
+      Object.assign(current, next)
+    }
+  }
+  else {
+    scenarioForm.steps.push(next)
+  }
+  ElMessage.success(scenarioScriptDrawerMode.value === 'edit' ? '脚本操作已保存' : '脚本操作已添加')
+  if (keepOpen && scenarioScriptDrawerMode.value === 'create') {
+    resetScenarioScriptForm()
+    return
+  }
+  scenarioScriptDrawerVisible.value = false
+}
+
+function resetScenarioImportSelection(resetTabSelection = true) {
+  scenarioImportTreeKeyword.value = ''
+  scenarioImportKeyword.value = ''
+  selectedScenarioImportTreeKey.value = 'scenario-import-all'
+  if (resetTabSelection) {
+    scenarioImportSelectedDefinitionIds.value = []
+    scenarioImportSelectedCaseIds.value = []
+    scenarioImportSelectedScenarioIds.value = []
+  }
+}
+
+function handleScenarioImportTabChange() {
+  scenarioImportKeyword.value = ''
+  selectedScenarioImportTreeKey.value = 'scenario-import-all'
+}
+
+function handleScenarioImportWorkspaceChange() {
+  selectedScenarioImportTreeKey.value = 'scenario-import-all'
+}
+
+function handleScenarioImportDefinitionSelection(rows: ApiDefinitionItem[]) {
+  scenarioImportSelectedDefinitionIds.value = rows.map(item => item.id)
+}
+
+function handleScenarioImportCaseSelection(rows: ApiDefinitionCaseItem[]) {
+  scenarioImportSelectedCaseIds.value = rows.map(item => item.id)
+}
+
+function handleScenarioImportScenarioSelection(rows: ApiScenarioItem[]) {
+  scenarioImportSelectedScenarioIds.value = rows.map(item => item.id)
+}
+
+function appendScenarioSteps(steps: ApiScenarioStep[]) {
+  scenarioForm.steps.push(...steps)
+}
+
+function createReferenceStepFromDefinition(item: ApiDefinitionItem): ApiScenarioStep {
+  return {
+    ...emptyScenarioStep('API'),
+    stepName: item.name,
+    resourceType: 'DEFINITION',
+    resourceId: item.id,
+  }
+}
+
+function createReferenceStepFromCase(item: ApiDefinitionCaseItem): ApiScenarioStep {
+  return {
+    ...emptyScenarioStep('API_CASE'),
+    stepName: item.name,
+    resourceType: 'CASE',
+    resourceId: item.id,
+  }
+}
+
+function createReferenceStepFromScenario(item: ApiScenarioItem): ApiScenarioStep {
+  return {
+    ...emptyScenarioStep('API_SCENARIO'),
+    stepName: item.name,
+    resourceType: null,
+    resourceId: item.id,
+  }
+}
+
+function createCustomStepFromDefinition(detail: ApiDefinitionDetail): ApiScenarioStep {
+  return {
+    ...emptyScenarioStep('CUSTOM_REQUEST'),
+    stepName: detail.name,
+    requestConfig: JSON.parse(JSON.stringify(detail.requestConfig)),
+    assertions: JSON.parse(JSON.stringify(detail.assertions || [])),
+    preProcessors: JSON.parse(JSON.stringify(detail.preProcessors || [])),
+    postProcessors: JSON.parse(JSON.stringify(detail.postProcessors || [])),
+  }
+}
+
+function createCustomStepFromCase(detail: ApiDefinitionCaseDetail): ApiScenarioStep {
+  return {
+    ...emptyScenarioStep('CUSTOM_REQUEST'),
+    stepName: detail.name,
+    requestConfig: JSON.parse(JSON.stringify(detail.requestConfig)),
+    assertions: JSON.parse(JSON.stringify(detail.assertions || [])),
+    preProcessors: JSON.parse(JSON.stringify(detail.preProcessors || [])),
+    postProcessors: JSON.parse(JSON.stringify(detail.postProcessors || [])),
+  }
+}
+
+function cloneScenarioStepsForImport(steps: ApiScenarioStep[]): ApiScenarioStep[] {
+  return steps.map(step => ({
+    ...JSON.parse(JSON.stringify(step)),
+    id: `scenario-step-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    children: cloneScenarioStepsForImport(step.children || []),
+  }))
+}
+
+async function handleScenarioImport(mode: 'copy' | 'quote') {
+  if (!scenarioImportSelectedTotal.value) {
+    return
+  }
+  scenarioImportLoading.value = true
+  try {
+    if (mode === 'quote') {
+      appendScenarioSteps([
+        ...scenarioImportSelectedDefinitionRows.value.map(createReferenceStepFromDefinition),
+        ...scenarioImportSelectedCaseRows.value.map(createReferenceStepFromCase),
+        ...scenarioImportSelectedScenarioRows.value.map(createReferenceStepFromScenario),
+      ])
+    }
+    else {
+      const copiedDefinitionSteps = await Promise.all(scenarioImportSelectedDefinitionRows.value.map(async (item) => {
+        const detail = await platformApi.getApiDefinitionDetail(workspaceCode.value, item.id)
+        return createCustomStepFromDefinition(detail)
+      }))
+      const copiedCaseSteps = await Promise.all(scenarioImportSelectedCaseRows.value.map(async (item) => {
+        const detail = await platformApi.getApiDefinitionCaseDetail(workspaceCode.value, item.id)
+        return createCustomStepFromCase(detail)
+      }))
+      const copiedScenarioStepGroups = await Promise.all(scenarioImportSelectedScenarioRows.value.map(async (item) => {
+        const detail = await platformApi.getApiScenarioDetail(workspaceCode.value, item.id)
+        return cloneScenarioStepsForImport(detail.steps || [])
+      }))
+      appendScenarioSteps([
+        ...copiedDefinitionSteps,
+        ...copiedCaseSteps,
+        ...copiedScenarioStepGroups.flat(),
+      ])
+    }
+    ElMessage.success(mode === 'quote' ? '已引用到场景步骤' : '已复制到场景步骤')
+    scenarioImportDrawerVisible.value = false
+    resetScenarioImportSelection()
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    scenarioImportLoading.value = false
+  }
+}
+
+function removeScenarioStep(path: number[]) {
+  const list = getScenarioStepListByParentPath(path.slice(0, -1))
+  list.splice(path[path.length - 1], 1)
+}
+
+function moveScenarioStep(path: number[], delta: number) {
+  const list = getScenarioStepListByParentPath(path.slice(0, -1))
+  const index = path[path.length - 1]
+  const target = index + delta
+  if (target < 0 || target >= list.length) {
+    return
+  }
+  const current = list[index]
+  list[index] = list[target]
+  list[target] = current
+}
+
+function startScenarioStepNameEdit(step: ApiScenarioStep) {
+  scenarioStepNameEditingId.value = step.id || ''
+  scenarioStepNameDraft.value = step.stepName || scenarioStepDisplayName(step)
+}
+
+function finishScenarioStepNameEdit(step: ApiScenarioStep) {
+  const name = scenarioStepNameDraft.value.trim()
+  if (name) {
+    step.stepName = name
+  }
+  scenarioStepNameEditingId.value = ''
+  scenarioStepNameDraft.value = ''
+}
+
+function findScenarioStepById(steps: ApiScenarioStep[], id: string): ApiScenarioStep | null {
+  for (const step of steps) {
+    if (step.id === id) {
+      return step
+    }
+    const child = findScenarioStepById(step.children || [], id)
+    if (child) {
+      return child
+    }
+  }
+  return null
+}
+
+function handleScenarioStepNameOutsidePointerDown(event: MouseEvent) {
+  if (!scenarioStepNameEditingId.value) {
+    return
+  }
+  const target = event.target
+  if (!(target instanceof Element)) {
+    return
+  }
+  if (target.closest('.scenario-step-name-inline-input') || target.closest('.scenario-step-name-edit-button')) {
+    return
+  }
+  const step = findScenarioStepById(scenarioForm.steps, scenarioStepNameEditingId.value)
+  if (step) {
+    finishScenarioStepNameEdit(step)
+    return
+  }
+  scenarioStepNameEditingId.value = ''
+  scenarioStepNameDraft.value = ''
+}
+
+function normalizeScenarioStepPayload(steps: ApiScenarioStep[]): ApiScenarioStep[] {
+  return steps.map((step) => ({
+    ...step,
+    stepName: step.stepName || scenarioStepTypeLabel(step.stepType),
+    enabled: step.enabled !== false,
+    children: normalizeScenarioStepPayload(step.children || []),
+  }))
+}
+
+function scenarioStepNeedsResource(step: ApiScenarioStep) {
+  return step.stepType === 'API' || step.stepType === 'API_CASE' || step.stepType === 'API_SCENARIO' || !step.stepType
+}
+
+function hasInvalidScenarioStep(steps: ApiScenarioStep[]): boolean {
+  return steps.some((step) => {
+    if (scenarioStepNeedsResource(step) && !step.resourceId) {
+      return true
+    }
+    if (step.stepType === 'CUSTOM_REQUEST' && !step.requestConfig?.path?.trim()) {
+      return true
+    }
+    if (step.stepType === 'SCRIPT' && !step.script?.trim()) {
+      return true
+    }
+    return hasInvalidScenarioStep(step.children || [])
+  })
+}
+
+function addScenarioVariable() {
+  scenarioForm.scenarioVariables.push(emptyVariable())
+}
+
+function addScenarioAssertion() {
+  scenarioForm.scenarioAssertions.push({
+    id: `scenario-assertion-${Date.now()}`,
+    name: '全部步骤通过',
+    assertionType: 'ALL_STEPS_PASSED',
+    operator: 'EQUALS',
+    expectedValue: 'true',
+    enabled: true,
+  })
+}
+
+async function handleScenarioModuleSelect(data: ScenarioModuleTreeNode) {
+  if (data.type === 'root') {
+    selectedScenarioWorkspaceCode.value = null
+    selectedScenarioModuleId.value = null
+  }
+  else if (data.type === 'workspace') {
+    selectedScenarioWorkspaceCode.value = data.workspaceCode
+    selectedScenarioModuleId.value = null
+  }
+  else {
+    selectedScenarioWorkspaceCode.value = data.workspaceCode
+    selectedScenarioModuleId.value = data.id
+  }
+  activeScenarioEditorKey.value = 'scenario-list'
+}
+
+function isScenarioModuleTreeExpanded(nodeKey: string) {
+  return expandedScenarioModuleTreeKeys.value.includes(nodeKey)
+}
+
+function collectScenarioModuleExpandableKeys(nodes: ScenarioModuleTreeNode[]) {
+  const keys: string[] = []
+  const stack = [...nodes]
+  while (stack.length) {
+    const current = stack.shift()
+    if (!current) {
+      continue
+    }
+    if (current.children.length) {
+      keys.push(current.key)
+      stack.unshift(...current.children)
+    }
+  }
+  return keys
+}
+
+function syncScenarioModuleExpandedKeys(keys?: string[]) {
+  expandedScenarioModuleTreeKeys.value = keys ?? collectScenarioModuleExpandableKeys(scenarioModuleTree.value)
+  scenarioModuleTreeRenderKey.value += 1
+}
+
+function collapseAllScenarioModuleTreeChildren() {
+  syncScenarioModuleExpandedKeys([SCENARIO_MODULE_ROOT_KEY])
+}
+
+function handleScenarioModuleTreeExpand(_: ScenarioModuleTreeNode, treeNode: { key: string }) {
+  const keys = new Set(expandedScenarioModuleTreeKeys.value)
+  keys.add(String(treeNode.key))
+  expandedScenarioModuleTreeKeys.value = [...keys]
+}
+
+function handleScenarioModuleTreeCollapse(_: ScenarioModuleTreeNode, treeNode: { key: string }) {
+  const collapsedKey = String(treeNode.key)
+  const blockedKeys = new Set([collapsedKey])
+  const stack = [...scenarioModuleTree.value]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    if (blockedKeys.has(current.key)) {
+      for (const child of current.children) {
+        blockedKeys.add(child.key)
+        stack.push(child)
+      }
+      continue
+    }
+    stack.push(...current.children)
+  }
+  expandedScenarioModuleTreeKeys.value = expandedScenarioModuleTreeKeys.value.filter(key => !blockedKeys.has(key))
+}
+
+async function createScenarioModule(parentId: number | null = null, targetWorkspaceCode?: string | null) {
+  const moduleWorkspaceCode = targetWorkspaceCode
+    || selectedScenarioModuleItem.value?.workspaceCode
+    || selectedScenarioWorkspaceCode.value
+    || defaultEditableWorkspaceCode()
+  if (!moduleWorkspaceCode || !canWriteWorkspace(moduleWorkspaceCode)) {
+    ElMessage.warning('请选择可写空间后再新建模块')
+    return
+  }
+  const { value } = await ElMessageBox.prompt('请输入模块名称', '新建模块', {
+    inputPattern: /\S+/,
+    inputErrorMessage: '模块名称不能为空',
+  })
+  await platformApi.createApiScenarioModule(workspaceCode.value, {
+    workspaceCode: moduleWorkspaceCode,
+    parentId,
+    name: value,
+  })
+  ElMessage.success('模块已创建')
+  await refreshData()
+}
+
+async function renameScenarioModule(module: ApiScenarioModuleItem | ScenarioModuleTreeNode) {
+  if (!module.id) {
+    return
+  }
+  const { value } = await ElMessageBox.prompt('请输入模块名称', '重命名模块', {
+    inputValue: module.name,
+    inputPattern: /\S+/,
+    inputErrorMessage: '模块名称不能为空',
+  })
+  await platformApi.updateApiScenarioModule(workspaceCode.value, module.id, { name: value })
+  ElMessage.success('模块已更新')
+  await refreshData()
+}
+
+async function deleteScenarioModule(module: ApiScenarioModuleItem | ScenarioModuleTreeNode) {
+  if (!module.id) {
+    return
+  }
+  await ElMessageBox.confirm('只能删除空模块，确认删除吗？', '删除模块', { type: 'warning' })
+  await platformApi.deleteApiScenarioModule(workspaceCode.value, module.id)
+  if (selectedScenarioModuleId.value === module.id) {
+    selectedScenarioModuleId.value = null
+  }
+  ElMessage.success('模块已删除')
+  await refreshData()
+}
+
+async function copyScenario(row: ApiScenarioItem) {
+  const detail = await platformApi.getApiScenarioDetail(workspaceCode.value, row.id)
+  Object.assign(scenarioForm, JSON.parse(JSON.stringify(detail)))
+  scenarioForm.id = 0
+  scenarioForm.name = `${detail.name} 副本`
+  scenarioForm.scenarioVariables = detail.scenarioVariables || []
+  scenarioForm.scenarioAssertions = detail.scenarioAssertions || []
+  scenarioForm.steps = normalizeScenarioStepPayload(detail.steps || [])
+  scenarioLastRunStepResults.value = []
+  openScenarioEditorTab(null)
+}
+
+async function removeScenarioFromList(id: number) {
+  await selectScenario(id)
+  await removeScenario()
+  activeScenarioEditorKey.value = 'scenario-list'
 }
 
 function resetEnvironmentForm() {
@@ -2502,6 +3923,7 @@ async function bootstrap() {
       definitionPage,
       casePage,
       scenarioPage,
+      scenarioModuleList,
       envPage,
       variablePage,
       dbConnectionPage,
@@ -2513,6 +3935,7 @@ async function bootstrap() {
       platformApi.getApiDefinitions(workspaceCode.value),
       platformApi.getApiDefinitionCases(workspaceCode.value),
       platformApi.getApiScenarios(workspaceCode.value),
+      platformApi.getApiScenarioModules(workspaceCode.value),
       platformApi.getApiEnvironments(workspaceCode.value),
       platformApi.getApiVariableSets(workspaceCode.value),
       platformApi.getSettingsDbConnections(workspaceCode.value),
@@ -2524,6 +3947,7 @@ async function bootstrap() {
     definitions.value = definitionPage.items
     apiCases.value = casePage.items
     scenarios.value = scenarioPage.items
+    scenarioModules.value = scenarioModuleList
     environments.value = envPage.items
     variableSets.value = variablePage.items
     dbConnections.value = dbConnectionPage.items
@@ -2567,16 +3991,22 @@ async function selectScenario(id: number) {
   selectedScenarioId.value = id
   const detail = await platformApi.getApiScenarioDetail(workspaceCode.value, id)
   assignScenario(detail)
+  openScenarioEditorTab(id)
 }
 
 function assignScenario(detail: ApiScenarioDetail) {
   Object.assign(scenarioForm, JSON.parse(JSON.stringify(detail)))
-  scenarioForm.steps = (scenarioForm.steps || []).map(step => ({
-    stepName: step.stepName || '',
-    resourceType: step.resourceType || 'DEFINITION',
-    resourceId: step.resourceId || 0,
-    enabled: step.enabled !== false,
-  }))
+  scenarioForm.moduleId = detail.moduleId ?? null
+  scenarioForm.priority = detail.priority || 'P1'
+  scenarioForm.status = detail.status || 'IN_PROGRESS'
+  scenarioForm.scenarioVariables = detail.scenarioVariables || []
+  scenarioForm.scenarioAssertions = detail.scenarioAssertions || []
+  scenarioForm.steps = normalizeScenarioStepPayload(detail.steps || [])
+  scenarioLastRunStepResults.value = []
+  const tab = scenarioEditorTabs.value.find(item => item.id === detail.id)
+  if (tab) {
+    tab.title = detail.name || '场景详情'
+  }
 }
 
 function addDefinitionRow(target: ApiKeyValue[]) {
@@ -3141,10 +4571,6 @@ function handleDefinitionRequestAction(command: string, node: DefinitionDirector
   void deleteDefinitionRequest(node)
 }
 
-function addScenarioStep() {
-  scenarioForm.steps.push(emptyScenarioStep())
-}
-
 function addEnvironmentHeader() {
   environmentForm.headers.push(emptyKeyValue())
 }
@@ -3330,18 +4756,6 @@ async function confirmDefinitionSaveDialog() {
   definitionForm.workspaceCode = definitionSaveForm.workspaceCode
   definitionForm.directoryName = definitionSaveForm.directoryName
   await persistDefinition()
-}
-
-function moveScenarioStep(index: number, delta: number) {
-  const target = index + delta
-  if (target < 0 || target >= scenarioForm.steps.length) {
-    return
-  }
-  const next = [...scenarioForm.steps]
-  const current = next[index]
-  next[index] = next[target]
-  next[target] = current
-  scenarioForm.steps.splice(0, scenarioForm.steps.length, ...next)
 }
 
 async function saveDefinition() {
@@ -3609,8 +5023,12 @@ async function saveScenario() {
     ElMessage.warning('请补全场景名称并至少添加一个步骤')
     return
   }
-  if (scenarioForm.steps.some(step => !step.resourceId)) {
-    ElMessage.warning('请为每个步骤选择接口或用例')
+  if (!scenarioForm.moduleId) {
+    ElMessage.warning('请选择场景模块')
+    return
+  }
+  if (hasInvalidScenarioStep(scenarioForm.steps)) {
+    ElMessage.warning('请补全步骤引用、请求 URL 或脚本内容')
     return
   }
   saving.value = true
@@ -3619,18 +5037,18 @@ async function saveScenario() {
       workspaceCode: isAllScope.value ? scenarioForm.workspaceCode || writableWorkspaces.value[0]?.code : workspaceCode.value,
       name: scenarioForm.name,
       directoryName: scenarioForm.directoryName,
+      moduleId: scenarioForm.moduleId,
+      priority: scenarioForm.priority,
+      status: scenarioForm.status,
       description: scenarioForm.description,
       tags: scenarioForm.tags,
       defaultEnvironmentId: scenarioForm.defaultEnvironmentId,
       variableSetId: scenarioForm.variableSetId,
       continueOnFailure: scenarioForm.continueOnFailure,
       relatedCaseId: scenarioForm.relatedCaseId,
-      steps: scenarioForm.steps.map(step => ({
-        stepName: step.stepName,
-        resourceType: step.resourceType,
-        resourceId: step.resourceId,
-        enabled: step.enabled !== false,
-      })),
+      scenarioVariables: scenarioForm.scenarioVariables,
+      scenarioAssertions: scenarioForm.scenarioAssertions,
+      steps: normalizeScenarioStepPayload(scenarioForm.steps),
     }
     const detail = scenarioForm.id
       ? await platformApi.updateApiScenario(workspaceCode.value, scenarioForm.id, payload)
@@ -3638,6 +5056,7 @@ async function saveScenario() {
     ElMessage.success(scenarioForm.id ? '场景已更新' : '场景已创建')
     await refreshData()
     await selectScenario(detail.id)
+    openScenarioEditorTab(detail.id)
   }
   catch (error) {
     ElMessage.error((error as Error).message)
@@ -3670,9 +5089,11 @@ async function runScenario() {
       environmentId: runOptions.environmentId ?? scenarioForm.defaultEnvironmentId,
       variableSetId: runOptions.variableSetId ?? scenarioForm.variableSetId,
     })
+    scenarioLastRunStepResults.value = response.stepResults || []
     ElMessage.success(response.result === 'SUCCESS' ? '场景执行成功' : '场景执行失败')
     await refreshData()
     await loadReportPreview(response.reportId)
+    activeScenarioDetailTab.value = 'history'
     activeTab.value = 'scenarios'
   }
   catch (error) {
@@ -3681,6 +5102,11 @@ async function runScenario() {
   finally {
     saving.value = false
   }
+}
+
+async function runScenarioFromList(id: number) {
+  await selectScenario(id)
+  await runScenario()
 }
 
 async function saveEnvironment() {
@@ -3918,21 +5344,6 @@ function caseStatusLabel(item: ApiDefinitionCaseItem) {
 function updateCaseListPageSize(size: number) {
   caseListSettings.updatePageSize(size)
   caseListCurrentPage.value = 1
-}
-
-function uniqueNonEmpty(values: Array<string | null | undefined>) {
-  return Array.from(new Set(values.filter((item): item is string => !!item && item.trim().length > 0)))
-}
-
-function resultTagType(result?: string | null) {
-  switch (result) {
-    case 'SUCCESS':
-      return 'success'
-    case 'FAILED':
-      return 'danger'
-    default:
-      return 'info'
-  }
 }
 
 function formatTimeLabel(value?: string | null) {
@@ -5613,96 +7024,437 @@ function formatTimeLabel(value?: string | null) {
       </el-tab-pane>
 
       <el-tab-pane label="场景" name="scenarios">
-        <div class="workspace-grid">
-          <section class="workspace-sidebar shell-card">
-            <div class="toolbar-row">
-              <el-input v-model="scenarioFilters.keyword" placeholder="搜索场景名称" clearable />
-              <el-button v-if="canCreateInCurrentScope" type="primary" @click="resetScenarioForm">
-                <el-icon><Plus /></el-icon>
-                新建
-              </el-button>
+        <div class="scenario-workbench ms-scenario-workbench">
+          <aside class="scenario-module-pane">
+            <div class="ms-like-sidebar-tools">
+              <el-input v-model="scenarioModuleKeyword" placeholder="请输入模块或场景名称" clearable />
+              <el-button v-if="canCreateInCurrentScope" type="primary" @click="resetScenarioForm">新建场景</el-button>
             </div>
-            <el-select v-model="scenarioFilters.directory" clearable placeholder="目录筛选" class="full-width">
-              <el-option v-for="item in scenarioDirectoryOptions" :key="item" :label="item" :value="item" />
-            </el-select>
-            <div class="asset-list">
-              <button
-                v-for="item in filteredScenarios"
-                :key="item.id"
-                type="button"
-                :class="['asset-item', { active: item.id === selectedScenarioId }]"
-                @click="selectScenario(item.id)"
+            <div class="ms-like-directory-shell">
+              <el-tree
+                :key="scenarioModuleTreeRenderKey"
+                :data="scenarioModuleTree"
+                node-key="key"
+                :default-expanded-keys="expandedScenarioModuleTreeKeys"
+                highlight-current
+                :expand-on-click-node="false"
+                :current-node-key="selectedScenarioModuleTreeKey"
+                class="ms-like-directory-tree scenario-module-tree"
+                @current-change="handleScenarioModuleSelect"
+                @node-expand="handleScenarioModuleTreeExpand"
+                @node-collapse="handleScenarioModuleTreeCollapse"
               >
-                <div class="asset-item-top">
-                  <el-tag size="small" effect="plain">{{ item.stepCount }} 步</el-tag>
-                  <el-tag size="small" :type="resultTagType(item.lastRunResult)">{{ item.lastRunResult || '未运行' }}</el-tag>
-                </div>
-                <div class="asset-item-title">{{ item.name }}</div>
-                  <div class="asset-item-meta">{{ item.directoryName || '未分组' }}</div>
-              </button>
+                <template #default="{ data }">
+                  <div :class="['ms-like-directory-node', { 'is-root': data.type === 'root' }]">
+                    <div class="ms-like-directory-main">
+                      <span
+                        v-if="data.type === 'workspace' || data.type === 'module'"
+                        :class="['tree-node-folder-svg', { 'is-open': isScenarioModuleTreeExpanded(data.key) }]"
+                        aria-hidden="true"
+                      >
+                        <el-icon class="tree-node-folder-icon">
+                          <FolderOpened v-if="isScenarioModuleTreeExpanded(data.key)" />
+                          <Folder v-else />
+                        </el-icon>
+                      </span>
+                      <span v-overflow-title="data.name" class="ms-like-directory-label">{{ data.name }}</span>
+                      <span class="ms-like-directory-count">{{ data.scenarioCount }}</span>
+                    </div>
+                    <div class="ms-like-directory-actions" @click.stop>
+                      <el-button
+                        v-if="data.type === 'root'"
+                        text
+                        class="tree-icon-button"
+                        title="收起全部子模块"
+                        @click.stop="collapseAllScenarioModuleTreeChildren"
+                      >
+                        <el-icon class="tree-collapse-icon"><Fold /></el-icon>
+                      </el-button>
+                      <el-button
+                        v-if="(data.type === 'workspace' || data.type === 'module') && canWriteWorkspace(data.workspaceCode)"
+                        text
+                        class="tree-icon-button"
+                        title="新建子模块"
+                        @click.stop="createScenarioModule(data.id, data.workspaceCode)"
+                      >
+                        <el-icon><Plus /></el-icon>
+                      </el-button>
+                      <el-dropdown
+                        v-if="data.type === 'module' && canWriteWorkspace(data.workspaceCode)"
+                        trigger="click"
+                        popper-class="definition-tree-action-menu"
+                        @command="(command: string | number | object) => command === 'rename' ? renameScenarioModule(data) : deleteScenarioModule(data)"
+                      >
+                        <el-button
+                          text
+                          class="tree-icon-button definition-tree-more-button"
+                          title="更多操作"
+                          aria-label="更多操作"
+                          @click.stop
+                        >
+                          <el-icon><MoreFilled /></el-icon>
+                        </el-button>
+                        <template #dropdown>
+                          <el-dropdown-menu>
+                            <el-dropdown-item command="rename" class="definition-tree-action-item">重命名</el-dropdown-item>
+                            <el-dropdown-item command="delete" class="definition-tree-action-item definition-tree-action-danger">删除</el-dropdown-item>
+                          </el-dropdown-menu>
+                        </template>
+                      </el-dropdown>
+                    </div>
+                  </div>
+                </template>
+              </el-tree>
             </div>
-          </section>
+          </aside>
 
-          <section class="workspace-main shell-card">
-            <div class="editor-header">
-              <div>
-                <div class="editor-title">{{ scenarioForm.id ? '场景详情' : '新建场景' }}</div>
-                <div class="editor-subtitle">按顺序编排接口链路，可选择默认环境与变量集。</div>
-              </div>
-              <div class="editor-actions">
-                <el-button :disabled="!canWriteScenario" :loading="saving" @click="saveScenario">保存</el-button>
-                <el-button type="primary" :disabled="!scenarioForm.id || !canWriteScenario" :loading="saving" @click="runScenario">立即执行</el-button>
-                <el-button :disabled="!scenarioForm.id || !canWriteScenario" @click="removeScenario">删除</el-button>
-              </div>
-            </div>
+          <main class="scenario-main-pane">
+            <el-tabs
+              v-model="activeScenarioEditorKey"
+              class="scenario-editor-tabs"
+              addable
+              @tab-change="handleScenarioTabChange"
+              @tab-add="resetScenarioForm"
+              @tab-remove="closeScenarioEditorTab"
+            >
+              <el-tab-pane
+                v-for="tab in scenarioEditorTabs"
+                :key="tab.key"
+                :label="tab.title"
+                :name="tab.key"
+                :closable="tab.key !== 'scenario-list'"
+              >
+                <template v-if="tab.key === 'scenario-list'">
+                  <div class="ms-scenario-list-shell">
+                    <div class="ms-scenario-list-toolbar">
+                      <div class="ms-scenario-search">
+                        <el-input v-model="scenarioFilters.keyword" placeholder="通过 ID/名称/标签搜索" clearable>
+                          <template #suffix>
+                            <el-icon><Search /></el-icon>
+                          </template>
+                        </el-input>
+                      </div>
+                      <el-select v-model="scenarioViewMode" class="ms-scenario-view-select">
+                        <el-option label="全部数据" value="ALL" />
+                      </el-select>
+                      <el-button class="ms-scenario-tool-button" @click="ElMessage.info('高级筛选后续接入')">筛选</el-button>
+                      <el-button class="ms-scenario-icon-button" @click="refreshData">
+                        <el-icon><RefreshRight /></el-icon>
+                      </el-button>
+                    </div>
+                    <el-table :data="filteredScenarios" size="small" class="scenario-table ms-scenario-table">
+                    <el-table-column type="selection" width="44" />
+                    <el-table-column width="34">
+                      <template #default>⋮⋮</template>
+                    </el-table-column>
+                    <el-table-column label="ID" width="120" sortable>
+                      <template #default="{ row }">
+                        <button type="button" class="scenario-link" @click="selectScenario(row.id)">{{ 100000 + row.id }}</button>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="场景名称" min-width="180" sortable show-overflow-tooltip>
+                      <template #default="{ row }">
+                        <button type="button" class="ms-scenario-name-link" @click="selectScenario(row.id)">{{ row.name }}</button>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="场景等级" width="120" sortable>
+                      <template #default="{ row }">
+                        <span class="ms-scenario-priority"><i></i>{{ row.priority || 'P1' }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="状态" width="120">
+                      <template #header>
+                        <span>状态 <span class="ms-scenario-filter-icon">⊥</span></span>
+                      </template>
+                      <template #default="{ row }">
+                        <span class="ms-scenario-status">{{ scenarioStatusLabel(row.status) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="执行结果" width="140">
+                      <template #header>
+                        <span>执行结果 <span class="ms-scenario-filter-icon">⊥</span></span>
+                      </template>
+                      <template #default="{ row }">
+                        {{ row.lastRunResult || '-' }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="标签" min-width="140">
+                      <template #default="{ row }">{{ row.tags?.length ? row.tags.join(', ') : '-' }}</template>
+                    </el-table-column>
+                    <el-table-column label="场景环境" min-width="140">
+                      <template #default="{ row }">
+                        {{ environments.find(item => item.id === row.defaultEnvironmentId)?.name || '-' }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="210" fixed="right">
+                      <template #header>
+                        <span>操作 <el-icon><Setting /></el-icon></span>
+                      </template>
+                      <template #default="{ row }">
+                        <button type="button" class="ms-scenario-action" @click="selectScenario(row.id)">编辑</button>
+                        <button type="button" class="ms-scenario-action" @click="runScenarioFromList(row.id)">执行</button>
+                        <button type="button" class="ms-scenario-action" @click="copyScenario(row)">复制</button>
+                        <el-dropdown trigger="click">
+                          <button type="button" class="ms-scenario-action">...</button>
+                          <template #dropdown>
+                            <el-dropdown-menu>
+                              <el-dropdown-item @click="removeScenarioFromList(row.id)">删除</el-dropdown-item>
+                            </el-dropdown-menu>
+                          </template>
+                        </el-dropdown>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                    <div class="ms-scenario-pagination">
+                      <span>共 {{ filteredScenarios.length }} 条</span>
+                      <button type="button">‹</button>
+                      <span class="ms-scenario-page-current">1</span>
+                      <button type="button">›</button>
+                    </div>
+                  </div>
+                </template>
 
-            <div class="editor-form">
-              <div class="form-grid">
-                <el-input v-model="scenarioForm.name" placeholder="场景名称" />
-                <el-input v-model="scenarioForm.directoryName" placeholder="鐩綍" />
-                <el-select v-model="scenarioForm.defaultEnvironmentId" clearable placeholder="默认环境">
-                  <el-option v-for="item in environments" :key="item.id" :label="item.name" :value="item.id" />
-                </el-select>
-                <el-select v-model="scenarioForm.variableSetId" clearable placeholder="变量集">
-                  <el-option v-for="item in variableSets" :key="item.id" :label="item.name" :value="item.id" />
-                </el-select>
-              </div>
-              <el-input
-                :model-value="readTagInput(scenarioForm.tags)"
-                placeholder="标签，逗号分隔"
-                @update:model-value="(value: string | number) => updateTagInput(scenarioForm, String(value))"
-              />
-              <el-input v-model="scenarioForm.description" type="textarea" :rows="2" placeholder="场景描述" />
-              <el-switch v-model="scenarioForm.continueOnFailure" active-text="失败后继续执行" inactive-text="失败即停止" />
-
-              <div class="editor-section">
-                <div class="section-title">
-                  <span>步骤编排</span>
-                  <el-button text @click="addScenarioStep">新增步骤</el-button>
-                </div>
-                <div v-for="(step, index) in scenarioForm.steps" :key="`step-${index}`" class="scenario-step-row">
-                  <div class="step-index">{{ index + 1 }}</div>
-                  <el-input v-model="step.stepName" placeholder="步骤名称（可选）" />
-                  <el-select v-model="step.resourceType" placeholder="资源类型">
-                    <el-option label="用例" value="CASE" />
-                    <el-option label="接口" value="DEFINITION" />
-                  </el-select>
-                  <el-select v-model="step.resourceId" :placeholder="step.resourceType === 'CASE' ? '选择用例' : '选择接口'">
-                    <el-option
-                      v-for="item in step.resourceType === 'CASE' ? caseOptions : definitionOptions"
-                      :key="`${step.resourceType}-${item.value}`"
-                      :label="item.label"
-                      :value="item.value"
-                    />
-                  </el-select>
-                  <el-switch v-model="step.enabled" />
-                  <el-button text @click="moveScenarioStep(index, -1)">上移</el-button>
-                  <el-button text @click="moveScenarioStep(index, 1)">下移</el-button>
-                  <el-button text @click="scenarioForm.steps.splice(index, 1)">删除</el-button>
-                </div>
-              </div>
-            </div>
-          </section>
+                <template v-else>
+                  <div class="scenario-edit-workspace">
+                    <section class="scenario-edit-main">
+                      <div class="scenario-edit-toolbar">
+                        <el-tabs v-model="activeScenarioDetailTab" class="scenario-detail-tabs">
+                          <el-tab-pane label="步骤" name="steps">
+                            <div class="scenario-step-toolbar">
+                              <span>共 {{ scenarioFlatSteps.length }} 个步骤</span>
+                              <el-dropdown trigger="click" popper-class="scenario-add-step-menu" @command="handleScenarioAddStepAction">
+                                <el-button type="primary">
+                                  <el-icon><Plus /></el-icon>
+                                  添加步骤
+                                </el-button>
+                                <template #dropdown>
+                                  <el-dropdown-menu>
+                                    <div class="scenario-add-step-group-title">请求/场景</div>
+                                    <el-dropdown-item command="IMPORT_SYSTEM_API">导入系统请求</el-dropdown-item>
+                                    <el-dropdown-item command="CUSTOM_REQUEST">自定义请求</el-dropdown-item>
+                                    <div class="scenario-add-step-group-title">逻辑控制</div>
+                                    <el-dropdown-item command="LOOP_CONTROLLER">循环控制器</el-dropdown-item>
+                                    <el-dropdown-item command="IF_CONTROLLER">条件控制器</el-dropdown-item>
+                                    <el-dropdown-item command="ONCE_ONLY_CONTROLLER">仅一次控制器</el-dropdown-item>
+                                    <div class="scenario-add-step-group-title">其他</div>
+                                    <el-dropdown-item command="SCRIPT">脚本操作</el-dropdown-item>
+                                    <el-dropdown-item command="CONSTANT_TIMER">等待时间</el-dropdown-item>
+                                  </el-dropdown-menu>
+                                </template>
+                              </el-dropdown>
+                            </div>
+                            <div v-if="scenarioFlatSteps.length" class="scenario-step-tree">
+                              <div
+                                v-for="(item, index) in scenarioFlatSteps"
+                                :key="item.step.id"
+                                :class="['scenario-step-node', { 'is-nested': item.level > 0 }]"
+                                :style="{ marginLeft: `${item.level * 32}px` }"
+                              >
+                                <div class="scenario-step-node-left">
+                                  <el-checkbox />
+                                  <span class="scenario-step-order">{{ index + 1 }}</span>
+                                  <el-switch v-model="item.step.enabled" size="small" />
+                                  <button type="button" class="scenario-step-run-button" title="执行步骤">
+                                    <el-icon><CaretRight /></el-icon>
+                                  </button>
+                                  <span :class="['scenario-step-type-badge', `is-${String(item.step.stepType || 'API').toLowerCase().replaceAll('_', '-')}`]">
+                                    {{ scenarioStepTypeBadgeLabel(item.step.stepType) }}
+                                  </span>
+                                </div>
+                                <div class="scenario-step-node-main">
+                                  <template v-if="item.step.stepType === 'API'">
+                                    <el-select v-if="!item.step.resourceId" v-model="item.step.resourceId" class="scenario-step-resource-select" placeholder="选择接口">
+                                      <el-option v-for="option in definitionOptions" :key="option.value" :label="option.label" :value="option.value" />
+                                    </el-select>
+                                    <span :class="['scenario-step-method', requestMethodClass(definitions.find(definition => definition.id === item.step.resourceId)?.method || 'GET')]">{{ definitions.find(definition => definition.id === item.step.resourceId)?.method || 'HTTP' }}</span>
+                                  </template>
+                                  <template v-else-if="item.step.stepType === 'API_CASE'">
+                                    <el-select v-if="!item.step.resourceId" v-model="item.step.resourceId" class="scenario-step-resource-select" placeholder="选择用例">
+                                      <el-option v-for="option in caseOptions" :key="option.value" :label="option.label" :value="option.value" />
+                                    </el-select>
+                                    <span :class="['scenario-step-method', requestMethodClass(apiCases.find(apiCase => apiCase.id === item.step.resourceId)?.method || 'GET')]">{{ apiCases.find(apiCase => apiCase.id === item.step.resourceId)?.method || 'HTTP' }}</span>
+                                  </template>
+                                  <template v-else-if="item.step.stepType === 'API_SCENARIO'">
+                                    <el-select v-if="!item.step.resourceId" v-model="item.step.resourceId" class="scenario-step-resource-select" placeholder="选择场景">
+                                      <el-option v-for="option in scenarios.filter(scene => scene.id !== scenarioForm.id)" :key="option.id" :label="option.name" :value="option.id" />
+                                    </el-select>
+                                  </template>
+                                  <template v-else-if="item.step.stepType === 'CUSTOM_REQUEST' && item.step.requestConfig">
+                                    <span :class="['scenario-step-method', requestMethodClass(item.step.requestConfig.method || 'GET')]">{{ item.step.requestConfig.method || 'GET' }}</span>
+                                  </template>
+                                  <template v-else-if="item.step.stepType === 'LOOP_CONTROLLER'">
+                                    <el-select v-model="item.step.loopType" class="scenario-step-method-select">
+                                      <el-option label="固定次数" value="FIXED" />
+                                      <el-option label="While 条件" value="WHILE" />
+                                      <el-option label="Foreach" value="FOREACH" />
+                                    </el-select>
+                                    <el-input-number v-if="item.step.loopType === 'FIXED'" v-model="item.step.loopCount" :min="0" :max="50" size="small" />
+                                    <el-input v-else-if="item.step.loopType === 'FOREACH'" v-model="item.step.foreachExpression" class="scenario-step-path-input" placeholder="a,b,c 或 {{items}}" />
+                                    <el-input v-else v-model="item.step.conditionExpression" class="scenario-step-path-input" placeholder="{{flag}} == true" />
+                                    <span class="scenario-step-inline-label">间隔(ms):</span>
+                                    <el-input-number v-model="item.step.delayMs" :min="0" :max="60000" size="small" />
+                                  </template>
+                                  <template v-else-if="item.step.stepType === 'IF_CONTROLLER'">
+                                    <el-input v-model="item.step.conditionExpression" class="scenario-step-condition-input" placeholder="变量名称${var}" />
+                                    <el-select v-model="item.step.conditionType" class="scenario-step-operator-select">
+                                      <el-option label="等于" value="EXPRESSION" />
+                                      <el-option label="脚本" value="SCRIPT" />
+                                    </el-select>
+                                    <el-input class="scenario-step-condition-input" placeholder="变量值" />
+                                  </template>
+                                  <template v-else-if="item.step.stepType === 'CONSTANT_TIMER'">
+                                    <span class="scenario-step-inline-label">等待(ms):</span>
+                                    <el-input-number v-model="item.step.delayMs" :min="1" :max="60000" size="small" />
+                                  </template>
+                                  <button
+                                    v-if="['API', 'API_CASE', 'CUSTOM_REQUEST', 'SCRIPT'].includes(String(item.step.stepType)) && scenarioStepNameEditingId !== item.step.id"
+                                    type="button"
+                                    class="scenario-step-name-text scenario-step-name-button is-strong"
+                                    @click="item.step.stepType === 'API' || item.step.stepType === 'API_CASE' ? openScenarioSystemRequestDrawer(item.step) : item.step.stepType === 'CUSTOM_REQUEST' ? openScenarioCustomRequestDrawer(item.path) : openScenarioScriptDrawer(item.path)"
+                                  >
+                                    {{ scenarioStepDisplayName(item.step) }}
+                                  </button>
+                                  <el-input
+                                    v-else-if="['CUSTOM_REQUEST', 'SCRIPT'].includes(String(item.step.stepType)) && scenarioStepNameEditingId === item.step.id"
+                                    v-model="scenarioStepNameDraft"
+                                    class="scenario-step-name-inline-input"
+                                    maxlength="255"
+                                    @blur="finishScenarioStepNameEdit(item.step)"
+                                    @keyup.enter="finishScenarioStepNameEdit(item.step)"
+                                  />
+                                  <button
+                                    v-if="['CUSTOM_REQUEST', 'SCRIPT'].includes(String(item.step.stepType)) && scenarioStepNameEditingId !== item.step.id"
+                                    type="button"
+                                    class="scenario-step-name-edit-button"
+                                    title="编辑名称"
+                                    @click.stop="startScenarioStepNameEdit(item.step)"
+                                  >
+                                    <el-icon><EditPen /></el-icon>
+                                  </button>
+                                  <span
+                                    v-if="item.step.stepType !== 'CONSTANT_TIMER' && !['API', 'API_CASE', 'CUSTOM_REQUEST', 'SCRIPT'].includes(String(item.step.stepType))"
+                                    :class="['scenario-step-name-text', { 'is-strong': item.step.stepType === 'API' || item.step.stepType === 'API_CASE' }]"
+                                  >
+                                    {{ scenarioStepDisplayName(item.step) }}
+                                  </span>
+                                </div>
+                                <div class="scenario-step-node-actions">
+                                  <button v-if="isScenarioControllerStep(item.step.stepType)" type="button" class="scenario-step-icon-action is-text" title="添加子步骤" @click="addScenarioStep(item.path, 'API_CASE')">
+                                    <el-icon><Plus /></el-icon>
+                                  </button>
+                                  <button type="button" class="scenario-step-icon-action" title="上移" @click="moveScenarioStep(item.path, -1)">
+                                    <el-icon><ArrowUp /></el-icon>
+                                  </button>
+                                  <button type="button" class="scenario-step-icon-action" title="下移" @click="moveScenarioStep(item.path, 1)">
+                                    <el-icon><ArrowDown /></el-icon>
+                                  </button>
+                                  <button type="button" class="scenario-step-icon-action is-danger" title="删除" @click="removeScenarioStep(item.path)">
+                                    <el-icon><Delete /></el-icon>
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </el-tab-pane>
+                          <el-tab-pane label="参数" name="params">
+                            <div class="section-title">场景变量 <el-button text @click="addScenarioVariable">新增</el-button></div>
+                            <div v-for="(row, index) in scenarioForm.scenarioVariables" :key="`scenario-var-${index}`" class="kv-row">
+                              <el-input v-model="row.name" placeholder="变量名" />
+                              <el-input v-model="row.value" placeholder="变量值" />
+                              <el-switch v-model="row.sensitive" active-text="敏感" />
+                              <el-button text @click="scenarioForm.scenarioVariables.splice(index, 1)">删除</el-button>
+                            </div>
+                          </el-tab-pane>
+                          <el-tab-pane label="断言" name="assertions">
+                            <div class="section-title">场景级断言 <el-button text @click="addScenarioAssertion">新增</el-button></div>
+                            <div v-for="(row, index) in scenarioForm.scenarioAssertions" :key="row.id || index" class="scenario-assertion-row">
+                              <el-input v-model="row.name" placeholder="断言名称" />
+                              <el-select v-model="row.assertionType">
+                                <el-option v-for="option in scenarioAssertionTypeOptions" :key="option.value" :label="option.label" :value="option.value" />
+                              </el-select>
+                              <el-input v-model="row.expectedValue" placeholder="期望值" />
+                              <el-switch v-model="row.enabled" />
+                              <el-button text @click="scenarioForm.scenarioAssertions.splice(index, 1)">删除</el-button>
+                            </div>
+                          </el-tab-pane>
+                          <el-tab-pane label="执行历史" name="history">
+                            <el-table :data="scenarioRunHistorySteps" size="small">
+                              <el-table-column prop="stepOrder" label="#" width="64" />
+                              <el-table-column prop="stepName" label="步骤" min-width="180" />
+                              <el-table-column label="结果" width="90">
+                                <template #default="{ row }">
+                                  <el-tag size="small" :type="row.success ? 'success' : 'danger'">{{ row.success ? '通过' : '失败' }}</el-tag>
+                                </template>
+                              </el-table-column>
+                              <el-table-column prop="durationMs" label="耗时 ms" width="100" />
+                              <el-table-column prop="errorMessage" label="错误信息" min-width="220" show-overflow-tooltip />
+                            </el-table>
+                          </el-tab-pane>
+                          <el-tab-pane label="设置" name="settings">
+                            <el-switch v-model="scenarioForm.continueOnFailure" active-text="失败后继续执行" inactive-text="失败即停止" />
+                          </el-tab-pane>
+                        </el-tabs>
+                      </div>
+                    </section>
+                    <aside class="scenario-property-panel">
+                      <div class="scenario-property-actions">
+                        <el-button :disabled="!canWriteScenario" :loading="saving" @click="saveScenario">保存</el-button>
+                        <el-button type="primary" :disabled="!scenarioForm.id || !canWriteScenario" :loading="saving" @click="runScenario">执行</el-button>
+                        <el-button v-if="scenarioForm.id" :disabled="!canWriteScenario" @click="removeScenario">删除</el-button>
+                      </div>
+                      <div class="scenario-property-body">
+                        <label class="scenario-property-field">
+                          <span><b>*</b> 场景名称</span>
+                          <el-input v-model="scenarioForm.name" placeholder="请输入场景名称" />
+                        </label>
+                        <label class="scenario-property-field">
+                          <span>所属模块</span>
+                          <el-select v-model="scenarioForm.moduleId" placeholder="请选择所属模块">
+                            <el-option v-for="item in scenarioModuleOptions" :key="item.value" :label="item.label" :value="item.value" />
+                          </el-select>
+                        </label>
+                        <label class="scenario-property-field">
+                          <span>场景等级</span>
+                          <el-select v-model="scenarioForm.priority" placeholder="请选择场景等级">
+                            <el-option v-for="item in scenarioPriorityOptions" :key="item" :label="item" :value="item" />
+                          </el-select>
+                        </label>
+                        <label class="scenario-property-field">
+                          <span>场景状态</span>
+                          <el-select v-model="scenarioForm.status" placeholder="请选择场景状态">
+                            <el-option v-for="item in scenarioStatusOptions" :key="item.value" :label="item.label" :value="item.value" />
+                          </el-select>
+                        </label>
+                        <label class="scenario-property-field">
+                          <span>默认环境</span>
+                          <el-select v-model="scenarioForm.defaultEnvironmentId" clearable placeholder="请选择默认环境">
+                            <el-option v-for="item in environments" :key="item.id" :label="item.name" :value="item.id" />
+                          </el-select>
+                        </label>
+                        <label class="scenario-property-field">
+                          <span>变量集</span>
+                          <el-select v-model="scenarioForm.variableSetId" clearable placeholder="请选择变量集">
+                            <el-option v-for="item in variableSets" :key="item.id" :label="item.name" :value="item.id" />
+                          </el-select>
+                        </label>
+                        <label class="scenario-property-field">
+                          <span>标签</span>
+                          <el-input
+                            :model-value="readTagInput(scenarioForm.tags)"
+                            placeholder="添加标签，回车结束"
+                            @update:model-value="(value: string | number) => updateTagInput(scenarioForm, String(value))"
+                          />
+                        </label>
+                        <label class="scenario-property-field">
+                          <span>描述</span>
+                          <el-input v-model="scenarioForm.description" type="textarea" :rows="3" placeholder="请对该场景进行描述" />
+                        </label>
+                      </div>
+                    </aside>
+                  </div>
+                </template>
+              </el-tab-pane>
+            </el-tabs>
+          </main>
         </div>
       </el-tab-pane>
 
@@ -5874,6 +7626,532 @@ function formatTimeLabel(value?: string | null) {
         </div>
       </el-tab-pane>
     </el-tabs>
+
+    <el-drawer
+      v-model="scenarioImportDrawerVisible"
+      title="导入系统请求"
+      size="1200px"
+      destroy-on-close
+      class="scenario-import-drawer"
+      @closed="resetScenarioImportSelection"
+    >
+      <div class="scenario-import-shell">
+        <el-tabs v-model="scenarioImportActiveTab" class="scenario-import-tabs" @tab-change="handleScenarioImportTabChange">
+          <el-tab-pane label="接口" name="api" />
+          <el-tab-pane label="用例" name="case" />
+          <el-tab-pane label="场景" name="scenario" />
+        </el-tabs>
+        <div class="scenario-import-content">
+          <aside class="scenario-import-tree-pane">
+            <div class="scenario-import-tree-controls">
+              <el-select v-model="scenarioImportWorkspaceCode" placeholder="空间" @change="handleScenarioImportWorkspaceChange">
+                <el-option v-for="item in scenarioImportWorkspaceOptions" :key="item.value" :label="item.label" :value="item.value" />
+              </el-select>
+              <el-select v-if="scenarioImportActiveTab !== 'scenario'" v-model="scenarioImportProtocol" class="scenario-import-protocol">
+                <el-option label="HTTP" value="HTTP" />
+              </el-select>
+            </div>
+            <el-input v-model="scenarioImportTreeKeyword" placeholder="输入模块名称搜索" clearable />
+            <el-tree
+              :data="scenarioImportTree"
+              node-key="key"
+              highlight-current
+              :expand-on-click-node="false"
+              :current-node-key="selectedScenarioImportTreeKey"
+              class="scenario-import-tree"
+              default-expand-all
+              @current-change="(data: ScenarioImportTreeNode) => selectedScenarioImportTreeKey = data.key"
+            >
+              <template #default="{ data }">
+                <div class="scenario-import-tree-node">
+                  <span class="scenario-import-tree-label">{{ data.label }}</span>
+                  <span class="scenario-import-tree-count">{{ data.count }}</span>
+                </div>
+              </template>
+            </el-tree>
+          </aside>
+          <section class="scenario-import-table-pane">
+            <div class="scenario-import-table-toolbar">
+              <div class="scenario-import-table-title">
+                {{ scenarioImportActiveTab === 'api' ? '全部接口' : scenarioImportActiveTab === 'case' ? '全部用例' : '全部场景' }}
+                <span>({{ scenarioImportActiveTab === 'api' ? scenarioImportDefinitions.length : scenarioImportActiveTab === 'case' ? scenarioImportCases.length : scenarioImportScenarios.length }})</span>
+              </div>
+              <el-input v-model="scenarioImportKeyword" class="scenario-import-search" placeholder="通过路径或名称搜索" clearable>
+                <template #suffix>
+                  <el-icon><Search /></el-icon>
+                </template>
+              </el-input>
+            </div>
+            <el-table
+              v-if="scenarioImportActiveTab === 'api'"
+              :data="scenarioImportDefinitions"
+              row-key="id"
+              height="560"
+              size="small"
+              @selection-change="handleScenarioImportDefinitionSelection"
+            >
+              <el-table-column type="selection" width="44" />
+              <el-table-column label="ID" width="110">
+                <template #default="{ row }">{{ 100000 + row.id }}</template>
+              </el-table-column>
+              <el-table-column prop="name" label="接口名称" min-width="180" show-overflow-tooltip />
+              <el-table-column label="请求类型" width="110">
+                <template #default="{ row }">
+                  <span :class="['case-drawer-method-tag', `request-method-${String(row.method).toLowerCase()}`]">{{ row.method }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="path" label="路径" min-width="220" show-overflow-tooltip />
+              <el-table-column label="状态" width="110">
+                <template #default>进行中</template>
+              </el-table-column>
+            </el-table>
+            <el-table
+              v-else-if="scenarioImportActiveTab === 'case'"
+              :data="scenarioImportCases"
+              row-key="id"
+              height="560"
+              size="small"
+              @selection-change="handleScenarioImportCaseSelection"
+            >
+              <el-table-column type="selection" width="44" />
+              <el-table-column label="ID" width="110">
+                <template #default="{ row }">{{ 100000 + row.id }}</template>
+              </el-table-column>
+              <el-table-column prop="name" label="用例名称" min-width="180" show-overflow-tooltip />
+              <el-table-column label="请求类型" width="110">
+                <template #default="{ row }">
+                  <span :class="['case-drawer-method-tag', `request-method-${String(row.method).toLowerCase()}`]">{{ row.method }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="path" label="路径" min-width="220" show-overflow-tooltip />
+              <el-table-column label="状态" width="110">
+                <template #default>进行中</template>
+              </el-table-column>
+            </el-table>
+            <el-table
+              v-else
+              :data="scenarioImportScenarios"
+              row-key="id"
+              height="560"
+              size="small"
+              @selection-change="handleScenarioImportScenarioSelection"
+            >
+              <el-table-column type="selection" width="44" />
+              <el-table-column label="ID" width="110">
+                <template #default="{ row }">{{ 100000 + row.id }}</template>
+              </el-table-column>
+              <el-table-column prop="name" label="场景名称" min-width="180" show-overflow-tooltip />
+              <el-table-column prop="moduleName" label="所属模块" min-width="140" show-overflow-tooltip />
+              <el-table-column prop="stepCount" label="步骤数" width="100" />
+              <el-table-column label="状态" width="110">
+                <template #default="{ row }">{{ scenarioStatusLabel(row.status) }}</template>
+              </el-table-column>
+            </el-table>
+          </section>
+        </div>
+      </div>
+      <template #footer>
+        <div class="scenario-import-footer">
+          <div class="scenario-import-summary">
+            <span>共选择 <strong>{{ scenarioImportSelectedTotal }}</strong></span>
+            <span>接口 <strong>{{ scenarioImportSelectedDefinitionIds.length }}</strong></span>
+            <span>用例 <strong>{{ scenarioImportSelectedCaseIds.length }}</strong></span>
+            <span>场景 <strong>{{ scenarioImportSelectedScenarioIds.length }}</strong></span>
+          </div>
+          <div class="scenario-import-actions">
+            <el-button :disabled="scenarioImportLoading" @click="scenarioImportDrawerVisible = false">取消</el-button>
+            <el-button type="primary" :loading="scenarioImportLoading" :disabled="!scenarioImportSelectedTotal" @click="handleScenarioImport('copy')">复制</el-button>
+            <el-button type="primary" :loading="scenarioImportLoading" :disabled="!scenarioImportSelectedTotal" @click="handleScenarioImport('quote')">引用</el-button>
+          </div>
+        </div>
+      </template>
+    </el-drawer>
+
+    <el-drawer
+      v-model="scenarioSystemRequestDrawerVisible"
+      title="系统请求"
+      size="960px"
+      destroy-on-close
+      class="scenario-step-config-drawer"
+    >
+      <div v-loading="scenarioSystemRequestDrawerLoading" class="scenario-step-config-shell">
+        <template v-if="scenarioSystemRequestDetail">
+          <div class="scenario-step-config-title-row">
+            <span :class="['scenario-step-type-badge', scenarioSystemRequestDetail.resourceType === 'case' ? 'is-api-case' : 'is-api']">
+              {{ scenarioSystemRequestDetail.resourceType === 'case' ? '引用用例' : '引用 API' }}
+            </span>
+            <span class="scenario-system-request-title">{{ scenarioSystemRequestDetail.name }}</span>
+          </div>
+          <div class="scenario-step-config-request-row">
+            <el-select model-value="HTTP" class="scenario-step-protocol-select" disabled>
+              <el-option label="HTTP" value="HTTP" />
+            </el-select>
+            <span :class="['scenario-step-method scenario-system-request-method', requestMethodClass(scenarioSystemRequestConfig.method)]">{{ scenarioSystemRequestConfig.method }}</span>
+            <el-input :model-value="scenarioSystemRequestConfig.path" class="request-url-input" readonly />
+          </div>
+          <div class="ms-like-top-tabs scenario-step-config-tabs">
+            <button :class="['ms-like-top-tab', { active: scenarioSystemRequestActiveTab === 'headers' }]" @click="scenarioSystemRequestActiveTab = 'headers'">请求头</button>
+            <button :class="['ms-like-top-tab', { active: scenarioSystemRequestActiveTab === 'body' }]" @click="scenarioSystemRequestActiveTab = 'body'">请求体</button>
+            <button :class="['ms-like-top-tab', { active: scenarioSystemRequestActiveTab === 'params' }]" @click="scenarioSystemRequestActiveTab = 'params'">
+              Params
+              <span v-if="scenarioSystemRequestQueryEnabledCount" class="ms-like-tab-badge">{{ scenarioSystemRequestQueryEnabledCount }}</span>
+            </button>
+            <button :class="['ms-like-top-tab', { active: scenarioSystemRequestActiveTab === 'auth' }]" @click="scenarioSystemRequestActiveTab = 'auth'">Auth</button>
+            <button :class="['ms-like-top-tab', { active: scenarioSystemRequestActiveTab === 'pre' }]" @click="scenarioSystemRequestActiveTab = 'pre'">前置处理</button>
+            <button :class="['ms-like-top-tab', { active: scenarioSystemRequestActiveTab === 'post' }]" @click="scenarioSystemRequestActiveTab = 'post'">后置处理</button>
+            <button :class="['ms-like-top-tab', { active: scenarioSystemRequestActiveTab === 'tests' }]" @click="scenarioSystemRequestActiveTab = 'tests'">
+              断言
+              <span v-if="scenarioSystemRequestAssertionEnabledCount" class="ms-like-tab-badge">{{ scenarioSystemRequestAssertionEnabledCount }}</span>
+            </button>
+            <button :class="['ms-like-top-tab', { active: scenarioSystemRequestActiveTab === 'settings' }]" @click="scenarioSystemRequestActiveTab = 'settings'">设置</button>
+          </div>
+          <div class="scenario-step-config-body scenario-system-request-body">
+            <template v-if="scenarioSystemRequestActiveTab === 'params'">
+              <el-table :data="scenarioSystemRequestConfig.queryParams.filter(item => !isKeyValueRowEmpty(item))" size="small">
+                <el-table-column prop="key" label="参数名称" min-width="180" />
+                <el-table-column prop="value" label="参数值" min-width="220" show-overflow-tooltip />
+                <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
+                <el-table-column label="启用" width="80">
+                  <template #default="{ row }">{{ row.enabled === false ? '否' : '是' }}</template>
+                </el-table-column>
+              </el-table>
+            </template>
+            <template v-else-if="scenarioSystemRequestActiveTab === 'headers'">
+              <el-table :data="scenarioSystemRequestConfig.headers.filter(item => !isKeyValueRowEmpty(item))" size="small">
+                <el-table-column prop="key" label="参数名称" min-width="180" />
+                <el-table-column prop="value" label="参数值" min-width="220" show-overflow-tooltip />
+                <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
+                <el-table-column label="启用" width="80">
+                  <template #default="{ row }">{{ row.enabled === false ? '否' : '是' }}</template>
+                </el-table-column>
+              </el-table>
+            </template>
+            <template v-else-if="scenarioSystemRequestActiveTab === 'body'">
+              <div class="scenario-system-body-type">Body Type: {{ scenarioSystemRequestConfig.body.type }}</div>
+              <MonacoCodeEditor
+                v-if="scenarioSystemRequestBodyText"
+                :model-value="scenarioSystemRequestBodyText"
+                :language="scenarioSystemRequestBodyLanguage"
+                :read-only="true"
+                :show-format-button="false"
+                height="360px"
+              />
+              <el-table v-else-if="scenarioSystemRequestConfig.body.formItems.filter(item => !isKeyValueRowEmpty(item)).length" :data="scenarioSystemRequestConfig.body.formItems.filter(item => !isKeyValueRowEmpty(item))" size="small">
+                <el-table-column prop="key" label="参数名称" min-width="180" />
+                <el-table-column prop="value" label="参数值" min-width="220" show-overflow-tooltip />
+                <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
+              </el-table>
+              <div v-else class="ms-like-empty-body">请求没有 Body</div>
+            </template>
+            <template v-else-if="scenarioSystemRequestActiveTab === 'auth'">
+              <div class="request-section ms-like-form-panel">
+                <div class="ms-like-form-row">
+                  <div class="ms-like-form-label">认证方式</div>
+                  <div class="ms-like-form-control">{{ scenarioSystemRequestConfig.authConfig.authType }}</div>
+                </div>
+              </div>
+            </template>
+            <template v-else-if="scenarioSystemRequestActiveTab === 'pre'">
+              <div class="scenario-system-list">
+                <div v-for="item in scenarioSystemRequestDetail.preProcessors" :key="item.id" class="scenario-system-list-item">
+                  <span>{{ item.name }}</span>
+                  <span>{{ item.processorType }}</span>
+                </div>
+                <div v-if="!scenarioSystemRequestDetail.preProcessors.length" class="empty-hint">未配置前置处理</div>
+              </div>
+            </template>
+            <template v-else-if="scenarioSystemRequestActiveTab === 'post'">
+              <div class="scenario-system-list">
+                <div v-for="item in scenarioSystemRequestDetail.postProcessors" :key="item.id" class="scenario-system-list-item">
+                  <span>{{ item.name }}</span>
+                  <span>{{ item.processorType }}</span>
+                </div>
+                <div v-if="!scenarioSystemRequestDetail.postProcessors.length" class="empty-hint">未配置后置处理</div>
+              </div>
+            </template>
+            <template v-else-if="scenarioSystemRequestActiveTab === 'tests'">
+              <el-table v-if="scenarioSystemRequestDetail.assertions.length" :data="scenarioSystemRequestDetail.assertions" size="small">
+                <el-table-column label="断言名称" min-width="160">
+                  <template #default="{ row }">{{ row.name || assertionTypeLabel(row.assertionType || row.type) }}</template>
+                </el-table-column>
+                <el-table-column label="断言对象" min-width="120">
+                  <template #default="{ row }">{{ assertionTypeLabel(row.assertionType || row.type) }}</template>
+                </el-table-column>
+                <el-table-column prop="expectedValue" label="期望值" min-width="160" show-overflow-tooltip />
+              </el-table>
+              <div v-else class="empty-hint">未配置断言</div>
+            </template>
+            <template v-else>
+              <div class="request-section ms-like-form-panel">
+                <div class="ms-like-form-row">
+                  <div class="ms-like-form-label">超时时间</div>
+                  <div class="ms-like-form-control">{{ scenarioSystemRequestConfig.timeoutMs || 10000 }} ms</div>
+                </div>
+                <div class="ms-like-settings-hint">
+                  <span>来源 {{ scenarioSystemRequestDetail.resourceType === 'case' ? '接口用例' : '接口定义' }}</span>
+                  <span>最后更新 {{ formatTimeLabel(scenarioSystemRequestDetail.updatedAt) }}</span>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </el-drawer>
+
+    <el-drawer
+      v-model="scenarioCustomRequestDrawerVisible"
+      size="960px"
+      destroy-on-close
+      class="scenario-step-config-drawer"
+      @closed="resetScenarioCustomRequestForm"
+    >
+      <template #header>
+        <div v-if="scenarioCustomRequestTitleEditing" class="scenario-custom-drawer-title-editing">
+          <el-input
+            v-model="scenarioCustomRequestForm.stepName"
+            maxlength="255"
+            show-word-limit
+            placeholder="请输入步骤名称"
+            @blur="finishScenarioCustomRequestTitleEdit"
+            @keyup.enter="finishScenarioCustomRequestTitleEdit"
+          />
+        </div>
+        <div v-else class="scenario-custom-drawer-title">
+          <span>{{ scenarioCustomRequestForm.stepName || '自定义请求' }}</span>
+          <button type="button" class="scenario-custom-title-edit" title="编辑名称" @click="startScenarioCustomRequestTitleEdit">
+            <el-icon><EditPen /></el-icon>
+          </button>
+        </div>
+      </template>
+      <div class="scenario-step-config-shell">
+        <div class="scenario-step-config-request-row">
+          <el-select model-value="HTTP" class="scenario-step-protocol-select" disabled>
+            <el-option label="HTTP" value="HTTP" />
+          </el-select>
+          <el-select v-model="scenarioCustomRequestConfig.method" :class="['request-method-select', requestMethodClass(scenarioCustomRequestConfig.method)]" popper-class="request-method-popper">
+            <el-option v-for="method in requestMethodOptions" :key="method" :label="method" :value="method">
+              <span :class="['request-method-option', requestMethodClass(method)]">{{ method }}</span>
+            </el-option>
+          </el-select>
+          <el-input v-model="scenarioCustomRequestConfig.path" class="request-url-input" placeholder="请输入包含 http/https 的完整 URL 或接口路径" />
+        </div>
+        <div class="ms-like-top-tabs scenario-step-config-tabs">
+          <button :class="['ms-like-top-tab', { active: scenarioCustomRequestActiveTab === 'headers' }]" @click="scenarioCustomRequestActiveTab = 'headers'">请求头</button>
+          <button :class="['ms-like-top-tab', { active: scenarioCustomRequestActiveTab === 'body' }]" @click="scenarioCustomRequestActiveTab = 'body'">请求体</button>
+          <button :class="['ms-like-top-tab', { active: scenarioCustomRequestActiveTab === 'params' }]" @click="scenarioCustomRequestActiveTab = 'params'">
+            Params
+            <span v-if="scenarioCustomRequestQueryEnabledCount" class="ms-like-tab-badge">{{ scenarioCustomRequestQueryEnabledCount }}</span>
+          </button>
+          <button :class="['ms-like-top-tab', { active: scenarioCustomRequestActiveTab === 'auth' }]" @click="scenarioCustomRequestActiveTab = 'auth'">Auth</button>
+          <button :class="['ms-like-top-tab', { active: scenarioCustomRequestActiveTab === 'pre' }]" @click="scenarioCustomRequestActiveTab = 'pre'">前置处理</button>
+          <button :class="['ms-like-top-tab', { active: scenarioCustomRequestActiveTab === 'post' }]" @click="scenarioCustomRequestActiveTab = 'post'">后置处理</button>
+          <button :class="['ms-like-top-tab', { active: scenarioCustomRequestActiveTab === 'tests' }]" @click="scenarioCustomRequestActiveTab = 'tests'">
+            断言
+            <span v-if="scenarioCustomRequestAssertionEnabledCount" class="ms-like-tab-badge">{{ scenarioCustomRequestAssertionEnabledCount }}</span>
+          </button>
+          <button :class="['ms-like-top-tab', { active: scenarioCustomRequestActiveTab === 'settings' }]" @click="scenarioCustomRequestActiveTab = 'settings'">设置</button>
+        </div>
+        <div class="scenario-step-config-body">
+          <template v-if="scenarioCustomRequestActiveTab === 'params'">
+            <div class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--query">
+              <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--query">
+                <div class="ms-like-drag-cell"></div>
+                <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
+                  <el-checkbox v-model="scenarioCustomRequestQueryTableSelectionModel" :indeterminate="tableSelectionState(scenarioCustomRequestConfig.queryParams).indeterminate" />
+                </div>
+                <span class="ms-like-header-input-title">Query 参数</span>
+                <span>类型</span>
+                <span>参数值</span>
+                <span>编码</span>
+                <span>描述</span>
+                <span></span>
+              </div>
+              <div v-for="(row, index) in scenarioCustomRequestConfig.queryParams" :key="`scenario-custom-query-${index}`" class="ms-like-table-row ms-like-param-table-grid ms-like-param-table-grid--query">
+                <div class="ms-like-drag-cell"></div>
+                <div class="ms-like-checkbox-cell"><el-checkbox v-model="row.enabled" /></div>
+                <div class="ms-like-name-field">
+                  <button type="button" :class="['ms-like-required-button', { active: row.required }]" @click="row.required = !row.required">*</button>
+                  <el-input v-model="row.key" placeholder="参数名称" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.queryParams, queryParamDefaults())" />
+                </div>
+                <el-select v-model="row.paramType" @change="handleKeyValueRowInput(scenarioCustomRequestConfig.queryParams, queryParamDefaults())">
+                  <el-option v-for="option in queryParamTypeOptions" :key="option" :label="option" :value="option" />
+                </el-select>
+                <el-input v-model="row.value" placeholder="参数值 / {{variable}}" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.queryParams, queryParamDefaults())" />
+                <div class="ms-like-switch-cell ms-like-switch-cell--query"><el-switch v-model="row.encode" size="small" /></div>
+                <el-input v-model="row.description" placeholder="描述" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.queryParams, queryParamDefaults())" />
+                <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(scenarioCustomRequestConfig.queryParams, index, queryParamDefaults())">删除</button>
+              </div>
+              <button type="button" class="ms-like-add-row" @click="scenarioCustomRequestConfig.queryParams.push(emptyKeyValue(queryParamDefaults()))">+ 添加一行</button>
+            </div>
+          </template>
+          <template v-else-if="scenarioCustomRequestActiveTab === 'headers'">
+            <div class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--header">
+              <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--header">
+                <div class="ms-like-drag-cell"></div>
+                <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
+                  <el-checkbox v-model="scenarioCustomRequestHeaderTableSelectionModel" :indeterminate="tableSelectionState(scenarioCustomRequestConfig.headers).indeterminate" />
+                </div>
+                <span class="ms-like-header-input-title">参数名称</span>
+                <span>参数值</span>
+                <span>描述</span>
+                <span></span>
+              </div>
+              <div v-for="(row, index) in scenarioCustomRequestConfig.headers" :key="`scenario-custom-header-${index}`" class="ms-like-table-row ms-like-param-table-grid ms-like-param-table-grid--header">
+                <div class="ms-like-drag-cell"></div>
+                <div class="ms-like-checkbox-cell"><el-checkbox v-model="row.enabled" /></div>
+                <div class="ms-like-header-input-cell">
+                  <el-input v-model="row.key" placeholder="参数名称" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.headers, headerParamDefaults())" />
+                </div>
+                <el-input v-model="row.value" placeholder="参数值" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.headers, headerParamDefaults())" />
+                <el-input v-model="row.description" placeholder="描述" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.headers, headerParamDefaults())" />
+                <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(scenarioCustomRequestConfig.headers, index, headerParamDefaults())">删除</button>
+              </div>
+              <button type="button" class="ms-like-add-row" @click="scenarioCustomRequestConfig.headers.push(emptyKeyValue(headerParamDefaults()))">+ 添加一行</button>
+            </div>
+          </template>
+          <template v-else-if="scenarioCustomRequestActiveTab === 'body'">
+            <div class="request-section">
+              <div class="ms-like-body-type-row">
+                <button :class="['ms-like-body-chip', { active: isScenarioCustomRequestBodyMode('NONE') }]" @click="setScenarioCustomRequestBodyMode('NONE')">none</button>
+                <button :class="['ms-like-body-chip', { active: isScenarioCustomRequestBodyMode('FORM_DATA') }]" @click="setScenarioCustomRequestBodyMode('FORM_DATA')">form-data</button>
+                <button :class="['ms-like-body-chip', { active: isScenarioCustomRequestBodyMode('FORM_URLENCODED') }]" @click="setScenarioCustomRequestBodyMode('FORM_URLENCODED')">x-www-form-urlencoded</button>
+                <button :class="['ms-like-body-chip', { active: isScenarioCustomRequestBodyMode('RAW_JSON') }]" @click="setScenarioCustomRequestBodyMode('RAW_JSON')">json</button>
+                <button :class="['ms-like-body-chip', { active: isScenarioCustomRequestBodyMode('RAW_XML') }]" @click="setScenarioCustomRequestBodyMode('RAW_XML')">xml</button>
+                <button :class="['ms-like-body-chip', { active: isScenarioCustomRequestBodyMode('RAW_TEXT') }]" @click="setScenarioCustomRequestBodyMode('RAW_TEXT')">raw</button>
+                <button :class="['ms-like-body-chip', { active: isScenarioCustomRequestBodyMode('BINARY') }]" @click="setScenarioCustomRequestBodyMode('BINARY')">binary</button>
+              </div>
+              <div class="ms-like-body-mode-shell">
+                <MonacoCodeEditor v-if="['RAW_JSON', 'RAW_XML', 'RAW_TEXT'].includes(scenarioCustomRequestConfig.body.type)" v-model="scenarioCustomRequestActiveBodyRawText" :language="scenarioCustomRequestActiveBodyLanguage" height="300px" />
+                <div v-else-if="scenarioCustomRequestConfig.body.type === 'BINARY'" class="request-section ms-like-form-panel">
+                  <div class="ms-like-form-row">
+                    <div class="ms-like-form-label">File</div>
+                    <el-input v-model="scenarioCustomRequestConfig.body.fileName" class="ms-like-form-control" placeholder="文件名" />
+                  </div>
+                </div>
+                <div v-else-if="['FORM_URLENCODED', 'FORM_DATA'].includes(scenarioCustomRequestConfig.body.type)" class="body-form-grid ms-like-table-surface ms-like-param-table ms-like-param-table--body-form">
+                  <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--body-form">
+                    <div class="ms-like-drag-cell"></div>
+                    <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header">
+                      <el-checkbox v-model="scenarioCustomRequestBodyFormTableSelectionModel" :indeterminate="tableSelectionState(scenarioCustomRequestConfig.body.formItems).indeterminate" />
+                    </div>
+                    <span class="ms-like-header-input-title">参数名称</span>
+                    <span>类型</span>
+                    <span>参数值</span>
+                    <span>描述</span>
+                    <span></span>
+                  </div>
+                  <div v-for="(row, index) in scenarioCustomRequestConfig.body.formItems" :key="`scenario-custom-body-${index}`" class="ms-like-table-row ms-like-param-table-grid ms-like-param-table-grid--body-form">
+                    <div class="ms-like-drag-cell"></div>
+                    <div class="ms-like-checkbox-cell"><el-checkbox v-model="row.enabled" /></div>
+                    <div class="ms-like-name-field">
+                      <button type="button" :class="['ms-like-required-button', { active: row.required }]" @click="row.required = !row.required">*</button>
+                      <el-input v-model="row.key" placeholder="参数名称" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.body.formItems, bodyFormParamDefaults())" />
+                    </div>
+                    <el-select v-model="row.paramType" @change="handleKeyValueRowInput(scenarioCustomRequestConfig.body.formItems, bodyFormParamDefaults())">
+                      <el-option v-for="option in bodyParamTypeOptions" :key="option" :label="option" :value="option" />
+                    </el-select>
+                    <el-input v-model="row.value" placeholder="参数值" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.body.formItems, bodyFormParamDefaults())" />
+                    <el-input v-model="row.description" placeholder="描述" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.body.formItems, bodyFormParamDefaults())" />
+                    <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(scenarioCustomRequestConfig.body.formItems, index, bodyFormParamDefaults())">删除</button>
+                  </div>
+                  <button type="button" class="ms-like-add-row" @click="scenarioCustomRequestConfig.body.formItems.push(emptyKeyValue(bodyFormParamDefaults()))">+ 添加一行</button>
+                </div>
+                <div v-else class="ms-like-empty-body">请求没有 Body</div>
+              </div>
+            </div>
+          </template>
+          <template v-else-if="scenarioCustomRequestActiveTab === 'pre'">
+            <div class="request-section">
+              <ApiProcessorEditor v-model="scenarioCustomRequestPreProcessors" v-model:active-id="scenarioCustomRequestActivePreProcessorId" stage="pre" :db-connections="dbConnections" />
+            </div>
+          </template>
+          <template v-else-if="scenarioCustomRequestActiveTab === 'post'">
+            <div class="request-section">
+              <ApiProcessorEditor v-model="scenarioCustomRequestPostProcessors" v-model:active-id="scenarioCustomRequestActivePostProcessorId" stage="post" :db-connections="dbConnections" />
+            </div>
+          </template>
+          <template v-else-if="scenarioCustomRequestActiveTab === 'tests'">
+            <div class="request-section">
+              <ApiAssertionEditor v-model="scenarioCustomRequestAssertions" v-model:active-id="scenarioCustomRequestActiveAssertionId" />
+            </div>
+          </template>
+          <template v-else-if="scenarioCustomRequestActiveTab === 'auth'">
+            <div class="request-section">
+              <div class="ms-auth-panel">
+                <div class="ms-auth-panel-title">认证方式</div>
+                <el-radio-group v-model="scenarioCustomRequestConfig.authConfig.authType" class="ms-auth-radio-group">
+                  <el-radio-button v-for="option in requestAuthTypeOptions" :key="option.value" :value="option.value">{{ option.label }}</el-radio-button>
+                </el-radio-group>
+                <div v-if="scenarioCustomRequestConfig.authConfig.authType === 'BASIC'" class="ms-auth-form">
+                  <div class="ms-auth-form-item"><label class="ms-auth-form-label">Username</label><el-input v-model="scenarioCustomRequestConfig.authConfig.basicAuth.userName" placeholder="username" class="ms-auth-form-control" /></div>
+                  <div class="ms-auth-form-item"><label class="ms-auth-form-label">Password</label><el-input v-model="scenarioCustomRequestConfig.authConfig.basicAuth.password" placeholder="password" class="ms-auth-form-control" show-password /></div>
+                </div>
+                <div v-else-if="scenarioCustomRequestConfig.authConfig.authType === 'DIGEST'" class="ms-auth-form">
+                  <div class="ms-auth-form-item"><label class="ms-auth-form-label">Username</label><el-input v-model="scenarioCustomRequestConfig.authConfig.digestAuth.userName" placeholder="username" class="ms-auth-form-control" /></div>
+                  <div class="ms-auth-form-item"><label class="ms-auth-form-label">Password</label><el-input v-model="scenarioCustomRequestConfig.authConfig.digestAuth.password" placeholder="password" class="ms-auth-form-control" show-password /></div>
+                </div>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <div class="request-section ms-like-form-panel">
+              <div class="ms-like-form-row">
+                <div class="ms-like-form-label">超时时间</div>
+                <el-input-number v-model="scenarioCustomRequestConfig.timeoutMs" :min="1000" :step="1000" class="ms-like-form-control full-width" />
+              </div>
+              <div class="ms-like-settings-hint">
+                <span>场景 {{ scenarioForm.name || '新建场景' }}</span>
+                <span>调试上下文 {{ currentEnvironmentName }} / {{ currentVariableSetName }}</span>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+      <template #footer>
+        <div class="scenario-step-config-footer">
+          <el-button @click="closeScenarioCustomRequestDrawer">取消</el-button>
+          <el-button v-if="scenarioCustomRequestDrawerMode === 'create'" :disabled="!scenarioCustomRequestConfig.path?.trim()" @click="saveScenarioCustomRequestStep(true)">保存并继续</el-button>
+          <el-button type="primary" :disabled="!scenarioCustomRequestConfig.path?.trim()" @click="saveScenarioCustomRequestStep(false)">
+            {{ scenarioCustomRequestDrawerMode === 'edit' ? '保存' : '添加' }}
+          </el-button>
+        </div>
+      </template>
+    </el-drawer>
+
+    <el-drawer
+      v-model="scenarioScriptDrawerVisible"
+      :title="scenarioScriptDrawerMode === 'edit' ? '编辑脚本操作' : '脚本操作'"
+      size="960px"
+      destroy-on-close
+      class="scenario-step-config-drawer"
+      @closed="resetScenarioScriptForm"
+    >
+      <div class="scenario-step-config-shell">
+        <div class="ms-like-top-tabs scenario-step-config-tabs">
+          <button :class="['ms-like-top-tab', { active: scenarioScriptActiveTab === 'script' }]" @click="scenarioScriptActiveTab = 'script'">脚本</button>
+          <button :class="['ms-like-top-tab', { active: scenarioScriptActiveTab === 'assertions' }]" @click="scenarioScriptActiveTab = 'assertions'">断言</button>
+        </div>
+        <div v-if="scenarioScriptActiveTab === 'script'" class="scenario-script-editor-pane">
+          <label class="scenario-script-name-field">
+            <span>脚本操作名称</span>
+            <el-input v-model="scenarioScriptForm.stepName" maxlength="255" placeholder="请输入脚本操作名称" />
+          </label>
+          <MonacoCodeEditor v-model="scenarioScriptContent" language="text" height="420px" />
+        </div>
+        <div v-else class="request-section">
+          <ApiAssertionEditor v-model="scenarioScriptAssertions" v-model:active-id="scenarioScriptActiveAssertionId" />
+        </div>
+      </div>
+      <template #footer>
+        <div class="scenario-step-config-footer">
+          <el-button @click="closeScenarioScriptDrawer">取消</el-button>
+          <el-button v-if="scenarioScriptDrawerMode === 'create'" :disabled="!scenarioScriptForm.stepName?.trim()" @click="saveScenarioScriptStep(true)">保存并继续</el-button>
+          <el-button type="primary" :disabled="!scenarioScriptForm.stepName?.trim()" @click="saveScenarioScriptStep(false)">
+            {{ scenarioScriptDrawerMode === 'edit' ? '保存' : '添加' }}
+          </el-button>
+        </div>
+      </template>
+    </el-drawer>
 
       <el-drawer v-model="batchAddDrawerVisible" :title="batchAddTitle" size="560px" destroy-on-close>
       <div class="batch-drawer">
@@ -6126,6 +8404,1292 @@ function formatTimeLabel(value?: string | null) {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
   min-height: 820px;
+}
+
+.scenario-workbench {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  min-height: calc(100vh - 210px);
+  overflow: hidden;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.ms-scenario-workbench {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.scenario-module-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  border-right: 1px solid var(--el-border-color-light);
+  background: #fff;
+}
+
+.ms-scenario-side-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ms-scenario-primary-button,
+.ms-scenario-ghost-button {
+  width: 100%;
+  height: 32px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.ms-scenario-primary-button {
+  border-color: #3b82f6;
+  background: #3b82f6;
+  color: #fff;
+}
+
+.ms-scenario-primary-button:hover {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+
+.ms-scenario-ghost-button {
+  border-color: #3b82f6;
+  background: #fff;
+  color: #2563eb;
+}
+
+.ms-scenario-module-search {
+  margin-bottom: 14px;
+}
+
+.ms-scenario-module-search :deep(.el-input__wrapper) {
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px #e6e8ef inset;
+}
+
+.scenario-module-toolbar,
+.scenario-module-actions,
+.scenario-list-toolbar,
+.scenario-list-filters,
+.scenario-step-toolbar,
+.scenario-step-name,
+.scenario-step-actions,
+.scenario-request-inline,
+.scenario-module-node,
+.scenario-module-node-actions {
+  display: flex;
+  align-items: center;
+}
+
+.scenario-module-toolbar {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.scenario-module-toolbar .el-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.scenario-module-actions {
+  justify-content: space-between;
+  min-height: 32px;
+  margin-bottom: 6px;
+}
+
+.scenario-module-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.scenario-module-tree :deep(.el-tree-node__content) {
+  height: 32px;
+  border-radius: 4px;
+}
+
+.scenario-module-tree :deep(.el-tree-node.is-current > .el-tree-node__content) {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.scenario-module-node {
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
+  color: var(--el-text-color-regular);
+}
+
+.ms-scenario-folder-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  color: #8b8f9a;
+  font-size: 12px;
+}
+
+.scenario-module-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scenario-module-count {
+  margin-left: auto;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.scenario-module-node-actions {
+  flex: 0 0 auto;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.scenario-module-node:hover .scenario-module-node-actions,
+.scenario-module-node:focus-within .scenario-module-node-actions {
+  opacity: 1;
+}
+
+.scenario-module-node-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
+}
+
+.scenario-module-node-actions button:hover {
+  background: var(--el-fill-color-light);
+  color: #2563eb;
+}
+
+.scenario-module-more {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  line-height: 1;
+}
+
+.ms-scenario-recycle {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  margin: 10px -12px -12px;
+  padding: 0 16px;
+  border: 0;
+  border-top: 1px solid #e5e7eb;
+  background: #fff;
+  color: #303640;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ms-scenario-recycle:hover {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.scenario-main-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+.scenario-editor-tabs {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.scenario-editor-tabs :deep(.el-tabs__header) {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 8px 16px;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.scenario-editor-tabs :deep(.el-tabs__nav-wrap::after) {
+  display: none;
+}
+
+.scenario-editor-tabs :deep(.el-tabs__nav-scroll) {
+  display: flex;
+  align-items: center;
+}
+
+.scenario-editor-tabs :deep(.el-tabs__nav) {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+}
+
+.scenario-editor-tabs :deep(.el-tabs__active-bar) {
+  display: none;
+}
+
+.scenario-editor-tabs :deep(.el-tabs__item) {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  max-width: 176px;
+  margin-right: 0;
+  padding: 5px 8px !important;
+  border: 0;
+  border-radius: 4px;
+  background: #f7f8fa;
+  color: #606775;
+  line-height: 22px;
+  gap: 8px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.scenario-editor-tabs :deep(.el-tabs__item .is-icon-close) {
+  visibility: hidden;
+  margin-left: 4px;
+  border-radius: 50%;
+}
+
+.scenario-editor-tabs :deep(.el-tabs__item:hover),
+.scenario-editor-tabs :deep(.el-tabs__item.is-active) {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.scenario-editor-tabs :deep(.el-tabs__item:hover .is-icon-close),
+.scenario-editor-tabs :deep(.el-tabs__item.is-active .is-icon-close) {
+  visibility: visible;
+}
+
+.scenario-editor-tabs :deep(.el-tabs__item .is-icon-close:hover) {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.scenario-editor-tabs :deep(.el-tabs__item > span) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scenario-editor-tabs :deep(.el-tabs__new-tab) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: 0 0 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #8b8f9a;
+}
+
+.scenario-editor-tabs :deep(.el-tabs__new-tab:hover) {
+  background: #f7f8fa;
+  color: #303640;
+}
+
+.scenario-editor-tabs :deep(.el-tabs__content) {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.ms-scenario-list-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 270px);
+}
+
+.ms-scenario-list-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px;
+}
+
+.ms-scenario-search {
+  width: 260px;
+}
+
+.ms-scenario-view-select {
+  width: 150px;
+}
+
+.ms-scenario-tool-button,
+.ms-scenario-icon-button {
+  height: 32px;
+  border-radius: 4px;
+}
+
+.ms-scenario-icon-button {
+  width: 34px;
+  padding: 0;
+}
+
+.scenario-editor-tabs :deep(.el-tab-pane) {
+  min-height: 100%;
+}
+
+.scenario-list-toolbar {
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.scenario-list-filters {
+  flex: 0 0 auto;
+  gap: 10px;
+}
+
+.scenario-table {
+  width: 100%;
+}
+
+.ms-scenario-table {
+  flex: 1;
+}
+
+.ms-scenario-table :deep(.el-table__header th) {
+  height: 44px;
+  background: #fff;
+  color: #4f5663;
+  font-weight: 500;
+}
+
+.ms-scenario-table :deep(.el-table__row td) {
+  height: 48px;
+}
+
+.ms-scenario-table :deep(.el-checkbox__input.is-checked .el-checkbox__inner) {
+  border-color: #3b82f6;
+  background-color: #3b82f6;
+}
+
+.scenario-link {
+  max-width: 100%;
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ms-scenario-name-link {
+  border: 0;
+  background: transparent;
+  color: #303640;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ms-scenario-name-link:hover {
+  color: #2563eb;
+}
+
+.ms-scenario-priority {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ms-scenario-priority i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+
+.ms-scenario-status {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: #e8efff;
+  color: #3867d6;
+  font-size: 12px;
+}
+
+.ms-scenario-filter-icon {
+  color: #9097a3;
+  font-size: 12px;
+}
+
+.ms-scenario-action {
+  margin-right: 12px;
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.ms-scenario-action:hover {
+  color: #1d4ed8;
+}
+
+.ms-scenario-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  padding: 16px;
+  color: #303640;
+  font-size: 13px;
+}
+
+.ms-scenario-pagination button,
+.ms-scenario-page-current {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  border: 1px solid #dbeafe;
+  border-radius: 4px;
+  background: #fff;
+  color: #2563eb;
+}
+
+.ms-scenario-pagination button {
+  cursor: pointer;
+}
+
+.ms-scenario-page-current {
+  border-color: #3b82f6;
+}
+
+.scenario-edit-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 392px;
+  min-height: calc(100vh - 300px);
+  background: #fff;
+}
+
+.scenario-edit-main {
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid #e5e7eb;
+}
+
+.scenario-edit-toolbar {
+  min-height: 100%;
+}
+
+.scenario-detail-tabs {
+  height: 100%;
+}
+
+.scenario-detail-tabs :deep(.el-tabs__header) {
+  margin: 0;
+  padding: 0 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.scenario-detail-tabs :deep(.el-tabs__nav-wrap::after) {
+  display: none;
+}
+
+.scenario-detail-tabs :deep(.el-tabs__item) {
+  height: 44px;
+  padding: 0 14px;
+  color: #303640;
+  font-size: 14px;
+  line-height: 44px;
+}
+
+.scenario-detail-tabs :deep(.el-tabs__item.is-active) {
+  color: #2563eb;
+}
+
+.scenario-detail-tabs :deep(.el-tabs__active-bar) {
+  background: #2563eb;
+}
+
+.scenario-detail-tabs :deep(.el-tabs__content) {
+  padding: 16px;
+}
+
+.scenario-property-panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  background: #fff;
+}
+
+.scenario-property-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  min-height: 57px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.scenario-property-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px 16px;
+}
+
+.scenario-property-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  color: #303640;
+  font-size: 14px;
+}
+
+.scenario-property-field b {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.scenario-property-field .el-select,
+.scenario-property-field .el-input,
+.scenario-property-field .el-textarea {
+  width: 100%;
+}
+
+.scenario-step-toolbar {
+  justify-content: space-between;
+  margin-bottom: 12px;
+  color: #303640;
+}
+
+.scenario-step-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 34px;
+  border: 1px dashed #93c5fd;
+  border-radius: 4px;
+  color: #2563eb;
+  cursor: pointer;
+}
+
+.scenario-step-empty:hover {
+  border-color: #3b82f6;
+  background: #eff6ff;
+}
+
+:global(.scenario-add-step-menu) {
+  min-width: 214px;
+}
+
+:global(.scenario-add-step-menu .el-dropdown-menu) {
+  padding: 10px 8px;
+}
+
+:global(.scenario-add-step-menu .el-dropdown-menu__item) {
+  height: 30px;
+  border-radius: 4px;
+  color: #303640;
+  line-height: 30px;
+}
+
+:global(.scenario-add-step-menu .el-dropdown-menu__item:hover) {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+:global(.scenario-add-step-group-title) {
+  padding: 7px 12px 4px;
+  color: #8b95a5;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.scenario-import-drawer :deep(.el-drawer__header) {
+  min-height: 56px;
+  margin-bottom: 0;
+  padding: 0 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.scenario-import-drawer :deep(.el-drawer__body) {
+  padding: 0;
+}
+
+.scenario-import-drawer :deep(.el-drawer__footer) {
+  padding: 14px 16px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.scenario-import-shell {
+  display: flex;
+  height: 100%;
+  min-height: 680px;
+  flex-direction: column;
+}
+
+.scenario-import-tabs {
+  flex: 0 0 auto;
+}
+
+.scenario-import-tabs :deep(.el-tabs__header) {
+  margin: 0;
+  padding: 0 16px;
+}
+
+.scenario-import-tabs :deep(.el-tabs__nav-wrap::after) {
+  height: 1px;
+  background: #e5e7eb;
+}
+
+.scenario-import-content {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.scenario-import-tree-pane {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-right: 1px solid #e5e7eb;
+}
+
+.scenario-import-tree-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.scenario-import-tree-controls .el-select {
+  min-width: 0;
+  flex: 1;
+}
+
+.scenario-import-protocol {
+  max-width: 90px;
+}
+
+.scenario-import-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.scenario-import-tree :deep(.el-tree-node__content) {
+  height: 32px;
+  border-radius: 4px;
+}
+
+.scenario-import-tree :deep(.el-tree-node.is-current > .el-tree-node__content) {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.scenario-import-tree-node {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
+}
+
+.scenario-import-tree-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scenario-import-tree-count {
+  flex: 0 0 auto;
+  color: #98a2b3;
+  font-size: 12px;
+}
+
+.scenario-import-table-pane {
+  min-width: 0;
+  padding: 16px;
+}
+
+.scenario-import-table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.scenario-import-table-title {
+  color: #303640;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.scenario-import-table-title span {
+  color: #667085;
+  font-weight: 400;
+}
+
+.scenario-import-search {
+  width: 260px;
+}
+
+.scenario-import-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.scenario-import-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #667085;
+  font-size: 13px;
+}
+
+.scenario-import-summary strong {
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.scenario-import-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.scenario-step-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: auto;
+}
+
+.scenario-step-node {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid #e5e7eb;
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  background: #fff;
+}
+
+.scenario-step-node + .scenario-step-node {
+  border-radius: 0;
+}
+
+.scenario-step-node:last-child {
+  border-bottom: 1px solid #e5e7eb;
+  border-radius: 0 0 6px 6px;
+}
+
+.scenario-step-node.is-nested {
+  background: #fbfcff;
+}
+
+.scenario-step-node-left,
+.scenario-step-node-main,
+.scenario-step-node-actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.scenario-step-node-left {
+  gap: 8px;
+}
+
+.scenario-step-order {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #c5cbd3;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.scenario-step-run-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 50%;
+  background: #3b82f6;
+  color: #fff;
+  cursor: pointer;
+}
+
+.scenario-step-node-main {
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.scenario-step-node-actions {
+  justify-content: flex-end;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.scenario-step-node:hover .scenario-step-node-actions {
+  opacity: 1;
+}
+
+.scenario-step-icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #667085;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.scenario-step-icon-action:hover {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.scenario-step-icon-action.is-text {
+  color: #2563eb;
+}
+
+.scenario-step-icon-action.is-danger:hover {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.scenario-step-resource-select {
+  width: 150px;
+}
+
+.scenario-step-method-select {
+  width: 112px;
+}
+
+.scenario-step-path-input {
+  width: 260px;
+}
+
+.scenario-step-path-text,
+.scenario-step-script-text {
+  min-width: 0;
+  overflow: hidden;
+  color: #667085;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scenario-step-path-text {
+  max-width: 320px;
+}
+
+.scenario-step-script-text {
+  max-width: 220px;
+}
+
+.scenario-step-condition-input {
+  width: 120px;
+}
+
+.scenario-step-operator-select {
+  width: 92px;
+}
+
+.scenario-step-method,
+.scenario-step-inline-label {
+  flex: 0 0 auto;
+  font-size: 13px;
+}
+
+.scenario-step-type-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid #3b82f6;
+  border-radius: 4px;
+  color: #2563eb;
+  font-size: 12px;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.scenario-step-type-badge.is-custom-request {
+  border-color: #3b82f6;
+  color: #2563eb;
+}
+
+.scenario-step-type-badge.is-api,
+.scenario-step-type-badge.is-api-case {
+  border-color: #3b82f6;
+  color: #2563eb;
+}
+
+.scenario-step-type-badge.is-if-controller {
+  border-color: #ec4899;
+  color: #db2777;
+}
+
+.scenario-step-type-badge.is-loop-controller,
+.scenario-step-type-badge.is-once-only-controller {
+  border-color: #f97316;
+  color: #ea580c;
+}
+
+.scenario-step-type-badge.is-constant-timer {
+  border-color: #f59e0b;
+  color: #d97706;
+}
+
+.scenario-step-type-badge.is-script {
+  border-color: #14b8a6;
+  color: #0d9488;
+}
+
+.scenario-step-name-text {
+  min-width: 0;
+  overflow: hidden;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scenario-step-name-text.is-strong {
+  font-weight: 600;
+}
+
+.scenario-step-name-button {
+  max-width: 220px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.scenario-step-name-button:hover {
+  color: #2563eb;
+}
+
+.scenario-step-name-edit-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #3b82f6;
+  cursor: pointer;
+  font-size: 15px;
+  opacity: 0;
+}
+
+.scenario-step-node-main:hover .scenario-step-name-edit-button {
+  opacity: 1;
+}
+
+.scenario-step-name-edit-button:hover {
+  color: #1d4ed8;
+}
+
+.scenario-step-name-inline-input {
+  width: 220px;
+}
+
+.scenario-step-name-inline-input :deep(.el-input__wrapper) {
+  min-height: 26px;
+  box-shadow: 0 0 0 1px #3b82f6 inset;
+}
+
+.scenario-step-tree :deep(.el-input__wrapper),
+.scenario-step-tree :deep(.el-select__wrapper),
+.scenario-step-tree :deep(.el-input-number) {
+  min-height: 24px;
+  box-shadow: 0 0 0 1px #e5e7eb inset;
+}
+
+.scenario-step-tree :deep(.el-input__inner),
+.scenario-step-tree :deep(.el-select__placeholder),
+.scenario-step-tree :deep(.el-select__selected-item) {
+  font-size: 12px;
+}
+
+.scenario-step-config-drawer :deep(.el-drawer__body) {
+  padding: 0;
+}
+
+.scenario-step-config-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.scenario-step-config-request-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px 0;
+}
+
+.scenario-custom-drawer-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.scenario-custom-drawer-title-editing {
+  width: min(100%, 840px);
+}
+
+.scenario-custom-drawer-title-editing :deep(.el-input__wrapper) {
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px #7c3aed inset;
+}
+
+.scenario-custom-drawer-title-editing :deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 1px #7c3aed inset;
+}
+
+.scenario-custom-title-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: #f5f7fb;
+  color: #2563eb;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.scenario-custom-title-edit:hover {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.scenario-step-config-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.scenario-step-config-env {
+  flex: 0 0 auto;
+  color: #667085;
+  font-size: 13px;
+}
+
+.scenario-step-protocol-select {
+  width: 96px;
+  flex: 0 0 auto;
+}
+
+.scenario-step-config-request-row .request-url-input {
+  flex: 1;
+}
+
+.scenario-step-config-tabs {
+  margin: 12px 18px 0;
+}
+
+.scenario-step-config-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 18px 18px;
+}
+
+.scenario-step-config-body .request-section {
+  margin: 0;
+}
+
+.scenario-system-request-title {
+  min-width: 0;
+  overflow: hidden;
+  color: #111827;
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scenario-system-request-method {
+  min-width: 56px;
+}
+
+.scenario-system-request-body {
+  background: #fff;
+}
+
+.scenario-system-body-type {
+  margin-bottom: 10px;
+  color: #667085;
+  font-size: 13px;
+}
+
+.scenario-system-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scenario-system-list-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  color: #344054;
+  font-size: 13px;
+}
+
+.scenario-step-config-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.scenario-script-editor-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.scenario-script-name-field {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  color: #344054;
+  font-size: 13px;
+}
+
+.scenario-step-table {
+  overflow: auto;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px;
+}
+
+.scenario-step-table-header,
+.scenario-step-line {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.4fr) 160px minmax(280px, 1.6fr) 220px;
+  gap: 12px;
+  align-items: center;
+  min-width: 980px;
+}
+
+.scenario-step-table-header {
+  min-height: 40px;
+  padding: 0 12px;
+  background: var(--el-fill-color-lighter);
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.scenario-step-line {
+  min-height: 48px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.scenario-step-name {
+  min-width: 0;
+  gap: 8px;
+}
+
+.scenario-step-config,
+.scenario-request-inline {
+  min-width: 0;
+}
+
+.scenario-request-inline {
+  gap: 8px;
+}
+
+.scenario-request-inline .el-select {
+  width: 120px;
+  flex: 0 0 auto;
+}
+
+.scenario-request-inline .el-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.scenario-step-actions {
+  justify-content: flex-end;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.scenario-assertion-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 220px minmax(160px, 1fr) 80px auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
 }
 
 .ms-like-layout .ms-like-main {
@@ -8140,5 +11704,3 @@ pre {
   }
 }
 </style>
-
-

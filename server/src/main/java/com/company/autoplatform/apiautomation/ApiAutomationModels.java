@@ -323,11 +323,66 @@ public final class ApiAutomationModels {
     ) {
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record ApiScenarioStepInput(
+            String id,
             String stepName,
+            String stepType,
             String resourceType,
             Long resourceId,
+            Boolean enabled,
+            ApiRequestConfigInput requestConfig,
+            List<ApiAssertionInput> assertions,
+            List<ApiProcessorInput> preProcessors,
+            List<ApiProcessorInput> postProcessors,
+            Integer delayMs,
+            String conditionType,
+            String conditionExpression,
+            String loopType,
+            Integer loopCount,
+            String foreachExpression,
+            String script,
+            List<@Valid ApiScenarioStepInput> children
+    ) {
+        public ApiScenarioStepInput(String stepName, String resourceType, Long resourceId, Boolean enabled) {
+            this(null, stepName, null, resourceType, resourceId, enabled, null, null, null, null,
+                    null, null, null, null, null, null, null, null);
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ApiScenarioAssertionInput(
+            String id,
+            String name,
+            String assertionType,
+            String operator,
+            String expectedValue,
             Boolean enabled
+    ) {
+    }
+
+    public record ApiScenarioModuleRequest(
+            String workspaceCode,
+            Long parentId,
+            @NotBlank(message = "Module name cannot be blank") String name
+    ) {
+    }
+
+    public record MoveApiScenarioModuleRequest(
+            Long parentId,
+            Integer sortOrder
+    ) {
+    }
+
+    public record ApiScenarioModuleItem(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            Long parentId,
+            String name,
+            Integer sortOrder,
+            Long scenarioCount,
+            List<ApiScenarioModuleItem> children
     ) {
     }
 
@@ -335,12 +390,17 @@ public final class ApiAutomationModels {
             String workspaceCode,
             @NotBlank(message = "Scenario name cannot be blank") String name,
             String directoryName,
+            Long moduleId,
+            String priority,
+            String status,
             String description,
             List<String> tags,
             Long defaultEnvironmentId,
             Long variableSetId,
             Boolean continueOnFailure,
             Long relatedCaseId,
+            List<ApiVariableItem> scenarioVariables,
+            List<ApiScenarioAssertionInput> scenarioAssertions,
             List<@Valid ApiScenarioStepInput> steps
     ) {
     }
@@ -351,6 +411,10 @@ public final class ApiAutomationModels {
             String workspaceName,
             String name,
             String directoryName,
+            Long moduleId,
+            String moduleName,
+            String priority,
+            String status,
             String description,
             List<String> tags,
             Integer stepCount,
@@ -369,12 +433,18 @@ public final class ApiAutomationModels {
             String workspaceName,
             String name,
             String directoryName,
+            Long moduleId,
+            String moduleName,
+            String priority,
+            String status,
             String description,
             List<String> tags,
             Long defaultEnvironmentId,
             Long variableSetId,
             Boolean continueOnFailure,
             Long relatedCaseId,
+            List<ApiVariableItem> scenarioVariables,
+            List<ApiScenarioAssertionInput> scenarioAssertions,
             List<ApiScenarioStepInput> steps,
             String lastRunResult,
             LocalDateTime lastRunAt,

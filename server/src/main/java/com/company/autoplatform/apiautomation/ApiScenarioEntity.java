@@ -22,6 +22,13 @@ public class ApiScenarioEntity extends BaseEntity {
     @TableField("directory_name")
     private String directoryName;
 
+    @TableField("module_id")
+    private Long moduleId;
+
+    private String priority;
+
+    private String status;
+
     private String description;
 
     @TableField("tags_json")
@@ -29,6 +36,12 @@ public class ApiScenarioEntity extends BaseEntity {
 
     @TableField("steps_json")
     private String stepsJson;
+
+    @TableField("scenario_assertions_json")
+    private String scenarioAssertionsJson;
+
+    @TableField("scenario_variables_json")
+    private String scenarioVariablesJson;
 
     @TableField("default_env_id")
     private Long defaultEnvId;

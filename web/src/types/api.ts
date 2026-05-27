@@ -707,13 +707,57 @@ export interface ApiDefinitionCaseChangeHistoryItem {
   createdAt: string | null
 }
 
-export type ApiScenarioStepResourceType = 'DEFINITION' | 'CASE'
+export type ApiScenarioStepResourceType = 'DEFINITION' | 'CASE' | null
+export type ApiScenarioStepType =
+  | 'API'
+  | 'API_CASE'
+  | 'CUSTOM_REQUEST'
+  | 'API_SCENARIO'
+  | 'IF_CONTROLLER'
+  | 'LOOP_CONTROLLER'
+  | 'ONCE_ONLY_CONTROLLER'
+  | 'CONSTANT_TIMER'
+  | 'SCRIPT'
+
+export interface ApiScenarioAssertionConfig {
+  id?: string
+  name: string
+  assertionType: 'ALL_STEPS_PASSED' | 'FAILED_COUNT_EQUALS' | 'FAILED_COUNT_LTE' | 'TOTAL_DURATION_LT' | 'STEP_COUNT_EQUALS'
+  operator?: string
+  expectedValue?: string
+  enabled?: boolean
+}
+
+export interface ApiScenarioModuleItem {
+  id: number
+  workspaceCode: string
+  workspaceName: string
+  parentId: number | null
+  name: string
+  sortOrder: number | null
+  scenarioCount: number
+  children: ApiScenarioModuleItem[]
+}
 
 export interface ApiScenarioStep {
+  id?: string
   stepName: string
+  stepType?: ApiScenarioStepType
   resourceType: ApiScenarioStepResourceType
-  resourceId: number
+  resourceId: number | null
   enabled?: boolean
+  requestConfig?: ApiRequestConfig | null
+  assertions?: ApiAssertionConfig[]
+  preProcessors?: ApiProcessorConfig[]
+  postProcessors?: ApiProcessorConfig[]
+  delayMs?: number | null
+  conditionType?: 'EXPRESSION' | 'SCRIPT' | string
+  conditionExpression?: string | null
+  loopType?: 'FIXED' | 'WHILE' | 'FOREACH' | string
+  loopCount?: number | null
+  foreachExpression?: string | null
+  script?: string | null
+  children?: ApiScenarioStep[]
 }
 
 export interface ApiScenarioItem {
@@ -722,6 +766,10 @@ export interface ApiScenarioItem {
   workspaceName: string
   name: string
   directoryName: string | null
+  moduleId: number | null
+  moduleName: string | null
+  priority: string
+  status: string
   description: string | null
   tags: string[]
   stepCount: number
@@ -735,6 +783,8 @@ export interface ApiScenarioItem {
 
 export interface ApiScenarioDetail extends ApiScenarioItem {
   relatedCaseId: number | null
+  scenarioVariables: ApiVariableItem[]
+  scenarioAssertions: ApiScenarioAssertionConfig[]
   steps: ApiScenarioStep[]
   createdAt: string | null
 }
@@ -873,12 +923,17 @@ export interface SaveApiScenarioPayload {
   workspaceCode?: string
   name: string
   directoryName?: string | null
+  moduleId?: number | null
+  priority?: string
+  status?: string
   description?: string | null
   tags: string[]
   defaultEnvironmentId?: number | null
   variableSetId?: number | null
   continueOnFailure: boolean
   relatedCaseId?: number | null
+  scenarioVariables?: ApiVariableItem[]
+  scenarioAssertions?: ApiScenarioAssertionConfig[]
   steps: ApiScenarioStep[]
 }
 

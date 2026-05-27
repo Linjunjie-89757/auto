@@ -175,9 +175,54 @@ public class ApiAutomationController {
 
     @GetMapping("/scenarios")
     public ApiResponse<PageResponse<ApiScenarioItem>> listScenarios(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestParam(required = false) Long moduleId,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String status
+    ) {
+        return ApiResponse.ok(apiAutomationService.listScenarios(workspaceCode, moduleId, keyword, status));
+    }
+
+    @GetMapping("/scenario-modules")
+    public ApiResponse<List<ApiScenarioModuleItem>> listScenarioModules(
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
     ) {
-        return ApiResponse.ok(apiAutomationService.listScenarios(workspaceCode));
+        return ApiResponse.ok(apiAutomationService.listScenarioModules(workspaceCode));
+    }
+
+    @PostMapping("/scenario-modules")
+    public ApiResponse<ApiScenarioModuleItem> createScenarioModule(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody ApiScenarioModuleRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.createScenarioModule(workspaceCode, request), "Scenario module created");
+    }
+
+    @PutMapping("/scenario-modules/{id}")
+    public ApiResponse<ApiScenarioModuleItem> updateScenarioModule(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody ApiScenarioModuleRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.updateScenarioModule(id, workspaceCode, request), "Scenario module updated");
+    }
+
+    @PutMapping("/scenario-modules/{id}/move")
+    public ApiResponse<ApiScenarioModuleItem> moveScenarioModule(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestBody MoveApiScenarioModuleRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.moveScenarioModule(id, workspaceCode, request), "Scenario module moved");
+    }
+
+    @DeleteMapping("/scenario-modules/{id}")
+    public ApiResponse<Void> deleteScenarioModule(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        apiAutomationService.deleteScenarioModule(id, workspaceCode);
+        return ApiResponse.ok(null, "Scenario module deleted");
     }
 
     @GetMapping("/scenarios/{id}")

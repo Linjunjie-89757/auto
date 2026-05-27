@@ -15,6 +15,7 @@ import type {
   ApiRunStepResult,
   ApiScenarioDetail,
   ApiScenarioItem,
+  ApiScenarioModuleItem,
   ApiVariableSetItem,
   AiCaseConfig,
   AiCaseConfigResponse,
@@ -694,8 +695,42 @@ export const platformApi = {
       body: JSON.stringify(payload),
     })
   },
-  getApiScenarios(workspaceCode: string) {
-    return request<PageResponse<ApiScenarioItem>>('/automation/api/scenarios', { workspaceCode })
+  getApiScenarios(workspaceCode: string, filters?: { moduleId?: number | null; keyword?: string; status?: string }) {
+    const params = new URLSearchParams()
+    if (filters?.moduleId) {
+      params.set('moduleId', String(filters.moduleId))
+    }
+    if (filters?.keyword?.trim()) {
+      params.set('keyword', filters.keyword.trim())
+    }
+    if (filters?.status?.trim()) {
+      params.set('status', filters.status.trim())
+    }
+    const suffix = params.toString() ? `?${params.toString()}` : ''
+    return request<PageResponse<ApiScenarioItem>>(`/automation/api/scenarios${suffix}`, { workspaceCode })
+  },
+  getApiScenarioModules(workspaceCode: string) {
+    return request<ApiScenarioModuleItem[]>('/automation/api/scenario-modules', { workspaceCode })
+  },
+  createApiScenarioModule(workspaceCode: string, payload: { workspaceCode?: string; parentId?: number | null; name: string }) {
+    return request<ApiScenarioModuleItem>('/automation/api/scenario-modules', {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  updateApiScenarioModule(workspaceCode: string, id: number, payload: { workspaceCode?: string; parentId?: number | null; name: string }) {
+    return request<ApiScenarioModuleItem>(`/automation/api/scenario-modules/${id}`, {
+      method: 'PUT',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  deleteApiScenarioModule(workspaceCode: string, id: number) {
+    return request<void>(`/automation/api/scenario-modules/${id}`, {
+      method: 'DELETE',
+      workspaceCode,
+    })
   },
   getApiScenarioDetail(workspaceCode: string, id: number) {
     return request<ApiScenarioDetail>(`/automation/api/scenarios/${id}`, { workspaceCode })

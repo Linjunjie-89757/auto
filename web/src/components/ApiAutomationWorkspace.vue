@@ -9102,7 +9102,7 @@ function formatTimeLabel(value?: string | null) {
 
 .scenario-workbench {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 300px minmax(0, 1fr);
   min-height: calc(100vh - 210px);
   overflow: hidden;
   border-radius: 4px;
@@ -9581,7 +9581,7 @@ function formatTimeLabel(value?: string | null) {
 
 .scenario-edit-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 392px;
+  grid-template-columns: minmax(0, 1fr) 362px;
   min-height: calc(100vh - 300px);
   background: #fff;
 }

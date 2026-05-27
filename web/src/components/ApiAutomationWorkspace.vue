@@ -7315,7 +7315,7 @@ function formatTimeLabel(value?: string | null) {
                                     {{ scenarioStepDisplayName(item.step) }}
                                   </button>
                                   <el-input
-                                    v-else-if="['CUSTOM_REQUEST', 'SCRIPT'].includes(String(item.step.stepType)) && scenarioStepNameEditingId === item.step.id"
+                                    v-else-if="['API', 'API_CASE', 'CUSTOM_REQUEST', 'SCRIPT'].includes(String(item.step.stepType)) && scenarioStepNameEditingId === item.step.id"
                                     v-model="scenarioStepNameDraft"
                                     class="scenario-step-name-inline-input"
                                     maxlength="255"
@@ -7323,7 +7323,7 @@ function formatTimeLabel(value?: string | null) {
                                     @keyup.enter="finishScenarioStepNameEdit(item.step)"
                                   />
                                   <button
-                                    v-if="['CUSTOM_REQUEST', 'SCRIPT'].includes(String(item.step.stepType)) && scenarioStepNameEditingId !== item.step.id"
+                                    v-if="['API', 'API_CASE', 'CUSTOM_REQUEST', 'SCRIPT'].includes(String(item.step.stepType)) && scenarioStepNameEditingId !== item.step.id"
                                     type="button"
                                     class="scenario-step-name-edit-button"
                                     title="编辑名称"

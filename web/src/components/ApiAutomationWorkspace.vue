@@ -11,6 +11,7 @@ import {
   Fold,
   Folder,
   FolderOpened,
+  MagicStick,
   MoreFilled,
   Plus,
   Setting,
@@ -84,6 +85,8 @@ type ScenarioAddStepAction =
 type ScenarioImportTab = 'api' | 'case' | 'scenario'
 type ScenarioStepDrawerMode = 'create' | 'edit'
 type ScenarioScriptDrawerTab = 'script' | 'assertions'
+type ScenarioScriptInputMode = 'manual' | 'common'
+type ScenarioScriptResultTab = 'console' | 'assertions'
 type RequestConfigHost = {
   requestConfig: ApiRequestConfig
 }
@@ -336,15 +339,30 @@ const scenarioCustomRequestHasCustomStepName = ref(false)
 const scenarioCustomRequestActivePreProcessorId = ref<string | null>(null)
 const scenarioCustomRequestActivePostProcessorId = ref<string | null>(null)
 const scenarioCustomRequestActiveAssertionId = ref<string | null>(null)
+const scenarioCustomRequestDebugLoading = ref(false)
+const scenarioCustomRequestDebugFailureSummary = ref('')
+const scenarioCustomRequestDebugStepResults = ref<ApiRunStepResult[]>([])
+const scenarioCustomRequestResponsePreviewTab = ref<ResponsePreviewTab>('body')
 const scenarioScriptDrawerVisible = ref(false)
 const scenarioScriptDrawerMode = ref<ScenarioStepDrawerMode>('create')
 const scenarioScriptEditingPath = ref<number[]>([])
 const scenarioScriptActiveTab = ref<ScenarioScriptDrawerTab>('script')
+const scenarioScriptInputMode = ref<ScenarioScriptInputMode>('manual')
 const scenarioScriptActiveAssertionId = ref<string | null>(null)
+const scenarioScriptEditorRef = ref<{ formatDocument: () => Promise<void> | void } | null>(null)
+const scenarioScriptResultTab = ref<ScenarioScriptResultTab>('console')
 const scenarioSystemRequestDrawerVisible = ref(false)
 const scenarioSystemRequestDrawerLoading = ref(false)
 const scenarioSystemRequestDetail = ref<ApiRequestEditorDetail | null>(null)
 const scenarioSystemRequestActiveTab = ref<RequestContentTab>('headers')
+const scenarioSystemRequestEditingStep = ref<ApiScenarioStep | null>(null)
+const scenarioSystemRequestTitleEditing = ref(false)
+const scenarioSystemRequestTitleDraft = ref('')
+const scenarioSystemRequestHasCustomStepName = ref(false)
+const scenarioSystemRequestDebugLoading = ref(false)
+const scenarioSystemRequestDebugFailureSummary = ref('')
+const scenarioSystemRequestDebugStepResults = ref<ApiRunStepResult[]>([])
+const scenarioSystemRequestResponsePreviewTab = ref<ResponsePreviewTab>('body')
 const scenarioStepNameEditingId = ref('')
 const scenarioStepNameDraft = ref('')
 
@@ -601,6 +619,16 @@ const canDebugCaseDrawer = computed(() => canWriteCaseDrawer.value
 const caseDrawerReadOnly = computed(() => caseDrawerMode.value === 'run')
 const caseDrawerPrimaryActionLabel = computed(() => (caseDrawerReadOnly.value ? '执行' : '发送'))
 const caseDrawerShowFooter = computed(() => !caseDrawerReadOnly.value)
+const canDebugScenarioCustomRequest = computed(() => canWriteScenario.value
+  && !!scenarioCustomRequestConfig.value.method?.trim()
+  && !!scenarioCustomRequestConfig.value.path?.trim())
+const canDebugScenarioSystemRequest = computed(() => {
+  const detail = scenarioSystemRequestDetail.value
+  return !!detail
+    && canWriteTarget(detail.workspaceCode)
+    && !!detail.requestConfig.method?.trim()
+    && !!detail.requestConfig.path?.trim()
+})
 const showCaseListContent = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && activeRequestTab.value === 'cases')
 const visibleRequestEditorTabs = computed(() => requestEditorTabs.value.filter(item => item.resourceType === 'definition'))
 const canCreateCaseForCurrentDefinition = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && !!definitionForm.id)
@@ -668,6 +696,30 @@ const scenarioModuleOptions = computed(() => flatScenarioModules.value.map(item 
 })))
 const scenarioRunHistorySteps = computed(() => scenarioLastRunStepResults.value)
 const scenarioFlatSteps = computed(() => flattenScenarioSteps(scenarioForm.steps || []))
+const scenarioSystemRequestStepOrder = computed(() => {
+  const step = scenarioSystemRequestEditingStep.value
+  if (!step) {
+    return 1
+  }
+  const index = scenarioFlatSteps.value.findIndex(item => item.step === step || item.step.id === step.id)
+  return index >= 0 ? index + 1 : 1
+})
+const scenarioCustomRequestStepOrder = computed(() => {
+  if (scenarioCustomRequestDrawerMode.value === 'edit') {
+    const step = getScenarioStepByPath(scenarioCustomRequestEditingPath.value)
+    const index = scenarioFlatSteps.value.findIndex(item => item.step === step || (!!step?.id && item.step.id === step.id))
+    return index >= 0 ? index + 1 : scenarioFlatSteps.value.length + 1
+  }
+  return scenarioFlatSteps.value.length + 1
+})
+const scenarioScriptStepOrder = computed(() => {
+  if (scenarioScriptDrawerMode.value === 'edit') {
+    const step = getScenarioStepByPath(scenarioScriptEditingPath.value)
+    const index = scenarioFlatSteps.value.findIndex(item => item.step === step || (!!step?.id && item.step.id === step.id))
+    return index >= 0 ? index + 1 : scenarioFlatSteps.value.length + 1
+  }
+  return scenarioFlatSteps.value.length + 1
+})
 const scenarioImportWorkspaceOptions = computed(() => {
   const codes = Array.from(new Set([
     ...workspaces.value.map(item => item.code),
@@ -1244,6 +1296,61 @@ const caseDrawerExtractionResults = computed(() => caseDrawerResponseStep.value?
 const caseDrawerProcessorResults = computed(() => caseDrawerResponseStep.value?.processorResults ?? [])
 const caseDrawerDebugError = computed(() => caseDrawerResponseStep.value?.errorMessage || caseDrawerDebugFailureSummary.value || '')
 const caseDrawerShowResponseEmptyState = computed(() => !caseDrawerResponseStep.value && !caseDrawerDebugError.value)
+const scenarioCustomRequestResponseStep = computed(() => pickPreferredRunStep(scenarioCustomRequestDebugStepResults.value))
+const scenarioCustomRequestResponseStatusCode = computed(() => scenarioCustomRequestResponseStep.value?.response?.statusCode ?? null)
+const scenarioCustomRequestResponseDuration = computed(() => scenarioCustomRequestResponseStep.value?.durationMs ?? null)
+const scenarioCustomRequestResponseSize = computed(() => formatResponseSize(scenarioCustomRequestResponseStep.value?.response?.body))
+const scenarioCustomRequestResponseStatusTone = computed(() => getStatusTone(scenarioCustomRequestResponseStatusCode.value))
+const scenarioCustomRequestResponseDurationTone = computed(() => getDurationTone(scenarioCustomRequestResponseDuration.value))
+const scenarioCustomRequestResponseContentType = computed(() => scenarioCustomRequestResponseStep.value?.response?.contentType ?? '')
+const scenarioCustomRequestResponseBody = computed(() => scenarioCustomRequestResponseStep.value?.response?.body ?? '')
+const scenarioCustomRequestResponseHeaders = computed(() => scenarioCustomRequestResponseStep.value?.response?.headers ?? {})
+const scenarioCustomRequestAssertionResults = computed(() => scenarioCustomRequestResponseStep.value?.assertionResults ?? [])
+const scenarioCustomRequestDebugError = computed(() => scenarioCustomRequestResponseStep.value?.errorMessage || scenarioCustomRequestDebugFailureSummary.value || '')
+const scenarioCustomRequestAssertionResultPresentation = computed(() =>
+  getAssertionRunResultPresentation(scenarioCustomRequestAssertionResults.value, scenarioCustomRequestDebugError.value),
+)
+const scenarioCustomRequestExtractionResults = computed(() => scenarioCustomRequestResponseStep.value?.extractionResults ?? [])
+const scenarioCustomRequestProcessorResults = computed(() => scenarioCustomRequestResponseStep.value?.processorResults ?? [])
+const scenarioCustomRequestShowResponseEmptyState = computed(() => !scenarioCustomRequestResponseStep.value && !scenarioCustomRequestDebugError.value)
+const scenarioSystemRequestResponseStep = computed(() => pickPreferredRunStep(scenarioSystemRequestDebugStepResults.value))
+const scenarioSystemRequestResponseStatusCode = computed(() => scenarioSystemRequestResponseStep.value?.response?.statusCode ?? null)
+const scenarioSystemRequestResponseDuration = computed(() => scenarioSystemRequestResponseStep.value?.durationMs ?? null)
+const scenarioSystemRequestResponseSize = computed(() => formatResponseSize(scenarioSystemRequestResponseStep.value?.response?.body))
+const scenarioSystemRequestResponseStatusTone = computed(() => getStatusTone(scenarioSystemRequestResponseStatusCode.value))
+const scenarioSystemRequestResponseDurationTone = computed(() => getDurationTone(scenarioSystemRequestResponseDuration.value))
+const scenarioSystemRequestResponseContentType = computed(() => scenarioSystemRequestResponseStep.value?.response?.contentType ?? '')
+const scenarioSystemRequestResponseBody = computed(() => scenarioSystemRequestResponseStep.value?.response?.body ?? '')
+const scenarioSystemRequestResponseHeaders = computed(() => scenarioSystemRequestResponseStep.value?.response?.headers ?? {})
+const scenarioSystemRequestAssertionResults = computed(() => scenarioSystemRequestResponseStep.value?.assertionResults ?? [])
+const scenarioSystemRequestDebugError = computed(() => scenarioSystemRequestResponseStep.value?.errorMessage || scenarioSystemRequestDebugFailureSummary.value || '')
+const scenarioSystemRequestAssertionResultPresentation = computed(() =>
+  getAssertionRunResultPresentation(scenarioSystemRequestAssertionResults.value, scenarioSystemRequestDebugError.value),
+)
+const scenarioSystemRequestExtractionResults = computed(() => scenarioSystemRequestResponseStep.value?.extractionResults ?? [])
+const scenarioSystemRequestProcessorResults = computed(() => scenarioSystemRequestResponseStep.value?.processorResults ?? [])
+const scenarioSystemRequestShowResponseEmptyState = computed(() => !scenarioSystemRequestResponseStep.value && !scenarioSystemRequestDebugError.value)
+const scenarioScriptRunSteps = computed(() => {
+  if (scenarioScriptDrawerMode.value !== 'edit') {
+    return []
+  }
+  return scenarioLastRunStepResults.value.filter(item => item.stepOrder === scenarioScriptStepOrder.value)
+})
+const scenarioScriptResponseStep = computed(() => pickPreferredRunStep(scenarioScriptRunSteps.value))
+const scenarioScriptAssertionResults = computed(() => scenarioScriptResponseStep.value?.assertionResults ?? [])
+const scenarioScriptProcessorResults = computed(() => scenarioScriptResponseStep.value?.processorResults ?? [])
+const scenarioScriptDebugError = computed(() => scenarioScriptResponseStep.value?.errorMessage || '')
+const scenarioScriptAssertionResultPresentation = computed(() =>
+  getAssertionRunResultPresentation(scenarioScriptAssertionResults.value, scenarioScriptDebugError.value),
+)
+const scenarioScriptResponseConsolePreview = computed(() => buildRunConsolePreview(
+  scenarioScriptDebugError.value,
+  scenarioScriptProcessorResults.value,
+  scenarioScriptAssertionResults.value,
+  scenarioScriptResponseStep.value?.extractionResults ?? [],
+))
+const scenarioScriptShowResponseEmptyState = computed(() => !scenarioScriptResponseStep.value && !scenarioScriptDebugError.value)
+const scenarioScriptShouldShowResultPanel = computed(() => scenarioScriptDrawerMode.value === 'edit')
 const caseDrawerSelectedHistoryStep = computed(() => pickPreferredRunStep(caseDrawerRunHistoryDetail.value?.stepResults ?? []))
 const caseDrawerSelectedHistoryStatusCode = computed(() => caseDrawerSelectedHistoryStep.value?.response?.statusCode ?? caseDrawerRunHistoryDetail.value?.statusCode ?? null)
 const caseDrawerSelectedHistoryDuration = computed(() => caseDrawerSelectedHistoryStep.value?.durationMs ?? caseDrawerRunHistoryDetail.value?.durationMs ?? null)
@@ -1449,6 +1556,9 @@ const scenarioScriptAssertions = computed({
     scenarioScriptForm.assertions = value
   },
 })
+const scenarioScriptAssertionEnabledCount = computed(() =>
+  scenarioScriptAssertions.value.filter(item => item.enabled !== false).length,
+)
 const scenarioSystemRequestConfig = computed(() => scenarioSystemRequestDetail.value?.requestConfig || emptyApiRequestConfig())
 const scenarioSystemRequestQueryEnabledCount = computed(() =>
   scenarioSystemRequestConfig.value.queryParams.filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false).length,
@@ -1624,6 +1734,46 @@ const caseDrawerResponseBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
   }
   return 'text'
 })
+const scenarioCustomRequestResponseBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
+  const contentType = scenarioCustomRequestResponseContentType.value.toLowerCase()
+  const body = scenarioCustomRequestResponseBody.value.trim()
+  if (contentType.includes('json')) return 'json'
+  if (contentType.includes('xml') || contentType.includes('html')) return 'xml'
+  if (!body) return 'text'
+  if ((body.startsWith('{') && body.endsWith('}')) || (body.startsWith('[') && body.endsWith(']'))) {
+    try {
+      JSON.parse(body)
+      return 'json'
+    }
+    catch {
+      return 'text'
+    }
+  }
+  if (body.startsWith('<') && body.endsWith('>')) {
+    return 'xml'
+  }
+  return 'text'
+})
+const scenarioSystemRequestResponseBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
+  const contentType = scenarioSystemRequestResponseContentType.value.toLowerCase()
+  const body = scenarioSystemRequestResponseBody.value.trim()
+  if (contentType.includes('json')) return 'json'
+  if (contentType.includes('xml') || contentType.includes('html')) return 'xml'
+  if (!body) return 'text'
+  if ((body.startsWith('{') && body.endsWith('}')) || (body.startsWith('[') && body.endsWith(']'))) {
+    try {
+      JSON.parse(body)
+      return 'json'
+    }
+    catch {
+      return 'text'
+    }
+  }
+  if (body.startsWith('<') && body.endsWith('>')) {
+    return 'xml'
+  }
+  return 'text'
+})
 const caseDrawerHistoryBodyLanguage = computed<'json' | 'xml' | 'text'>(() => {
   const contentType = caseDrawerSelectedHistoryContentType.value.toLowerCase()
   const body = caseDrawerSelectedHistoryBody.value.trim()
@@ -1672,6 +1822,10 @@ const responseBodyPreview = computed(() => currentResponseBody.value || '')
 const responseHeadersPreview = computed(() => JSON.stringify(currentResponseHeaders.value, null, 2))
 const caseDrawerResponseBodyPreview = computed(() => caseDrawerResponseBody.value || '')
 const caseDrawerResponseHeadersPreview = computed(() => JSON.stringify(caseDrawerResponseHeaders.value, null, 2))
+const scenarioCustomRequestResponseBodyPreview = computed(() => scenarioCustomRequestResponseBody.value || '')
+const scenarioCustomRequestResponseHeadersPreview = computed(() => JSON.stringify(scenarioCustomRequestResponseHeaders.value, null, 2))
+const scenarioSystemRequestResponseBodyPreview = computed(() => scenarioSystemRequestResponseBody.value || '')
+const scenarioSystemRequestResponseHeadersPreview = computed(() => JSON.stringify(scenarioSystemRequestResponseHeaders.value, null, 2))
 const caseDrawerHistoryBodyPreview = computed(() => caseDrawerSelectedHistoryBody.value || '')
 const caseDrawerHistoryHeadersPreview = computed(() => JSON.stringify(caseDrawerSelectedHistoryHeaders.value, null, 2))
 const caseDrawerHistoryRequestHeadersPreview = computed(() => JSON.stringify(caseDrawerSelectedHistoryRequestHeaders.value, null, 2))
@@ -1731,6 +1885,22 @@ const caseDrawerResponseConsolePreview = computed(() => {
     caseDrawerExtractionResults.value,
   )
 })
+const scenarioCustomRequestResponseConsolePreview = computed(() => {
+  return buildRunConsolePreview(
+    scenarioCustomRequestDebugError.value,
+    scenarioCustomRequestProcessorResults.value,
+    scenarioCustomRequestAssertionResults.value,
+    scenarioCustomRequestExtractionResults.value,
+  )
+})
+const scenarioSystemRequestResponseConsolePreview = computed(() => {
+  return buildRunConsolePreview(
+    scenarioSystemRequestDebugError.value,
+    scenarioSystemRequestProcessorResults.value,
+    scenarioSystemRequestAssertionResults.value,
+    scenarioSystemRequestExtractionResults.value,
+  )
+})
 const caseDrawerHistoryConsolePreview = computed(() => buildRunConsolePreview(
   caseDrawerSelectedHistoryError.value,
   caseDrawerSelectedHistoryStep.value?.processorResults ?? [],
@@ -1765,6 +1935,26 @@ const caseDrawerActualRequestPreview = computed(() => buildActualRequestPreview(
         .map(item => [item.key, item.value]),
     ),
     body: getModeBodyText(caseDrawerForm.requestConfig.body.type, caseDrawerForm) || null,
+  }))
+const scenarioCustomRequestActualRequestPreview = computed(() => buildActualRequestPreview(scenarioCustomRequestResponseStep.value?.request, {
+    method: scenarioCustomRequestConfig.value.method || 'GET',
+    url: scenarioCustomRequestConfig.value.path || '',
+    headers: Object.fromEntries(
+      scenarioCustomRequestConfig.value.headers
+        .filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false)
+        .map(item => [item.key, item.value]),
+    ),
+    body: getModeBodyText(scenarioCustomRequestConfig.value.body.type, scenarioCustomRequestHost.value) || null,
+  }))
+const scenarioSystemRequestActualRequestPreview = computed(() => buildActualRequestPreview(scenarioSystemRequestResponseStep.value?.request, {
+    method: scenarioSystemRequestConfig.value.method || scenarioSystemRequestDetail.value?.method || 'GET',
+    url: scenarioSystemRequestConfig.value.path || scenarioSystemRequestDetail.value?.path || '',
+    headers: Object.fromEntries(
+      scenarioSystemRequestConfig.value.headers
+        .filter(item => !isKeyValueRowEmpty(item) && item.enabled !== false)
+        .map(item => [item.key, item.value]),
+    ),
+    body: getModeBodyText(scenarioSystemRequestConfig.value.body.type, { requestConfig: scenarioSystemRequestConfig.value }) || null,
   }))
 const caseDrawerTagsInput = computed({
   get: () => readTagInput(caseDrawerForm.tags),
@@ -2670,7 +2860,7 @@ function scenarioStepDisplayName(step: ApiScenarioStep) {
     return step.requestConfig?.path || '自定义请求'
   }
   if (step.stepType === 'SCRIPT') {
-    return step.script || '脚本操作'
+    return '脚本操作'
   }
   return scenarioStepTypeLabel(step.stepType)
 }
@@ -3297,6 +3487,9 @@ async function openScenarioSystemRequestDrawer(step: ApiScenarioStep) {
   scenarioSystemRequestDrawerLoading.value = true
   scenarioSystemRequestActiveTab.value = 'headers'
   scenarioSystemRequestDetail.value = null
+  scenarioSystemRequestEditingStep.value = step
+  syncScenarioSystemRequestTitleState(step)
+  resetScenarioSystemRequestDebugState()
   try {
     const detail = step.stepType === 'API'
       ? toEditorDetailFromDefinition(await platformApi.getApiDefinitionDetail(workspaceCode.value, step.resourceId))
@@ -3360,6 +3553,17 @@ function resetScenarioCustomRequestForm() {
   scenarioCustomRequestActivePreProcessorId.value = null
   scenarioCustomRequestActivePostProcessorId.value = null
   scenarioCustomRequestActiveAssertionId.value = null
+  scenarioCustomRequestDebugLoading.value = false
+  scenarioCustomRequestDebugFailureSummary.value = ''
+  scenarioCustomRequestDebugStepResults.value = []
+  scenarioCustomRequestResponsePreviewTab.value = 'body'
+}
+
+function syncScenarioSystemRequestTitleState(step?: ApiScenarioStep | null) {
+  const name = step?.stepName?.trim() || ''
+  scenarioSystemRequestHasCustomStepName.value = !!name && !['', '引用 API', '引用用例'].includes(name)
+  scenarioSystemRequestTitleDraft.value = name || ''
+  scenarioSystemRequestTitleEditing.value = false
 }
 
 function openScenarioCustomRequestDrawer(path?: number[]) {
@@ -3386,6 +3590,29 @@ function openScenarioCustomRequestDrawer(path?: number[]) {
   scenarioCustomRequestDrawerVisible.value = true
 }
 
+function resetScenarioSystemRequestDebugState() {
+  scenarioSystemRequestDebugLoading.value = false
+  scenarioSystemRequestDebugFailureSummary.value = ''
+  scenarioSystemRequestDebugStepResults.value = []
+  scenarioSystemRequestResponsePreviewTab.value = 'body'
+}
+
+function startScenarioSystemRequestTitleEdit() {
+  if (!scenarioSystemRequestHasCustomStepName.value) {
+    scenarioSystemRequestTitleDraft.value = ''
+  }
+  scenarioSystemRequestTitleEditing.value = true
+}
+
+function finishScenarioSystemRequestTitleEdit() {
+  const name = scenarioSystemRequestTitleDraft.value.trim()
+  scenarioSystemRequestHasCustomStepName.value = !!name
+  if (scenarioSystemRequestEditingStep.value) {
+    scenarioSystemRequestEditingStep.value.stepName = name || scenarioSystemRequestEditingStep.value.stepName || ''
+  }
+  scenarioSystemRequestTitleEditing.value = false
+}
+
 function startScenarioCustomRequestTitleEdit() {
   if (!scenarioCustomRequestHasCustomStepName.value) {
     scenarioCustomRequestForm.stepName = ''
@@ -3407,6 +3634,14 @@ function finishScenarioCustomRequestTitleEdit() {
 
 function closeScenarioCustomRequestDrawer() {
   scenarioCustomRequestDrawerVisible.value = false
+}
+
+function closeScenarioSystemRequestDrawer() {
+  scenarioSystemRequestDrawerVisible.value = false
+  scenarioSystemRequestEditingStep.value = null
+  scenarioSystemRequestTitleEditing.value = false
+  scenarioSystemRequestTitleDraft.value = ''
+  scenarioSystemRequestHasCustomStepName.value = false
 }
 
 function saveScenarioCustomRequestStep(keepOpen = false) {
@@ -3449,7 +3684,9 @@ function resetScenarioScriptForm() {
   next.script = ''
   Object.assign(scenarioScriptForm, next)
   scenarioScriptActiveTab.value = 'script'
+  scenarioScriptInputMode.value = 'manual'
   scenarioScriptActiveAssertionId.value = null
+  scenarioScriptResultTab.value = 'console'
 }
 
 function openScenarioScriptDrawer(path?: number[]) {
@@ -3472,6 +3709,18 @@ function openScenarioScriptDrawer(path?: number[]) {
 
 function closeScenarioScriptDrawer() {
   scenarioScriptDrawerVisible.value = false
+}
+
+async function formatScenarioScriptContent() {
+  if (scenarioScriptEditorRef.value) {
+    await scenarioScriptEditorRef.value.formatDocument()
+    return
+  }
+  scenarioScriptForm.script = (scenarioScriptForm.script || '').trim()
+}
+
+function clearScenarioScriptContent() {
+  scenarioScriptForm.script = ''
 }
 
 function saveScenarioScriptStep(keepOpen = false) {
@@ -4659,6 +4908,31 @@ function buildCaseMutationPayload(definitionId: number) {
   return buildCaseMutationPayloadFor(definitionForm, definitionId)
 }
 
+function buildScenarioCustomRequestDebugPayload() {
+  const config = getScenarioCustomRequestConfig()
+  return {
+    workspaceCode: scenarioForm.workspaceCode || defaultEditableWorkspaceCode(),
+    definitionId: null,
+    name: scenarioCustomRequestForm.stepName?.trim() || '自定义请求',
+    requestConfig: {
+      ...cloneScenarioRequestConfig(config),
+      path: config.path.trim(),
+      queryParams: prepareKeyValueRowsForPayload(config.queryParams),
+      headers: prepareKeyValueRowsForPayload(config.headers),
+      body: {
+        ...config.body,
+        formItems: prepareKeyValueRowsForPayload(config.body.formItems),
+      },
+    },
+    assertions: scenarioCustomRequestForm.assertions || [],
+    extractors: [],
+    preProcessors: scenarioCustomRequestForm.preProcessors || [],
+    postProcessors: scenarioCustomRequestForm.postProcessors || [],
+    environmentId: runOptions.environmentId,
+    variableSetId: runOptions.variableSetId,
+  } satisfies ApiDebugDefinitionPayload
+}
+
 async function ensureCaseDefinitionSavedFor(form: ApiRequestEditorDetail) {
   if (form.definitionId) {
     return form.definitionId
@@ -4984,6 +5258,66 @@ async function debugCaseDrawer() {
   }
   finally {
     saving.value = false
+  }
+}
+
+async function debugScenarioCustomRequest() {
+  if (!canDebugScenarioCustomRequest.value) {
+    ElMessage.warning('请补全请求方法和请求 URL')
+    return
+  }
+  scenarioCustomRequestDebugLoading.value = true
+  try {
+    syncActiveBodyText(scenarioCustomRequestHost.value)
+    const response = await platformApi.debugApiDefinitionDraft(
+      workspaceCode.value,
+      buildScenarioCustomRequestDebugPayload(),
+    )
+    scenarioCustomRequestDebugFailureSummary.value = response.failureSummary || ''
+    scenarioCustomRequestDebugStepResults.value = response.stepResults || []
+    scenarioCustomRequestResponsePreviewTab.value = 'body'
+    ElMessage.success(response.result === 'SUCCESS' ? '发送成功' : '发送完成')
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    scenarioCustomRequestDebugLoading.value = false
+  }
+}
+
+async function debugScenarioSystemRequest() {
+  const detail = scenarioSystemRequestDetail.value
+  if (!detail || !canDebugScenarioSystemRequest.value) {
+    ElMessage.warning('请补全请求方法和请求 URL')
+    return
+  }
+  scenarioSystemRequestDebugLoading.value = true
+  try {
+    syncActiveBodyText(detail)
+    const response = detail.resourceType === 'case' && detail.definitionId
+      ? await platformApi.debugApiDefinitionCaseDraft(workspaceCode.value, {
+          ...buildCaseMutationPayloadFor(detail, detail.definitionId),
+          caseId: detail.id || null,
+          environmentId: runOptions.environmentId,
+          variableSetId: runOptions.variableSetId,
+        } satisfies ApiDebugCasePayload)
+      : await platformApi.debugApiDefinitionDraft(workspaceCode.value, {
+          ...buildDefinitionMutationPayloadFor(detail),
+          definitionId: detail.resourceType === 'definition' ? detail.id || null : null,
+          environmentId: runOptions.environmentId,
+          variableSetId: runOptions.variableSetId,
+        } satisfies ApiDebugDefinitionPayload)
+    scenarioSystemRequestDebugFailureSummary.value = response.failureSummary || ''
+    scenarioSystemRequestDebugStepResults.value = response.stepResults || []
+    scenarioSystemRequestResponsePreviewTab.value = 'body'
+    ElMessage.success(response.result === 'SUCCESS' ? '发送成功' : '发送完成')
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    scenarioSystemRequestDebugLoading.value = false
   }
 }
 
@@ -7769,25 +8103,50 @@ function formatTimeLabel(value?: string | null) {
 
     <el-drawer
       v-model="scenarioSystemRequestDrawerVisible"
-      title="系统请求"
       size="960px"
       destroy-on-close
       class="scenario-step-config-drawer"
+      @closed="closeScenarioSystemRequestDrawer"
     >
+      <template #header>
+        <div class="scenario-drawer-title-row">
+          <span class="scenario-drawer-step-order">{{ scenarioSystemRequestStepOrder }}</span>
+          <span :class="['scenario-step-type-badge', scenarioSystemRequestDetail?.resourceType === 'case' ? 'is-api-case' : 'is-api']">
+            {{ scenarioSystemRequestDetail?.resourceType === 'case' ? '引用用例' : '引用 API' }}
+          </span>
+          <el-input
+            v-if="scenarioSystemRequestTitleEditing"
+            v-model="scenarioSystemRequestTitleDraft"
+            class="scenario-drawer-title-input"
+            maxlength="255"
+            placeholder="请输入步骤名称"
+            @blur="finishScenarioSystemRequestTitleEdit"
+            @keyup.enter="finishScenarioSystemRequestTitleEdit"
+          />
+          <span v-else class="scenario-drawer-step-title">
+            {{ scenarioSystemRequestEditingStep ? scenarioStepDisplayName(scenarioSystemRequestEditingStep) : scenarioSystemRequestDetail?.name || '系统请求' }}
+          </span>
+          <button v-if="!scenarioSystemRequestTitleEditing" type="button" class="scenario-custom-title-edit" title="编辑名称" @click="startScenarioSystemRequestTitleEdit">
+            <el-icon><EditPen /></el-icon>
+          </button>
+        </div>
+      </template>
       <div v-loading="scenarioSystemRequestDrawerLoading" class="scenario-step-config-shell">
         <template v-if="scenarioSystemRequestDetail">
-          <div class="scenario-step-config-title-row">
-            <span :class="['scenario-step-type-badge', scenarioSystemRequestDetail.resourceType === 'case' ? 'is-api-case' : 'is-api']">
-              {{ scenarioSystemRequestDetail.resourceType === 'case' ? '引用用例' : '引用 API' }}
-            </span>
-            <span class="scenario-system-request-title">{{ scenarioSystemRequestDetail.name }}</span>
-          </div>
           <div class="scenario-step-config-request-row">
             <el-select model-value="HTTP" class="scenario-step-protocol-select" disabled>
               <el-option label="HTTP" value="HTTP" />
             </el-select>
             <span :class="['scenario-step-method scenario-system-request-method', requestMethodClass(scenarioSystemRequestConfig.method)]">{{ scenarioSystemRequestConfig.method }}</span>
             <el-input :model-value="scenarioSystemRequestConfig.path" class="request-url-input" readonly />
+            <el-button
+              type="primary"
+              :loading="scenarioSystemRequestDebugLoading"
+              :disabled="!canDebugScenarioSystemRequest"
+              @click="debugScenarioSystemRequest"
+            >
+              发送
+            </el-button>
           </div>
           <div class="ms-like-top-tabs scenario-step-config-tabs">
             <button :class="['ms-like-top-tab', { active: scenarioSystemRequestActiveTab === 'headers' }]" @click="scenarioSystemRequestActiveTab = 'headers'">请求头</button>
@@ -7894,6 +8253,113 @@ function formatTimeLabel(value?: string | null) {
               </div>
             </template>
           </div>
+          <div class="ms-like-response-shell scenario-step-response-shell">
+            <div class="ms-like-response-header">
+              <div class="ms-like-response-title">响应内容</div>
+              <div v-if="!scenarioSystemRequestShowResponseEmptyState" class="ms-like-response-metrics">
+                <span v-if="scenarioSystemRequestAssertionResultPresentation.visible" :class="['ms-like-result-pill', `is-${scenarioSystemRequestAssertionResultPresentation.tone}`]">
+                  {{ scenarioSystemRequestAssertionResultPresentation.label }}
+                </span>
+                <span :class="['ms-like-response-metric', `is-${scenarioSystemRequestResponseStatusTone}`]">状态 {{ scenarioSystemRequestResponseStatusCode ?? '-' }}</span>
+                <span :class="['ms-like-response-metric', `is-${scenarioSystemRequestResponseDurationTone}`]">耗时 {{ scenarioSystemRequestResponseDuration ?? '-' }}<template v-if="scenarioSystemRequestResponseDuration !== null"> ms</template></span>
+                <span>大小 {{ scenarioSystemRequestResponseSize }}</span>
+              </div>
+            </div>
+            <div v-if="scenarioSystemRequestDebugError" class="response-error-banner">
+              {{ scenarioSystemRequestDebugError }}
+            </div>
+            <div v-if="scenarioSystemRequestShowResponseEmptyState" class="ms-like-response-empty">
+              <div class="ms-like-response-empty-card">
+                <div class="ms-like-response-empty-visual">
+                  <div class="ms-like-response-empty-window">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
+                </div>
+                <div class="ms-like-response-empty-text">点击 <span>发送</span> 获取响应内容</div>
+              </div>
+            </div>
+            <template v-else>
+              <div class="ms-like-response-tabs">
+                <button :class="['ms-like-top-tab', { active: scenarioSystemRequestResponsePreviewTab === 'body' }]" @click="scenarioSystemRequestResponsePreviewTab = 'body'">Body</button>
+                <button :class="['ms-like-top-tab', { active: scenarioSystemRequestResponsePreviewTab === 'header' }]" @click="scenarioSystemRequestResponsePreviewTab = 'header'">Header</button>
+                <button :class="['ms-like-top-tab', { active: scenarioSystemRequestResponsePreviewTab === 'console' }]" @click="scenarioSystemRequestResponsePreviewTab = 'console'">控制台</button>
+                <button :class="['ms-like-top-tab', { active: scenarioSystemRequestResponsePreviewTab === 'actualRequest' }]" @click="scenarioSystemRequestResponsePreviewTab = 'actualRequest'">实际请求</button>
+                <button :class="['ms-like-top-tab', { active: scenarioSystemRequestResponsePreviewTab === 'assertions' }]" @click="scenarioSystemRequestResponsePreviewTab = 'assertions'">断言</button>
+              </div>
+              <div class="ms-like-response-body">
+                <MonacoCodeEditor
+                  v-if="scenarioSystemRequestResponsePreviewTab === 'body'"
+                  :model-value="scenarioSystemRequestResponseBodyPreview"
+                  :language="scenarioSystemRequestResponseBodyLanguage"
+                  :read-only="true"
+                  :show-format-button="false"
+                  :fit-content="true"
+                  :max-fit-content-height="1000"
+                  height="100%"
+                />
+                <MonacoCodeEditor
+                  v-else-if="scenarioSystemRequestResponsePreviewTab === 'header'"
+                  :model-value="scenarioSystemRequestResponseHeadersPreview"
+                  language="json"
+                  :read-only="true"
+                  :show-format-button="false"
+                  :fit-content="true"
+                  :max-fit-content-height="1000"
+                  height="100%"
+                />
+                <MonacoCodeEditor
+                  v-else-if="scenarioSystemRequestResponsePreviewTab === 'console'"
+                  :model-value="scenarioSystemRequestResponseConsolePreview"
+                  language="text"
+                  :read-only="true"
+                  :show-format-button="false"
+                  :fit-content="true"
+                  :max-fit-content-height="1000"
+                  height="100%"
+                />
+                <MonacoCodeEditor
+                  v-else-if="scenarioSystemRequestResponsePreviewTab === 'actualRequest'"
+                  :model-value="scenarioSystemRequestActualRequestPreview"
+                  language="json"
+                  :read-only="true"
+                  :show-format-button="false"
+                  :fit-content="true"
+                  :max-fit-content-height="1000"
+                  height="100%"
+                />
+                <div v-else class="assertion-result-panel">
+                  <div v-if="!scenarioSystemRequestAssertionResults.length" class="assertion-result-empty">当前请求未配置断言</div>
+                  <el-table v-else :data="scenarioSystemRequestAssertionResults" size="small" class="assertion-result-table">
+                    <el-table-column label="断言名称" min-width="140" show-overflow-tooltip>
+                      <template #default="{ row }">{{ row.name || assertionTypeLabel(row.type) }}</template>
+                    </el-table-column>
+                    <el-table-column label="断言对象" width="96">
+                      <template #default="{ row }">{{ assertionTypeLabel(row.type) }}</template>
+                    </el-table-column>
+                    <el-table-column label="条件" width="92">
+                      <template #default="{ row }">{{ assertionConditionLabel(row.condition) }}</template>
+                    </el-table-column>
+                    <el-table-column label="期望值" min-width="120" show-overflow-tooltip>
+                      <template #default="{ row }">{{ row.expectedValue || '-' }}</template>
+                    </el-table-column>
+                    <el-table-column label="实际值" min-width="120" show-overflow-tooltip>
+                      <template #default="{ row }">{{ row.actualValue || '-' }}</template>
+                    </el-table-column>
+                    <el-table-column label="结果" width="78">
+                      <template #default="{ row }">
+                        <span :class="['case-drawer-history-result', `is-${assertionResultTone(row)}`]">{{ assertionResultLabel(row) }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="失败原因" min-width="160" show-overflow-tooltip>
+                      <template #default="{ row }">{{ row.success ? '-' : row.message || '-' }}</template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </div>
+            </template>
+          </div>
         </template>
       </div>
     </el-drawer>
@@ -7906,19 +8372,20 @@ function formatTimeLabel(value?: string | null) {
       @closed="resetScenarioCustomRequestForm"
     >
       <template #header>
-        <div v-if="scenarioCustomRequestTitleEditing" class="scenario-custom-drawer-title-editing">
+        <div class="scenario-drawer-title-row">
+          <span class="scenario-drawer-step-order">{{ scenarioCustomRequestStepOrder }}</span>
+          <span class="scenario-step-type-badge is-custom-request">自定义请求</span>
           <el-input
+            v-if="scenarioCustomRequestTitleEditing"
             v-model="scenarioCustomRequestForm.stepName"
+            class="scenario-drawer-title-input"
             maxlength="255"
-            show-word-limit
             placeholder="请输入步骤名称"
             @blur="finishScenarioCustomRequestTitleEdit"
             @keyup.enter="finishScenarioCustomRequestTitleEdit"
           />
-        </div>
-        <div v-else class="scenario-custom-drawer-title">
-          <span>{{ scenarioCustomRequestForm.stepName || '自定义请求' }}</span>
-          <button type="button" class="scenario-custom-title-edit" title="编辑名称" @click="startScenarioCustomRequestTitleEdit">
+          <span v-else class="scenario-drawer-step-title">{{ scenarioCustomRequestForm.stepName || '自定义请求' }}</span>
+          <button v-if="!scenarioCustomRequestTitleEditing" type="button" class="scenario-custom-title-edit" title="编辑名称" @click="startScenarioCustomRequestTitleEdit">
             <el-icon><EditPen /></el-icon>
           </button>
         </div>
@@ -7934,6 +8401,14 @@ function formatTimeLabel(value?: string | null) {
             </el-option>
           </el-select>
           <el-input v-model="scenarioCustomRequestConfig.path" class="request-url-input" placeholder="请输入包含 http/https 的完整 URL 或接口路径" />
+          <el-button
+            type="primary"
+            :loading="scenarioCustomRequestDebugLoading"
+            :disabled="!canDebugScenarioCustomRequest"
+            @click="debugScenarioCustomRequest"
+          >
+            发送
+          </el-button>
         </div>
         <div class="ms-like-top-tabs scenario-step-config-tabs">
           <button :class="['ms-like-top-tab', { active: scenarioCustomRequestActiveTab === 'headers' }]" @click="scenarioCustomRequestActiveTab = 'headers'">请求头</button>
@@ -8106,6 +8581,113 @@ function formatTimeLabel(value?: string | null) {
             </div>
           </template>
         </div>
+        <div class="ms-like-response-shell scenario-step-response-shell">
+          <div class="ms-like-response-header">
+            <div class="ms-like-response-title">响应内容</div>
+            <div v-if="!scenarioCustomRequestShowResponseEmptyState" class="ms-like-response-metrics">
+              <span v-if="scenarioCustomRequestAssertionResultPresentation.visible" :class="['ms-like-result-pill', `is-${scenarioCustomRequestAssertionResultPresentation.tone}`]">
+                {{ scenarioCustomRequestAssertionResultPresentation.label }}
+              </span>
+              <span :class="['ms-like-response-metric', `is-${scenarioCustomRequestResponseStatusTone}`]">状态 {{ scenarioCustomRequestResponseStatusCode ?? '-' }}</span>
+              <span :class="['ms-like-response-metric', `is-${scenarioCustomRequestResponseDurationTone}`]">耗时 {{ scenarioCustomRequestResponseDuration ?? '-' }}<template v-if="scenarioCustomRequestResponseDuration !== null"> ms</template></span>
+              <span>大小 {{ scenarioCustomRequestResponseSize }}</span>
+            </div>
+          </div>
+          <div v-if="scenarioCustomRequestDebugError" class="response-error-banner">
+            {{ scenarioCustomRequestDebugError }}
+          </div>
+          <div v-if="scenarioCustomRequestShowResponseEmptyState" class="ms-like-response-empty">
+            <div class="ms-like-response-empty-card">
+              <div class="ms-like-response-empty-visual">
+                <div class="ms-like-response-empty-window">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
+              </div>
+              <div class="ms-like-response-empty-text">点击 <span>发送</span> 获取响应内容</div>
+            </div>
+          </div>
+          <template v-else>
+            <div class="ms-like-response-tabs">
+              <button :class="['ms-like-top-tab', { active: scenarioCustomRequestResponsePreviewTab === 'body' }]" @click="scenarioCustomRequestResponsePreviewTab = 'body'">Body</button>
+              <button :class="['ms-like-top-tab', { active: scenarioCustomRequestResponsePreviewTab === 'header' }]" @click="scenarioCustomRequestResponsePreviewTab = 'header'">Header</button>
+              <button :class="['ms-like-top-tab', { active: scenarioCustomRequestResponsePreviewTab === 'console' }]" @click="scenarioCustomRequestResponsePreviewTab = 'console'">控制台</button>
+              <button :class="['ms-like-top-tab', { active: scenarioCustomRequestResponsePreviewTab === 'actualRequest' }]" @click="scenarioCustomRequestResponsePreviewTab = 'actualRequest'">实际请求</button>
+              <button :class="['ms-like-top-tab', { active: scenarioCustomRequestResponsePreviewTab === 'assertions' }]" @click="scenarioCustomRequestResponsePreviewTab = 'assertions'">断言</button>
+            </div>
+            <div class="ms-like-response-body">
+              <MonacoCodeEditor
+                v-if="scenarioCustomRequestResponsePreviewTab === 'body'"
+                :model-value="scenarioCustomRequestResponseBodyPreview"
+                :language="scenarioCustomRequestResponseBodyLanguage"
+                :read-only="true"
+                :show-format-button="false"
+                :fit-content="true"
+                :max-fit-content-height="1000"
+                height="100%"
+              />
+              <MonacoCodeEditor
+                v-else-if="scenarioCustomRequestResponsePreviewTab === 'header'"
+                :model-value="scenarioCustomRequestResponseHeadersPreview"
+                language="json"
+                :read-only="true"
+                :show-format-button="false"
+                :fit-content="true"
+                :max-fit-content-height="1000"
+                height="100%"
+              />
+              <MonacoCodeEditor
+                v-else-if="scenarioCustomRequestResponsePreviewTab === 'console'"
+                :model-value="scenarioCustomRequestResponseConsolePreview"
+                language="text"
+                :read-only="true"
+                :show-format-button="false"
+                :fit-content="true"
+                :max-fit-content-height="1000"
+                height="100%"
+              />
+              <MonacoCodeEditor
+                v-else-if="scenarioCustomRequestResponsePreviewTab === 'actualRequest'"
+                :model-value="scenarioCustomRequestActualRequestPreview"
+                language="json"
+                :read-only="true"
+                :show-format-button="false"
+                :fit-content="true"
+                :max-fit-content-height="1000"
+                height="100%"
+              />
+              <div v-else class="assertion-result-panel">
+                <div v-if="!scenarioCustomRequestAssertionResults.length" class="assertion-result-empty">当前请求未配置断言</div>
+                <el-table v-else :data="scenarioCustomRequestAssertionResults" size="small" class="assertion-result-table">
+                  <el-table-column label="断言名称" min-width="140" show-overflow-tooltip>
+                    <template #default="{ row }">{{ row.name || assertionTypeLabel(row.type) }}</template>
+                  </el-table-column>
+                  <el-table-column label="断言对象" width="96">
+                    <template #default="{ row }">{{ assertionTypeLabel(row.type) }}</template>
+                  </el-table-column>
+                  <el-table-column label="条件" width="92">
+                    <template #default="{ row }">{{ assertionConditionLabel(row.condition) }}</template>
+                  </el-table-column>
+                  <el-table-column label="期望值" min-width="120" show-overflow-tooltip>
+                    <template #default="{ row }">{{ row.expectedValue || '-' }}</template>
+                  </el-table-column>
+                  <el-table-column label="实际值" min-width="120" show-overflow-tooltip>
+                    <template #default="{ row }">{{ row.actualValue || '-' }}</template>
+                  </el-table-column>
+                  <el-table-column label="结果" width="78">
+                    <template #default="{ row }">
+                      <span :class="['case-drawer-history-result', `is-${assertionResultTone(row)}`]">{{ assertionResultLabel(row) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="失败原因" min-width="160" show-overflow-tooltip>
+                    <template #default="{ row }">{{ row.success ? '-' : row.message || '-' }}</template>
+                  </el-table-column>
+                </el-table>
+              </div>
+            </div>
+          </template>
+        </div>
       </div>
       <template #footer>
         <div class="scenario-step-config-footer">
@@ -8120,32 +8702,144 @@ function formatTimeLabel(value?: string | null) {
 
     <el-drawer
       v-model="scenarioScriptDrawerVisible"
-      :title="scenarioScriptDrawerMode === 'edit' ? '编辑脚本操作' : '脚本操作'"
       size="960px"
       destroy-on-close
-      class="scenario-step-config-drawer"
+      class="scenario-step-config-drawer scenario-script-operation-drawer"
       @closed="resetScenarioScriptForm"
     >
+      <template #header>
+        <div class="scenario-script-drawer-title">脚本操作</div>
+      </template>
       <div class="scenario-step-config-shell">
         <div class="ms-like-top-tabs scenario-step-config-tabs">
           <button :class="['ms-like-top-tab', { active: scenarioScriptActiveTab === 'script' }]" @click="scenarioScriptActiveTab = 'script'">脚本</button>
-          <button :class="['ms-like-top-tab', { active: scenarioScriptActiveTab === 'assertions' }]" @click="scenarioScriptActiveTab = 'assertions'">断言</button>
+          <button :class="['ms-like-top-tab', { active: scenarioScriptActiveTab === 'assertions' }]" @click="scenarioScriptActiveTab = 'assertions'">
+            断言
+            <span v-if="scenarioScriptAssertionEnabledCount" class="ms-like-tab-badge">{{ scenarioScriptAssertionEnabledCount }}</span>
+          </button>
         </div>
         <div v-if="scenarioScriptActiveTab === 'script'" class="scenario-script-editor-pane">
-          <label class="scenario-script-name-field">
-            <span>脚本操作名称</span>
-            <el-input v-model="scenarioScriptForm.stepName" maxlength="255" placeholder="请输入脚本操作名称" />
+          <label class="scenario-script-field">
+            <span class="scenario-script-field-label">名称</span>
+            <el-input v-model="scenarioScriptForm.stepName" maxlength="255" placeholder="请输入脚本操作名称" class="scenario-script-name-input" />
           </label>
-          <MonacoCodeEditor v-model="scenarioScriptContent" language="text" height="420px" />
+          <div class="scenario-script-mode-tabs">
+            <button :class="['scenario-script-mode-tab', { active: scenarioScriptInputMode === 'manual' }]" @click="scenarioScriptInputMode = 'manual'">手动录入</button>
+            <el-tooltip content="公共脚本功能开发中" placement="top">
+              <span class="scenario-script-mode-tab-tooltip">
+                <button
+                  type="button"
+                  class="scenario-script-mode-tab is-disabled"
+                  disabled
+                >
+                  引用公共脚本
+                </button>
+              </span>
+            </el-tooltip>
+          </div>
+          <template v-if="scenarioScriptInputMode === 'manual'">
+            <div class="scenario-script-editor-header">
+              <span>脚本案例</span>
+              <div class="scenario-script-editor-actions">
+                <el-button size="small" :icon="MagicStick" @click="formatScenarioScriptContent">格式化</el-button>
+                <el-button size="small" :icon="Delete" @click="clearScenarioScriptContent">清空</el-button>
+              </div>
+            </div>
+            <div class="scenario-script-code-shell">
+              <MonacoCodeEditor
+                ref="scenarioScriptEditorRef"
+                v-model="scenarioScriptContent"
+                language="javascript"
+                height="100%"
+                :show-format-button="false"
+              />
+            </div>
+          </template>
         </div>
-        <div v-else class="request-section">
-          <ApiAssertionEditor v-model="scenarioScriptAssertions" v-model:active-id="scenarioScriptActiveAssertionId" />
+        <div v-else class="scenario-script-assertion-pane request-section">
+          <ApiAssertionEditor
+            v-model="scenarioScriptAssertions"
+            v-model:active-id="scenarioScriptActiveAssertionId"
+            :allowed-types="['VARIABLE', 'SCRIPT']"
+          />
+        </div>
+        <div v-if="scenarioScriptShouldShowResultPanel" class="ms-like-response-shell scenario-script-result-shell">
+          <div class="ms-like-response-header">
+            <div class="ms-like-response-title">执行结果</div>
+            <div v-if="!scenarioScriptShowResponseEmptyState" class="ms-like-response-metrics">
+              <span v-if="scenarioScriptAssertionResultPresentation.visible" :class="['ms-like-result-pill', `is-${scenarioScriptAssertionResultPresentation.tone}`]">
+                {{ scenarioScriptAssertionResultPresentation.label }}
+              </span>
+              <span>步骤 {{ scenarioScriptStepOrder }}</span>
+            </div>
+          </div>
+          <div v-if="scenarioScriptDebugError" class="response-error-banner">
+            {{ scenarioScriptDebugError }}
+          </div>
+          <div v-if="scenarioScriptShowResponseEmptyState" class="ms-like-response-empty">
+            <div class="ms-like-response-empty-card">
+              <div class="ms-like-response-empty-visual">
+                <div class="ms-like-response-empty-window">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
+              </div>
+              <div class="ms-like-response-empty-text">执行场景后查看当前步骤结果</div>
+            </div>
+          </div>
+          <template v-else>
+            <div class="ms-like-response-tabs">
+              <button :class="['ms-like-top-tab', { active: scenarioScriptResultTab === 'console' }]" @click="scenarioScriptResultTab = 'console'">控制台</button>
+              <button :class="['ms-like-top-tab', { active: scenarioScriptResultTab === 'assertions' }]" @click="scenarioScriptResultTab = 'assertions'">断言</button>
+            </div>
+            <div class="ms-like-response-body">
+              <MonacoCodeEditor
+                v-if="scenarioScriptResultTab === 'console'"
+                :model-value="scenarioScriptResponseConsolePreview"
+                language="text"
+                :read-only="true"
+                :show-format-button="false"
+                :fit-content="true"
+                :max-fit-content-height="1000"
+                height="100%"
+              />
+              <div v-else class="assertion-result-panel">
+                <div v-if="!scenarioScriptAssertionResults.length" class="assertion-result-empty">当前脚本未配置断言</div>
+                <el-table v-else :data="scenarioScriptAssertionResults" size="small" class="assertion-result-table">
+                  <el-table-column label="断言名称" min-width="140" show-overflow-tooltip>
+                    <template #default="{ row }">{{ row.name || assertionTypeLabel(row.type) }}</template>
+                  </el-table-column>
+                  <el-table-column label="断言对象" width="96">
+                    <template #default="{ row }">{{ assertionTypeLabel(row.type) }}</template>
+                  </el-table-column>
+                  <el-table-column label="条件" width="92">
+                    <template #default="{ row }">{{ assertionConditionLabel(row.condition) }}</template>
+                  </el-table-column>
+                  <el-table-column label="期望值" min-width="120" show-overflow-tooltip>
+                    <template #default="{ row }">{{ row.expectedValue || '-' }}</template>
+                  </el-table-column>
+                  <el-table-column label="实际值" min-width="120" show-overflow-tooltip>
+                    <template #default="{ row }">{{ row.actualValue || '-' }}</template>
+                  </el-table-column>
+                  <el-table-column label="结果" width="78">
+                    <template #default="{ row }">
+                      <span :class="['case-drawer-history-result', `is-${assertionResultTone(row)}`]">{{ assertionResultLabel(row) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="失败原因" min-width="160" show-overflow-tooltip>
+                    <template #default="{ row }">{{ row.success ? '-' : row.message || '-' }}</template>
+                  </el-table-column>
+                </el-table>
+              </div>
+            </div>
+          </template>
         </div>
       </div>
       <template #footer>
         <div class="scenario-step-config-footer">
           <el-button @click="closeScenarioScriptDrawer">取消</el-button>
-          <el-button v-if="scenarioScriptDrawerMode === 'create'" :disabled="!scenarioScriptForm.stepName?.trim()" @click="saveScenarioScriptStep(true)">保存并继续</el-button>
+          <el-button v-if="scenarioScriptDrawerMode === 'create'" :disabled="!scenarioScriptForm.stepName?.trim()" @click="saveScenarioScriptStep(true)">保存并继续添加</el-button>
           <el-button type="primary" :disabled="!scenarioScriptForm.stepName?.trim()" @click="saveScenarioScriptStep(false)">
             {{ scenarioScriptDrawerMode === 'edit' ? '保存' : '添加' }}
           </el-button>
@@ -9464,8 +10158,32 @@ function formatTimeLabel(value?: string | null) {
   font-size: 12px;
 }
 
-.scenario-step-config-drawer :deep(.el-drawer__body) {
+:deep(.scenario-step-config-drawer .el-drawer__body) {
   padding: 0;
+}
+
+:deep(.scenario-script-operation-drawer .el-drawer__header) {
+  display: flex;
+  align-items: center;
+  flex: 0 0 48px;
+  height: 48px;
+  min-height: 48px;
+  margin-bottom: 0;
+  padding: 0 16px !important;
+  border-bottom: 1px solid #e5e7eb;
+  box-sizing: border-box;
+}
+
+:deep(.scenario-script-operation-drawer .el-drawer__title) {
+  margin: 0;
+  line-height: 1;
+}
+
+.scenario-script-drawer-title {
+  color: #111827;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .scenario-step-config-shell {
@@ -9482,47 +10200,71 @@ function formatTimeLabel(value?: string | null) {
   padding: 12px 18px 0;
 }
 
-.scenario-custom-drawer-title {
+.scenario-drawer-title-row {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.scenario-drawer-step-order {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #d0d5dd;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.scenario-drawer-step-title {
+  min-width: 0;
+  overflow: hidden;
   color: #111827;
   font-size: 16px;
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.scenario-custom-drawer-title-editing {
-  width: min(100%, 840px);
+.scenario-drawer-title-input {
+  width: min(420px, 56vw);
 }
 
-.scenario-custom-drawer-title-editing :deep(.el-input__wrapper) {
+.scenario-drawer-title-input :deep(.el-input__wrapper) {
   border-radius: 2px;
-  box-shadow: 0 0 0 1px #7c3aed inset;
+  box-shadow: 0 0 0 1px #8b5cf6 inset;
 }
 
-.scenario-custom-drawer-title-editing :deep(.el-input__wrapper.is-focus) {
-  box-shadow: 0 0 0 1px #7c3aed inset;
+.scenario-drawer-title-input :deep(.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 1px #8b5cf6 inset;
 }
 
 .scenario-custom-title-edit {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 18px;
+  height: 18px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 4px;
-  background: #f5f7fb;
-  color: #2563eb;
+  border-radius: 2px;
+  background: transparent;
+  color: #344054;
   cursor: pointer;
   font-size: 15px;
   line-height: 1;
 }
 
 .scenario-custom-title-edit:hover {
-  border-color: #bfdbfe;
-  background: #eff6ff;
+  border-color: #d0d5dd;
+  background: #f2f4f7;
   color: #2563eb;
 }
 
@@ -9550,25 +10292,23 @@ function formatTimeLabel(value?: string | null) {
   margin: 12px 18px 0;
 }
 
+:deep(.scenario-script-operation-drawer .scenario-step-config-tabs) {
+  margin-top: 6px;
+}
+
 .scenario-step-config-body {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   padding: 14px 18px 18px;
 }
 
-.scenario-step-config-body .request-section {
-  margin: 0;
+.scenario-step-response-shell {
+  flex: 0 0 340px;
 }
 
-.scenario-system-request-title {
-  min-width: 0;
-  overflow: hidden;
-  color: #111827;
-  font-size: 15px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.scenario-step-config-body .request-section {
+  margin: 0;
 }
 
 .scenario-system-request-method {
@@ -9611,17 +10351,123 @@ function formatTimeLabel(value?: string | null) {
 .scenario-script-editor-pane {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px 18px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 4px 8px 0;
 }
 
-.scenario-script-name-field {
-  display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
-  align-items: center;
-  gap: 12px;
+.scenario-script-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 8px;
   color: #344054;
   font-size: 13px;
+}
+
+.scenario-script-name-input {
+  width: min(70%, 640px);
+  min-width: 280px;
+}
+
+.scenario-script-field-label,
+.scenario-script-editor-header {
+  color: #344054;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.scenario-script-mode-tabs {
+  display: flex;
+  gap: 0;
+  padding: 8px 8px 0;
+}
+
+.scenario-script-mode-tab-tooltip {
+  display: inline-flex;
+}
+
+.scenario-script-mode-tab {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid #e5e7eb;
+  border-right-width: 0;
+  background: #f8fafc;
+  color: #667085;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.scenario-script-mode-tab:first-child {
+  border-top-left-radius: 4px;
+  border-bottom-left-radius: 4px;
+}
+
+.scenario-script-mode-tab:last-child {
+  border-right-width: 1px;
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+}
+
+.scenario-script-mode-tab.active {
+  background: #fff;
+  color: #2563eb;
+  border-color: #dbeafe;
+  box-shadow: inset 0 0 0 1px #dbeafe;
+}
+
+.scenario-script-mode-tab.is-disabled {
+  border-right-width: 1px;
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+  color: #98a2b3;
+  background: #f8fafc;
+  cursor: not-allowed;
+}
+
+.scenario-script-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 48px;
+  margin-top: 14px;
+  padding: 0 10px;
+  border-top: 1px solid #e5e7eb;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.scenario-script-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scenario-script-code-shell {
+  flex: 1 1 auto;
+  min-height: 420px;
+  height: calc(100vh - 315px);
+  padding: 12px 10px 0;
+}
+
+.scenario-script-code-shell :deep(.ms-monaco-editor) {
+  height: 100%;
+}
+
+.scenario-script-assertion-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+}
+
+.scenario-script-result-shell {
+  margin: 0 16px 16px;
+  min-height: 220px;
+}
+
+.scenario-script-result-shell .response-error-banner {
+  margin-top: 0;
 }
 
 .scenario-step-table {

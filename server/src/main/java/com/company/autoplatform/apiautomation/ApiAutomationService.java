@@ -62,6 +62,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
@@ -1698,8 +1699,45 @@ public class ApiAutomationService {
                 scriptResult.logs(),
                 scriptResult.variables()
         );
-        return syntheticScenarioStep(stepOrder, blankToFallback(step.stepName(), "Script"), scriptResult.success(),
-                System.currentTimeMillis() - started, scriptResult.success() ? null : scriptResult.message(), List.of(processorResult));
+        long durationMs = System.currentTimeMillis() - started;
+        List<ApiAssertionResult> assertionResults = scriptResult.success()
+                ? evaluateScriptStepAssertions(step.assertions(), durationMs, variables)
+                : List.of();
+        boolean assertionsPassed = assertionResults.stream().allMatch(ApiAssertionResult::success);
+        boolean success = scriptResult.success() && assertionsPassed;
+        String errorMessage = !scriptResult.success() ? scriptResult.message()
+                : assertionsPassed ? null : firstFailedMessage(assertionResults);
+        return new RunStepComputation(success, new ApiRunStepResultResponse(
+                null,
+                null,
+                stepOrder,
+                blankToFallback(step.stepName(), "Script"),
+                null,
+                success,
+                durationMs,
+                null,
+                null,
+                assertionResults,
+                List.of(),
+                List.of(processorResult),
+                errorMessage,
+                LocalDateTime.now()
+        ));
+    }
+
+    private List<ApiAssertionResult> evaluateScriptStepAssertions(
+            List<ApiAssertionInput> assertions,
+            long durationMs,
+            Map<String, String> variables
+    ) {
+        List<ApiAssertionInput> scriptAssertions = defaultList(assertions).stream()
+                .filter(Objects::nonNull)
+                .filter(assertion -> {
+                    String type = normalizeAssertionType(assertion);
+                    return "VARIABLE".equals(type) || "SCRIPT".equals(type);
+                })
+                .toList();
+        return evaluateAssertions(scriptAssertions, null, null, durationMs, variables);
     }
 
     private ResolvedRequest resolveRequest(ApiRequestConfigInput config, ResolvedEnvironment environment, Map<String, String> variables) {

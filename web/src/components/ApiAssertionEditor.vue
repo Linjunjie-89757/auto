@@ -18,6 +18,7 @@ import { testFastExtraction } from '../utils/apiFastExtraction'
 const props = defineProps<{
   modelValue: ApiAssertionConfig[]
   latestResponse?: ApiResponseSnapshot | null
+  allowedTypes?: ApiAssertionType[]
 }>()
 
 const emit = defineEmits<{
@@ -39,6 +40,12 @@ const assertionOptions: Array<{ label: string, value: ApiAssertionType }> = [
   { label: '变量', value: 'VARIABLE' },
   { label: '脚本', value: 'SCRIPT' },
 ]
+const availableAssertionOptions = computed(() => {
+  if (!props.allowedTypes?.length) {
+    return assertionOptions
+  }
+  return assertionOptions.filter(option => props.allowedTypes?.includes(option.value))
+})
 
 const conditionOptions: Array<{ label: string, value: ApiAssertionCondition }> = [
   { label: '等于', value: 'EQUALS' },
@@ -128,19 +135,26 @@ function normalizeAssertion(assertion: ApiAssertionConfig): ApiAssertionConfig {
 
 function normalizeAssertionType(assertion: ApiAssertionConfig): ApiAssertionType {
   const type = (assertion.assertionType || assertion.type || 'RESPONSE_CODE').toUpperCase()
+  let normalizedType: ApiAssertionType | null = null
   if (type === 'STATUS_CODE') {
-    return 'RESPONSE_CODE'
+    normalizedType = 'RESPONSE_CODE'
   }
-  if (type === 'HEADER_EQUALS' || type === 'HEADER_CONTAINS') {
-    return 'RESPONSE_HEADER'
+  else if (type === 'HEADER_EQUALS' || type === 'HEADER_CONTAINS') {
+    normalizedType = 'RESPONSE_HEADER'
   }
-  if (type === 'BODY_JSONPATH_EQUALS' || type === 'BODY_JSONPATH_CONTAINS') {
-    return 'RESPONSE_BODY'
+  else if (type === 'BODY_JSONPATH_EQUALS' || type === 'BODY_JSONPATH_CONTAINS') {
+    normalizedType = 'RESPONSE_BODY'
   }
-  if (type === 'RESPONSE_TIME_LE') {
-    return 'RESPONSE_TIME'
+  else if (type === 'RESPONSE_TIME_LE') {
+    normalizedType = 'RESPONSE_TIME'
   }
-  return assertionOptions.some(item => item.value === type) ? type as ApiAssertionType : 'RESPONSE_CODE'
+  else if (assertionOptions.some(item => item.value === type)) {
+    normalizedType = type as ApiAssertionType
+  }
+  if (normalizedType && availableAssertionOptions.value.some(item => item.value === normalizedType)) {
+    return normalizedType
+  }
+  return availableAssertionOptions.value[0]?.value || 'RESPONSE_CODE'
 }
 
 function normalizeCondition(value?: string): ApiAssertionCondition {
@@ -213,7 +227,8 @@ function defaultExpression(type: 'JSON_PATH' | 'X_PATH' | 'REGEX') {
 }
 
 function defaultAssertionName(type: ApiAssertionType) {
-  const option = assertionOptions.find(item => item.value === type)
+  const option = availableAssertionOptions.value.find(item => item.value === type)
+    || assertionOptions.find(item => item.value === type)
   return option?.label ?? '断言'
 }
 
@@ -417,7 +432,7 @@ function handleFastExtractionApply(config: FastExtractionConfig, matchResult: st
           <el-button type="primary" plain data-testid="assertion-add-button">添加断言</el-button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item v-for="option in assertionOptions" :key="option.value" :command="option.value">
+              <el-dropdown-item v-for="option in availableAssertionOptions" :key="option.value" :command="option.value">
                 {{ option.label }}
               </el-dropdown-item>
             </el-dropdown-menu>

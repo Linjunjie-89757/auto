@@ -1,4 +1,4 @@
-﻿CREATE TABLE IF NOT EXISTS tb_api_scenario_module (
+CREATE TABLE IF NOT EXISTS tb_api_scenario_module (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     workspace_id BIGINT NOT NULL,
     parent_id BIGINT,

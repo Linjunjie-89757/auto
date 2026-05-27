@@ -19,13 +19,14 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import 'monaco-editor/esm/vs/language/json/monaco.contribution'
 import 'monaco-editor/esm/vs/basic-languages/xml/xml.contribution'
+import 'monaco-editor/esm/vs/language/typescript/monaco.contribution'
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker'
 import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker'
 import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker'
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
 
-type EditorLanguage = 'json' | 'xml' | 'text'
+type EditorLanguage = 'json' | 'xml' | 'text' | 'javascript'
 type EditorWordWrap = 'off' | 'on' | 'wordWrapColumn' | 'bounded'
 
 const props = withDefaults(defineProps<{
@@ -284,6 +285,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
   editor?.dispose()
   editor = null
+})
+
+defineExpose({
+  formatDocument,
 })
 </script>
 

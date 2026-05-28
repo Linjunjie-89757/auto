@@ -114,6 +114,11 @@ export interface AiReviewResult {
   structured: boolean
 }
 
+export type AiProtocolType =
+  | 'OPENAI_CHAT_COMPLETIONS'
+  | 'OPENAI_RESPONSES'
+  | 'AZURE_OPENAI'
+
 export interface CreateCasePayload {
   workspaceCode?: string
   directoryId?: number | null
@@ -144,6 +149,7 @@ export interface AiCaseConfig {
   workspaceCode: string
   workspaceName: string
   roleType: 'CASE_GENERATOR' | 'CASE_REVIEWER'
+  protocolType: AiProtocolType
   provider: string
   model: string
   baseUrl: string
@@ -190,7 +196,8 @@ export interface AiRequirementAsset {
 export interface SaveAiCaseConfigPayload {
   workspaceCode?: string
   roleType: 'CASE_GENERATOR' | 'CASE_REVIEWER'
-  provider: string
+  protocolType: AiProtocolType
+  provider?: string
   model: string
   baseUrl: string
   apiKey?: string

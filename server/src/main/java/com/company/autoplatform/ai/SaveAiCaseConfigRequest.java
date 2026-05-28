@@ -10,7 +10,8 @@ import jakarta.validation.constraints.NotNull;
 public record SaveAiCaseConfigRequest(
         String workspaceCode,
         @NotBlank(message = "AI role type is required") String roleType,
-        @NotBlank(message = "AI provider is required") String provider,
+        String protocolType,
+        String provider,
         @NotBlank(message = "AI model is required") String model,
         @NotBlank(message = "AI base URL is required") String baseUrl,
         String apiKey,

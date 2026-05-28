@@ -17,6 +17,9 @@ public class AiCaseConfigEntity extends BaseEntity {
     @TableField("role_type")
     private String roleType;
 
+    @TableField("protocol_type")
+    private String protocolType;
+
     private String provider;
 
     private String model;

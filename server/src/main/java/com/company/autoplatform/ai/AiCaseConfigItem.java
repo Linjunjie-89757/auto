@@ -5,6 +5,7 @@ public record AiCaseConfigItem(
         String workspaceCode,
         String workspaceName,
         String roleType,
+        String protocolType,
         String provider,
         String model,
         String baseUrl,

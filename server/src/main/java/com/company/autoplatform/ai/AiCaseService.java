@@ -36,6 +36,9 @@ public class AiCaseService {
     private static final String GLOBAL_WORKSPACE_NAME = "GLOBAL";
     private static final String ROLE_GENERATOR = "CASE_GENERATOR";
     private static final String ROLE_REVIEWER = "CASE_REVIEWER";
+    private static final String PROTOCOL_OPENAI_CHAT = "OPENAI_CHAT_COMPLETIONS";
+    private static final String PROTOCOL_OPENAI_RESPONSES = "OPENAI_RESPONSES";
+    private static final String PROTOCOL_AZURE_OPENAI = "AZURE_OPENAI";
 
     private final AiCaseConfigMapper aiCaseConfigMapper;
     private final AiRequirementAssetMapper aiRequirementAssetMapper;
@@ -298,7 +301,9 @@ public class AiCaseService {
 
     private void applyRequest(AiCaseConfigEntity entity, SaveAiCaseConfigRequest request, boolean creating) {
         entity.setRoleType(normalizeRoleType(request.roleType()));
-        entity.setProvider(normalizeProvider(request.provider()));
+        String protocolType = normalizeProtocolType(request.protocolType(), request.provider(), request.baseUrl());
+        entity.setProtocolType(protocolType);
+        entity.setProvider(providerForProtocolType(protocolType));
         entity.setModel(request.model().trim());
         entity.setBaseUrl(request.baseUrl().trim());
         if (creating) {
@@ -327,6 +332,7 @@ public class AiCaseService {
                 GLOBAL_WORKSPACE_CODE,
                 GLOBAL_WORKSPACE_NAME,
                 entity.getRoleType(),
+                resolveProtocolType(entity),
                 entity.getProvider(),
                 entity.getModel(),
                 entity.getBaseUrl(),
@@ -475,6 +481,41 @@ public class AiCaseService {
 
     private String normalizeProvider(String provider) {
         return provider == null ? "" : provider.trim().toUpperCase(Locale.ROOT).replace(' ', '_');
+    }
+
+    private String normalizeProtocolType(String protocolType, String provider, String baseUrl) {
+        String normalized = protocolType == null ? "" : protocolType.trim().toUpperCase(Locale.ROOT).replace(' ', '_');
+        if (!normalized.isEmpty()) {
+            return switch (normalized) {
+                case PROTOCOL_OPENAI_CHAT, PROTOCOL_OPENAI_RESPONSES, PROTOCOL_AZURE_OPENAI -> normalized;
+                default -> throw new BadRequestException("AI protocol type is invalid");
+            };
+        }
+        return mapLegacyProviderToProtocolType(provider, baseUrl);
+    }
+
+    private String resolveProtocolType(AiCaseConfigEntity entity) {
+        return normalizeProtocolType(entity.getProtocolType(), entity.getProvider(), entity.getBaseUrl());
+    }
+
+    private String mapLegacyProviderToProtocolType(String provider, String baseUrl) {
+        String normalizedProvider = normalizeProvider(provider);
+        if ("AZURE_OPENAI".equals(normalizedProvider)) {
+            return PROTOCOL_AZURE_OPENAI;
+        }
+        if ("INTERNAL_PROXY".equals(normalizedProvider)) {
+            String normalizedBaseUrl = baseUrl == null ? "" : baseUrl.trim().toLowerCase(Locale.ROOT);
+            return normalizedBaseUrl.contains("/responses") ? PROTOCOL_OPENAI_RESPONSES : PROTOCOL_OPENAI_CHAT;
+        }
+        return PROTOCOL_OPENAI_CHAT;
+    }
+
+    private String providerForProtocolType(String protocolType) {
+        return switch (protocolType) {
+            case PROTOCOL_OPENAI_RESPONSES -> "INTERNAL_PROXY";
+            case PROTOCOL_AZURE_OPENAI -> "AZURE_OPENAI";
+            default -> "OPENAI";
+        };
     }
 
     private String normalizeRoleType(String roleType) {
@@ -788,6 +829,5 @@ public class AiCaseService {
         return apiKey.substring(0, 4) + "*".repeat(apiKey.length() - 8) + apiKey.substring(apiKey.length() - 4);
     }
 }
-
 
 

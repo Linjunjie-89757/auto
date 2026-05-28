@@ -3,17 +3,19 @@ package com.company.autoplatform.ai;
 import com.company.autoplatform.common.BadRequestException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.util.Base64;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -21,6 +23,12 @@ import java.util.Map;
 
 @Component
 public class AiProviderClient {
+    private static final String PROTOCOL_OPENAI_CHAT = "OPENAI_CHAT_COMPLETIONS";
+    private static final String PROTOCOL_OPENAI_RESPONSES = "OPENAI_RESPONSES";
+    private static final String PROTOCOL_AZURE_OPENAI = "AZURE_OPENAI";
+    private static final int LOG_BODY_LIMIT = 1000;
+
+    private static final Logger log = LoggerFactory.getLogger(AiProviderClient.class);
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final HttpClient httpClient;
@@ -55,31 +63,83 @@ public class AiProviderClient {
     }
 
     private String requestStructuredContent(AiCaseConfigEntity config, String apiKey, String prompt, List<ImageInput> images) {
-        String endpoint = resolveEndpoint(config.getBaseUrl());
+        String protocolType = resolveProtocolType(config);
+        String endpoint = resolveEndpointByProtocol(config.getBaseUrl(), protocolType);
         try {
-            String requestBody = buildRequestBody(config, prompt, images, false);
-            HttpResponse<String> response = sendChatRequest(endpoint, apiKey, config.getProvider(), requestBody);
+            String requestBody = buildRequestBodyByProtocol(config, protocolType, prompt, images, false);
+            HttpResponse<String> response = sendRequest(endpoint, apiKey, protocolType, requestBody);
             if (response.statusCode() >= 400) {
+                log.warn(
+                        "AI provider returned error response. protocolType={}, model={}, endpoint={}, imageCount={}, status={}, body={}",
+                        protocolType,
+                        config.getModel(),
+                        endpoint,
+                        images == null ? 0 : images.size(),
+                        response.statusCode(),
+                        abbreviate(response.body())
+                );
                 if (requiresImageCapability(response.body(), images)) {
-                    throw new BadRequestException("当前 AI 模型或服务不支持图片输入，请切换支持图像理解的多模态模型后再试");
+                    throw new BadRequestException("The current AI model or service does not support image input");
                 }
                 if (requiresStreamFallback(response.body())) {
-                    return requestStructuredContentStream(endpoint, config, apiKey, prompt, images);
+                    return requestStructuredContentStream(endpoint, protocolType, config, apiKey, prompt, images);
                 }
                 throw new BadRequestException("AI provider request failed: " + response.body());
             }
-            return extractStructuredContent(response.body());
-        } catch (IOException | InterruptedException exception) {
+            return extractContentByProtocol(protocolType, response.body());
+        } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
+            log.error(
+                    "AI provider request interrupted. protocolType={}, model={}, endpoint={}, imageCount={}, promptLength={}, exception={}: {}",
+                    protocolType,
+                    config.getModel(),
+                    endpoint,
+                    images == null ? 0 : images.size(),
+                    prompt == null ? 0 : prompt.length(),
+                    exception.getClass().getSimpleName(),
+                    exception.getMessage(),
+                    exception
+            );
+            throw new BadRequestException("AI provider request failed");
+        } catch (IOException exception) {
+            log.error(
+                    "AI provider request I/O failure. protocolType={}, model={}, endpoint={}, imageCount={}, promptLength={}, exception={}: {}",
+                    protocolType,
+                    config.getModel(),
+                    endpoint,
+                    images == null ? 0 : images.size(),
+                    prompt == null ? 0 : prompt.length(),
+                    exception.getClass().getSimpleName(),
+                    exception.getMessage(),
+                    exception
+            );
             throw new BadRequestException("AI provider request failed");
         }
     }
 
-    private String requestStructuredContentStream(String endpoint, AiCaseConfigEntity config, String apiKey, String prompt, List<ImageInput> images)
-            throws IOException, InterruptedException {
-        String requestBody = buildRequestBody(config, prompt, images, true);
-        HttpResponse<String> response = sendChatRequest(endpoint, apiKey, config.getProvider(), requestBody);
+    private String requestStructuredContentStream(
+            String endpoint,
+            String protocolType,
+            AiCaseConfigEntity config,
+            String apiKey,
+            String prompt,
+            List<ImageInput> images
+    ) throws IOException, InterruptedException {
+        if (!PROTOCOL_OPENAI_CHAT.equals(protocolType) && !PROTOCOL_AZURE_OPENAI.equals(protocolType)) {
+            throw new BadRequestException("The selected AI protocol does not support stream fallback");
+        }
+        String requestBody = buildRequestBodyByProtocol(config, protocolType, prompt, images, true);
+        HttpResponse<String> response = sendRequest(endpoint, apiKey, protocolType, requestBody);
         if (response.statusCode() >= 400) {
+            log.warn(
+                    "AI provider stream fallback returned error response. protocolType={}, model={}, endpoint={}, imageCount={}, status={}, body={}",
+                    protocolType,
+                    config.getModel(),
+                    endpoint,
+                    images == null ? 0 : images.size(),
+                    response.statusCode(),
+                    abbreviate(response.body())
+            );
             throw new BadRequestException("AI provider request failed: " + response.body());
         }
         String mergedContent = mergeStreamingContent(response.body());
@@ -89,7 +149,25 @@ public class AiProviderClient {
         return stripJsonFence(mergedContent);
     }
 
-    private String buildRequestBody(AiCaseConfigEntity config, String prompt, List<ImageInput> images, boolean stream) throws IOException {
+    private String buildRequestBodyByProtocol(
+            AiCaseConfigEntity config,
+            String protocolType,
+            String prompt,
+            List<ImageInput> images,
+            boolean stream
+    ) throws IOException {
+        if (PROTOCOL_OPENAI_RESPONSES.equals(protocolType)) {
+            return buildResponsesRequestBody(config, prompt, images);
+        }
+        return buildChatCompletionsRequestBody(config, prompt, images, stream);
+    }
+
+    private String buildChatCompletionsRequestBody(
+            AiCaseConfigEntity config,
+            String prompt,
+            List<ImageInput> images,
+            boolean stream
+    ) throws IOException {
         List<Object> userContent = new ArrayList<>();
         userContent.add(Map.of("type", "text", "text", prompt));
         for (ImageInput image : images) {
@@ -109,18 +187,42 @@ public class AiProviderClient {
         ));
     }
 
+    private String buildResponsesRequestBody(AiCaseConfigEntity config, String prompt, List<ImageInput> images) throws IOException {
+        List<Object> inputContent = new ArrayList<>();
+        inputContent.add(Map.of("type", "input_text", "text", prompt));
+        if (images != null) {
+            for (ImageInput image : images) {
+                inputContent.add(Map.of(
+                        "type", "input_image",
+                        "image_url", buildDataUrl(image)
+                ));
+            }
+        }
+        return objectMapper.writeValueAsString(Map.of(
+                "model", config.getModel(),
+                "temperature", config.getTemperature(),
+                "instructions", "You are a QA assistant that outputs only structured JSON.",
+                "input", List.of(
+                        Map.of(
+                                "role", "user",
+                                "content", inputContent
+                        )
+                )
+        ));
+    }
+
     private String buildDataUrl(ImageInput image) {
         return "data:" + image.contentType() + ";base64," + Base64.getEncoder().encodeToString(image.bytes());
     }
 
-    private HttpResponse<String> sendChatRequest(String endpoint, String apiKey, String provider, String requestBody)
+    private HttpResponse<String> sendRequest(String endpoint, String apiKey, String protocolType, String requestBody)
             throws IOException, InterruptedException {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(endpoint))
                 .timeout(Duration.ofSeconds(60))
                 .header("Content-Type", "application/json");
 
-        if ("AZURE_OPENAI".equalsIgnoreCase(normalizeProvider(provider))) {
+        if (PROTOCOL_AZURE_OPENAI.equals(protocolType)) {
             builder.header("api-key", apiKey);
         } else {
             builder.header("Authorization", "Bearer " + apiKey);
@@ -132,13 +234,52 @@ public class AiProviderClient {
         );
     }
 
-    private String extractStructuredContent(String responseBody) throws IOException {
+    private String extractContentByProtocol(String protocolType, String responseBody) throws IOException {
+        if (PROTOCOL_OPENAI_RESPONSES.equals(protocolType)) {
+            return extractResponsesContent(responseBody);
+        }
+        return extractChatCompletionsContent(responseBody);
+    }
+
+    private String extractChatCompletionsContent(String responseBody) throws IOException {
         JsonNode root = objectMapper.readTree(responseBody);
         JsonNode contentNode = root.path("choices").path(0).path("message").path("content");
         if (contentNode.isMissingNode() || contentNode.isNull()) {
             throw new BadRequestException("AI provider returned empty content");
         }
         return stripJsonFence(extractContent(contentNode));
+    }
+
+    private String extractResponsesContent(String responseBody) throws IOException {
+        JsonNode root = objectMapper.readTree(responseBody);
+        JsonNode outputText = root.path("output_text");
+        if (outputText.isTextual() && !outputText.asText().isBlank()) {
+            return stripJsonFence(outputText.asText());
+        }
+
+        JsonNode output = root.path("output");
+        if (!output.isArray()) {
+            throw new BadRequestException("AI provider returned empty content");
+        }
+
+        StringBuilder builder = new StringBuilder();
+        for (JsonNode item : output) {
+            JsonNode content = item.path("content");
+            if (!content.isArray()) {
+                continue;
+            }
+            for (JsonNode contentItem : content) {
+                JsonNode textNode = contentItem.path("text");
+                if (textNode.isTextual()) {
+                    builder.append(textNode.asText());
+                }
+            }
+        }
+        String merged = builder.toString().trim();
+        if (merged.isEmpty()) {
+            throw new BadRequestException("AI provider returned empty content");
+        }
+        return stripJsonFence(merged);
     }
 
     private boolean requiresStreamFallback(String responseBody) {
@@ -194,10 +335,19 @@ public class AiProviderClient {
                 """;
     }
 
-    private String resolveEndpoint(String baseUrl) {
+    private String resolveEndpointByProtocol(String baseUrl, String protocolType) {
         String trimmed = baseUrl == null ? "" : baseUrl.trim();
         if (trimmed.isEmpty()) {
             throw new BadRequestException("AI base URL is required");
+        }
+        if (PROTOCOL_OPENAI_RESPONSES.equals(protocolType)) {
+            if (trimmed.contains("/responses")) {
+                return trimmed;
+            }
+            if (trimmed.endsWith("/")) {
+                return trimmed + "responses";
+            }
+            return trimmed + "/responses";
         }
         if (trimmed.contains("/chat/completions")) {
             return trimmed;
@@ -208,12 +358,28 @@ public class AiProviderClient {
         return trimmed + "/chat/completions";
     }
 
+    private String resolveProtocolType(AiCaseConfigEntity config) {
+        String normalized = normalizeProtocolType(config.getProtocolType());
+        if (!normalized.isEmpty()) {
+            return normalized;
+        }
+        String provider = normalizeProvider(config.getProvider());
+        if ("AZURE_OPENAI".equals(provider)) {
+            return PROTOCOL_AZURE_OPENAI;
+        }
+        if ("INTERNAL_PROXY".equals(provider)) {
+            String baseUrl = config.getBaseUrl() == null ? "" : config.getBaseUrl().trim().toLowerCase(Locale.ROOT);
+            return baseUrl.contains("/responses") ? PROTOCOL_OPENAI_RESPONSES : PROTOCOL_OPENAI_CHAT;
+        }
+        return PROTOCOL_OPENAI_CHAT;
+    }
+
     private AiGeneratedCasesResult parseGeneratedCases(String normalizedJson, Integer maxCases) {
         try {
             JsonNode parsed = objectMapper.readTree(normalizedJson);
             JsonNode casesNode = parsed.isArray() ? parsed : parsed.path("cases");
             if (!casesNode.isArray()) {
-                throw new BadRequestException("AI 返回结果无法解析为结构化用例，请调整 Prompt 或稍后重试");
+                throw new BadRequestException("AI response cannot be parsed as structured test cases");
             }
 
             List<GeneratedAiCaseItem> items = new ArrayList<>();
@@ -231,21 +397,21 @@ public class AiProviderClient {
                 String steps = optionalText(item, "steps");
                 String expectedResult = optionalText(item, "expectedResult");
                 if (title == null || title.isBlank()) {
-                    invalidCases.add(new AiInvalidCaseItem(index, fallbackTitle(item, index), "缺少用例名称"));
+                    invalidCases.add(new AiInvalidCaseItem(index, fallbackTitle(item, index), "Missing case title"));
                     continue;
                 }
                 if (steps == null || steps.isBlank()) {
-                    invalidCases.add(new AiInvalidCaseItem(index, title, "缺少测试步骤"));
+                    invalidCases.add(new AiInvalidCaseItem(index, title, "Missing test steps"));
                     continue;
                 }
                 if (expectedResult == null || expectedResult.isBlank()) {
-                    invalidCases.add(new AiInvalidCaseItem(index, title, "缺少预期结果"));
+                    invalidCases.add(new AiInvalidCaseItem(index, title, "Missing expected result"));
                     continue;
                 }
                 String normalizedCaseType = normalizeCaseType(optionalText(item, "caseType"), itemWarnings);
                 String normalizedPriority = normalizePriority(optionalText(item, "priority"), itemWarnings);
                 if (!itemWarnings.isEmpty()) {
-                    warnings.add("第 " + index + " 条候选用例已自动修正部分字段");
+                    warnings.add("Candidate case " + index + " has normalized fields");
                 }
                 items.add(new GeneratedAiCaseItem(
                         title,
@@ -262,11 +428,11 @@ public class AiProviderClient {
                 ));
             }
             if (items.isEmpty()) {
-                throw new BadRequestException("AI 返回结果已解析，但没有可用用例，请检查 Prompt 或补充需求描述");
+                throw new BadRequestException("AI response was parsed, but no valid test cases were found");
             }
             return new AiGeneratedCasesResult(items, warnings, invalidCases, normalizedJson);
         } catch (IOException exception) {
-            throw new BadRequestException("AI 返回结果无法解析为结构化用例，请调整 Prompt 或稍后重试");
+            throw new BadRequestException("AI response cannot be parsed as structured test cases");
         }
     }
 
@@ -284,13 +450,13 @@ public class AiProviderClient {
                 summary = suggestions.get(0);
             }
             if (summary == null || summary.isBlank()) {
-                summary = "AI 已完成评审，请结合问题和建议决定是否采纳。";
+                summary = "AI review completed. Please combine the issues and suggestions to decide next steps.";
             }
             return new AiReviewResult(result, summary, issues, suggestions, normalizedJson, true);
         } catch (IOException exception) {
             return new AiReviewResult(
                     "SUGGEST",
-                    "AI 返回了非结构化评审结果，请参考原文后再决定是否采纳。",
+                    "AI returned a non-structured review result. Please inspect the raw content.",
                     Collections.emptyList(),
                     Collections.emptyList(),
                     normalizedJson,
@@ -351,16 +517,20 @@ public class AiProviderClient {
         return provider == null ? "" : provider.trim().replace(' ', '_').toUpperCase(Locale.ROOT);
     }
 
+    private String normalizeProtocolType(String protocolType) {
+        return protocolType == null ? "" : protocolType.trim().replace(' ', '_').toUpperCase(Locale.ROOT);
+    }
+
     private String normalizeCaseType(String caseType, List<String> warnings) {
         if (caseType == null || caseType.isBlank()) {
-            warnings.add("类型缺失，已回退为 FUNCTION");
+            warnings.add("caseType is missing, defaulted to FUNCTION");
             return "FUNCTION";
         }
         String normalized = caseType.trim().toUpperCase(Locale.ROOT);
         return switch (normalized) {
             case "FUNCTION", "BOUNDARY", "EXCEPTION", "REGRESSION" -> normalized;
             default -> {
-                warnings.add("类型“" + caseType + "”无法识别，已回退为 FUNCTION");
+                warnings.add("caseType '" + caseType + "' is not recognized, defaulted to FUNCTION");
                 yield "FUNCTION";
             }
         };
@@ -368,14 +538,14 @@ public class AiProviderClient {
 
     private String normalizePriority(String priority, List<String> warnings) {
         if (priority == null || priority.isBlank()) {
-            warnings.add("优先级缺失，已回退为 P1");
+            warnings.add("priority is missing, defaulted to P1");
             return "P1";
         }
         String normalized = priority.trim().toUpperCase(Locale.ROOT);
         return switch (normalized) {
             case "P0", "P1", "P2", "P3" -> normalized;
             default -> {
-                warnings.add("优先级“" + priority + "”无法识别，已回退为 P1");
+                warnings.add("priority '" + priority + "' is not recognized, defaulted to P1");
                 yield "P1";
             }
         };
@@ -383,7 +553,7 @@ public class AiProviderClient {
 
     private String fallbackTitle(JsonNode item, int index) {
         String value = optionalText(item, "title");
-        return value == null || value.isBlank() ? "候选用例 " + index : value;
+        return value == null || value.isBlank() ? "Candidate case " + index : value;
     }
 
     private List<String> stringList(JsonNode node) {
@@ -408,6 +578,13 @@ public class AiProviderClient {
             case "APPROVE", "REJECT", "SUGGEST" -> normalized;
             default -> "SUGGEST";
         };
+    }
+
+    private String abbreviate(String value) {
+        if (value == null || value.length() <= LOG_BODY_LIMIT) {
+            return value;
+        }
+        return value.substring(0, LOG_BODY_LIMIT) + "...(truncated)";
     }
 
     public record ImageInput(

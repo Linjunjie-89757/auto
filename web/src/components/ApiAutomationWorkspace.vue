@@ -2,6 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { Directive } from 'vue'
 import {
+  ArrowLeft,
+  ArrowRight,
   ArrowDown,
   ArrowUp,
   CaretRight,
@@ -118,6 +120,10 @@ type ScenarioEditorTab = {
   key: string
   id: number | null
   title: string
+  draft: ApiScenarioDetail | null
+  lastRunStepResults: ApiRunStepResult[]
+  savedFingerprint: string
+  isDirty: boolean
 }
 
 type ScenarioModuleTreeNode = {
@@ -145,6 +151,12 @@ type ScenarioImportTreeNode = {
   moduleId: number | null
   count: number
   children: ScenarioImportTreeNode[]
+}
+
+type TabStripOverflowState = {
+  overflow: boolean
+  arrivedLeft: boolean
+  arrivedRight: boolean
 }
 
 const requestMethodOptions = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'TRACE'] as const
@@ -228,6 +240,75 @@ function setOverflowTitle(element: HTMLElement, value?: string) {
   })
 }
 
+function updateTabStripOverflowState(element: HTMLElement | null, state: TabStripOverflowState) {
+  if (!element) {
+    state.overflow = false
+    state.arrivedLeft = true
+    state.arrivedRight = true
+    return
+  }
+  const maxScrollLeft = Math.max(0, element.scrollWidth - element.clientWidth)
+  state.overflow = maxScrollLeft > 1
+  state.arrivedLeft = element.scrollLeft <= 1
+  state.arrivedRight = element.scrollLeft >= maxScrollLeft - 1
+}
+
+function scrollTabStrip(element: HTMLElement | null, state: TabStripOverflowState, direction: 'left' | 'right') {
+  if (!element || !state.overflow) {
+    return
+  }
+  const delta = Math.max(160, element.clientWidth - 80)
+  const nextLeft = direction === 'left'
+    ? Math.max(0, element.scrollLeft - delta)
+    : Math.min(element.scrollWidth - element.clientWidth, element.scrollLeft + delta)
+  element.scrollTo({ left: nextLeft, behavior: 'smooth' })
+}
+
+function scrollActiveTabIntoView(element: HTMLElement | null) {
+  if (!element) {
+    return
+  }
+  const activeItem = element.querySelector<HTMLElement>('.ms-like-editor-tab.active')
+  if (!activeItem) {
+    return
+  }
+  const itemLeft = activeItem.offsetLeft
+  const itemRight = itemLeft + activeItem.offsetWidth
+  const viewLeft = element.scrollLeft
+  const viewRight = viewLeft + element.clientWidth
+  if (itemLeft < viewLeft) {
+    element.scrollTo({
+      left: Math.max(0, itemLeft - 24),
+      behavior: 'smooth',
+    })
+    return
+  }
+  if (itemRight > viewRight) {
+    element.scrollTo({
+      left: Math.min(element.scrollWidth - element.clientWidth, itemRight - element.clientWidth + 24),
+      behavior: 'smooth',
+    })
+  }
+}
+
+function updateRequestTabOverflowState() {
+  updateTabStripOverflowState(requestTabNavRef.value, requestTabOverflow)
+}
+
+function updateScenarioTabOverflowState() {
+  updateTabStripOverflowState(scenarioTabNavRef.value, scenarioTabOverflow)
+}
+
+function syncRequestTabStripState() {
+  scrollActiveTabIntoView(requestTabNavRef.value)
+  updateRequestTabOverflowState()
+}
+
+function syncScenarioTabStripState() {
+  scrollActiveTabIntoView(scenarioTabNavRef.value)
+  updateScenarioTabOverflowState()
+}
+
 const loading = ref(false)
 const saving = ref(false)
 const reportDrawerVisible = ref(false)
@@ -288,7 +369,15 @@ const selectedEnvironmentId = ref<number | null>(null)
 const selectedVariableSetId = ref<number | null>(null)
 const selectedReportId = ref<number | null>(null)
 const requestEditorTabs = ref<RequestEditorTab[]>([])
-const scenarioEditorTabs = ref<ScenarioEditorTab[]>([{ key: 'scenario-list', id: null, title: '全部场景' }])
+const scenarioEditorTabs = ref<ScenarioEditorTab[]>([{
+  key: 'scenario-list',
+  id: null,
+  title: '全部场景',
+  draft: null,
+  lastRunStepResults: [],
+  savedFingerprint: '',
+  isDirty: false,
+}])
 const activeRequestEditorKey = ref('')
 const activeScenarioEditorKey = ref('scenario-list')
 const activeScenarioDetailTab = ref<ScenarioDetailTab>('steps')
@@ -449,6 +538,30 @@ const scenarioForm = reactive<ApiScenarioDetail>({
   steps: [],
 })
 
+function cloneScenarioDetail(detail: ApiScenarioDetail): ApiScenarioDetail {
+  return JSON.parse(JSON.stringify(detail)) as ApiScenarioDetail
+}
+
+function fingerprintScenarioDetail(detail: ApiScenarioDetail) {
+  return JSON.stringify({
+    workspaceCode: detail.workspaceCode || '',
+    name: detail.name || '',
+    directoryName: detail.directoryName || '',
+    moduleId: detail.moduleId ?? null,
+    priority: detail.priority || 'P1',
+    status: detail.status || 'IN_PROGRESS',
+    description: detail.description || '',
+    tags: [...(detail.tags || [])],
+    defaultEnvironmentId: detail.defaultEnvironmentId ?? null,
+    variableSetId: detail.variableSetId ?? null,
+    continueOnFailure: !!detail.continueOnFailure,
+    relatedCaseId: detail.relatedCaseId ?? null,
+    scenarioVariables: detail.scenarioVariables || [],
+    scenarioAssertions: detail.scenarioAssertions || [],
+    steps: normalizeScenarioStepPayload(detail.steps || []),
+  })
+}
+
 const scenarioCustomRequestForm = reactive<ApiScenarioStep>({
   id: '',
   stepName: '',
@@ -551,6 +664,9 @@ const canWriteVariableSet = computed(() => canWriteTarget(variableSetForm.worksp
 const canCreateInCurrentScope = computed(() => (
   isAllScope.value ? writableWorkspaces.value.length > 0 : canWriteWorkspace(workspaceCode.value)
 ))
+const scenarioClosableEditorTabs = computed(() => scenarioEditorTabs.value.filter(item => item.key !== 'scenario-list'))
+const showScenarioEditorMoreAction = computed(() => scenarioClosableEditorTabs.value.length > 0)
+const activeScenarioEditorTab = computed(() => scenarioEditorTabs.value.find(item => item.key === activeScenarioEditorKey.value) ?? null)
 const currentDefinitionWorkspaceLabel = computed(() => {
   if (!definitionForm.workspaceCode) {
     return isAllScope.value ? '未选择空间' : '当前空间'
@@ -631,7 +747,22 @@ const canDebugScenarioSystemRequest = computed(() => {
 })
 const showCaseListContent = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && activeRequestTab.value === 'cases')
 const visibleRequestEditorTabs = computed(() => requestEditorTabs.value.filter(item => item.resourceType === 'definition'))
+const showRequestEditorMoreAction = computed(() => visibleRequestEditorTabs.value.length > 0)
 const canCreateCaseForCurrentDefinition = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && !!definitionForm.id)
+const requestTabNavRef = ref<HTMLElement | null>(null)
+const scenarioTabNavRef = ref<HTMLElement | null>(null)
+const requestTabOverflow = reactive<TabStripOverflowState>({
+  overflow: false,
+  arrivedLeft: true,
+  arrivedRight: true,
+})
+const scenarioTabOverflow = reactive<TabStripOverflowState>({
+  overflow: false,
+  arrivedLeft: true,
+  arrivedRight: true,
+})
+const resizeObservers: ResizeObserver[] = []
+const tabStripCleanupFns: Array<() => void> = []
 
 const scenarioModuleTree = computed<ScenarioModuleTreeNode[]>(() => {
   const workspaceCodes = isAllScope.value
@@ -2052,6 +2183,10 @@ watch(caseDrawerForm, () => {
   syncCaseDrawerEditorTab()
 }, { deep: true })
 
+watch(scenarioForm, () => {
+  syncActiveScenarioEditorTab()
+}, { deep: true })
+
 watch(filteredDefinitions, (items) => {
   if (activeRequestEditorTab.value?.draft.id === 0) {
     return
@@ -2086,6 +2221,32 @@ watch(currentDefinitionCases, () => {
   }
 }, { deep: true })
 
+watch(
+  () => [
+    activeRequestEditorKey.value,
+    visibleRequestEditorTabs.value.map(item => `${item.key}:${item.title}:${item.method}:${item.isDirty}`).join('|'),
+  ],
+  () => {
+    void nextTick(() => {
+      syncRequestTabStripState()
+    })
+  },
+  { immediate: true },
+)
+
+watch(
+  () => [
+    activeScenarioEditorKey.value,
+    scenarioEditorTabs.value.map(item => `${item.key}:${item.title}:${item.isDirty}`).join('|'),
+  ],
+  () => {
+    void nextTick(() => {
+      syncScenarioTabStripState()
+    })
+  },
+  { immediate: true },
+)
+
 watch(() => caseListSettings.pageSize.value, () => {
   caseListCurrentPage.value = 1
 })
@@ -2118,11 +2279,36 @@ onMounted(() => {
   openNewRequestTab()
   caseListSettings.load()
   document.addEventListener('mousedown', handleScenarioStepNameOutsidePointerDown, true)
+  void nextTick(() => {
+    const registerTabStrip = (element: HTMLElement | null, handler: () => void) => {
+      if (!element) {
+        return
+      }
+      const onScroll = () => handler()
+      element.addEventListener('scroll', onScroll, { passive: true })
+      tabStripCleanupFns.push(() => {
+        element.removeEventListener('scroll', onScroll)
+      })
+      if (typeof ResizeObserver !== 'undefined') {
+        const observer = new ResizeObserver(() => {
+          handler()
+        })
+        observer.observe(element)
+        resizeObservers.push(observer)
+      }
+    }
+    registerTabStrip(requestTabNavRef.value, updateRequestTabOverflowState)
+    registerTabStrip(scenarioTabNavRef.value, updateScenarioTabOverflowState)
+    syncRequestTabStripState()
+    syncScenarioTabStripState()
+  })
   void bootstrap()
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', handleScenarioStepNameOutsidePointerDown, true)
+  tabStripCleanupFns.forEach(cleanup => cleanup())
+  resizeObservers.forEach(observer => observer.disconnect())
 })
 
 function emptyKeyValue(overrides: Partial<ApiKeyValue> = {}): ApiKeyValue {
@@ -3187,6 +3373,25 @@ async function closeRequestEditorTab(key: string, options?: { activateFallback?:
   }
 }
 
+async function closeOtherRequestEditorTabs() {
+  const hasDirty = visibleRequestEditorTabs.value.some(item => item.key !== activeRequestEditorKey.value && item.isDirty)
+  if (hasDirty) {
+    await ElMessageBox.confirm('其他请求页签存在未保存修改，确认关闭其他页签吗？', '关闭其他请求', { type: 'warning' })
+  }
+  const activeDefinitionTab = activeRequestEditorTab.value
+  const keepKeys = new Set<string>()
+  if (activeDefinitionTab?.resourceType === 'definition') {
+    keepKeys.add(activeDefinitionTab.key)
+  }
+  requestEditorTabs.value = requestEditorTabs.value.filter(item => item.resourceType !== 'definition' || keepKeys.has(item.key))
+  if (!activeDefinitionTab || activeDefinitionTab.resourceType !== 'definition') {
+    const fallback = visibleRequestEditorTabs.value[0]
+    if (fallback) {
+      activateRequestEditorTab(fallback.key)
+    }
+  }
+}
+
 async function closeCaseDrawer() {
   const activeCaseTab = activeCaseDrawerEditorTab.value
   if (!activeCaseTab) {
@@ -3337,11 +3542,21 @@ function defaultEditableWorkspaceCode() {
   return isAllScope.value ? (writableWorkspaces.value[0]?.code || '') : workspaceCode.value
 }
 
-function resetScenarioForm() {
+function applyScenarioDetailToForm(detail: ApiScenarioDetail) {
+  Object.assign(scenarioForm, cloneScenarioDetail(detail))
+  scenarioForm.moduleId = detail.moduleId ?? null
+  scenarioForm.priority = detail.priority || 'P1'
+  scenarioForm.status = detail.status || 'IN_PROGRESS'
+  scenarioForm.scenarioVariables = detail.scenarioVariables || []
+  scenarioForm.scenarioAssertions = detail.scenarioAssertions || []
+  scenarioForm.steps = normalizeScenarioStepPayload(detail.steps || [])
+}
+
+function buildEmptyScenarioDetail() {
   const targetWorkspaceCode = selectedScenarioModuleItem.value?.workspaceCode
     || selectedScenarioWorkspaceCode.value
     || defaultEditableWorkspaceCode()
-  Object.assign(scenarioForm, {
+  return {
     id: 0,
     workspaceCode: targetWorkspaceCode,
     workspaceName: '',
@@ -3365,26 +3580,84 @@ function resetScenarioForm() {
     scenarioVariables: [],
     scenarioAssertions: [],
     steps: [],
+  } satisfies ApiScenarioDetail
+}
+
+function syncActiveScenarioEditorTab() {
+  const current = activeScenarioEditorTab.value
+  if (!current || current.key === 'scenario-list') {
+    return
+  }
+  current.id = scenarioForm.id || null
+  current.title = scenarioForm.name?.trim() || current.title || '新建场景'
+  current.draft = cloneScenarioDetail({
+    ...scenarioForm,
+    steps: normalizeScenarioStepPayload(scenarioForm.steps),
   })
+  current.lastRunStepResults = JSON.parse(JSON.stringify(scenarioLastRunStepResults.value || [])) as ApiRunStepResult[]
+  current.isDirty = current.savedFingerprint !== fingerprintScenarioDetail(current.draft)
+}
+
+function resetScenarioForm() {
+  applyScenarioDetailToForm(buildEmptyScenarioDetail())
   scenarioLastRunStepResults.value = []
   openScenarioEditorTab(null)
 }
 
+function nextScenarioDraftTabTitle() {
+  const maxIndex = scenarioEditorTabs.value.reduce((max, item) => {
+    if (item.id != null) {
+      return max
+    }
+    if (item.title === '新建场景') {
+      return Math.max(max, 1)
+    }
+    const matched = item.title.match(/^新建场景(\d+)$/)
+    if (!matched) {
+      return max
+    }
+    return Math.max(max, Number(matched[1]) || 0)
+  }, 0)
+  return `新建场景${Math.max(1, maxIndex + 1)}`
+}
+
 function openScenarioEditorTab(id: number | null) {
-  const key = id ? `scenario-${id}` : 'scenario-new'
+  const key = id ? `scenario-${id}` : `scenario-new-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const title = id
     ? scenarios.value.find(item => item.id === id)?.name || scenarioForm.name || '场景详情'
-    : '新建场景'
+    : nextScenarioDraftTabTitle()
   if (!scenarioEditorTabs.value.some(item => item.key === key)) {
-    scenarioEditorTabs.value.push({ key, id, title })
+    scenarioEditorTabs.value.push({
+      key,
+      id,
+      title,
+      draft: id ? null : cloneScenarioDetail(scenarioForm),
+      lastRunStepResults: [],
+      savedFingerprint: id ? '' : fingerprintScenarioDetail(scenarioForm),
+      isDirty: false,
+    })
   }
   activeScenarioEditorKey.value = key
   activeScenarioDetailTab.value = 'steps'
 }
 
-function closeScenarioEditorTab(key: string) {
+function activateScenarioEditorTab(key: string) {
+  if (activeScenarioEditorKey.value === key) {
+    return
+  }
+  void handleScenarioTabChange(key)
+}
+
+async function closeScenarioEditorTab(key: string) {
   if (key === 'scenario-list') {
     return
+  }
+  const closing = scenarioEditorTabs.value.find(item => item.key === key)
+  if (!closing) {
+    return
+  }
+  if (closing.isDirty) {
+    await ElMessageBox.confirm('当前场景有未保存修改，确认关闭这个场景页签吗？', '关闭场景', { type: 'warning' })
   }
   const index = scenarioEditorTabs.value.findIndex(item => item.key === key)
   if (index < 0) {
@@ -3398,13 +3671,51 @@ function closeScenarioEditorTab(key: string) {
   }
 }
 
+async function closeOtherScenarioEditorTabs() {
+  const hasDirty = scenarioEditorTabs.value.some(item => item.key !== 'scenario-list' && item.key !== activeScenarioEditorKey.value && item.isDirty)
+  if (hasDirty) {
+    await ElMessageBox.confirm('其他场景页签存在未保存修改，确认关闭其他页签吗？', '关闭其他场景', { type: 'warning' })
+  }
+  scenarioEditorTabs.value = scenarioEditorTabs.value.filter(item => item.key === 'scenario-list' || item.key === activeScenarioEditorKey.value)
+  if (activeScenarioEditorTab.value?.draft) {
+    selectedScenarioId.value = activeScenarioEditorTab.value.id
+  }
+}
+
+async function closeAllScenarioEditorTabs() {
+  const hasDirty = scenarioEditorTabs.value.some(item => item.key !== 'scenario-list' && item.isDirty)
+  if (hasDirty) {
+    await ElMessageBox.confirm('场景页签存在未保存修改，确认关闭全部页签吗？', '关闭全部场景', { type: 'warning' })
+  }
+  scenarioEditorTabs.value = scenarioEditorTabs.value.filter(item => item.key === 'scenario-list')
+  activeScenarioEditorKey.value = 'scenario-list'
+  selectedScenarioId.value = null
+  scenarioLastRunStepResults.value = []
+}
+
+async function handleScenarioEditorMoreAction(command: string | number | object) {
+  if (String(command) === 'closeOthers') {
+    await closeOtherScenarioEditorTabs()
+    return
+  }
+  await closeAllScenarioEditorTabs()
+}
+
 async function handleScenarioTabChange(name: string | number) {
   const key = String(name)
   activeScenarioEditorKey.value = key
   const tab = scenarioEditorTabs.value.find(item => item.key === key)
+  if (tab?.draft) {
+    applyScenarioDetailToForm(tab.draft)
+    scenarioLastRunStepResults.value = JSON.parse(JSON.stringify(tab.lastRunStepResults || [])) as ApiRunStepResult[]
+    selectedScenarioId.value = tab.id
+    return
+  }
   if (tab?.id) {
     await selectScenario(tab.id)
+    return
   }
+  selectedScenarioId.value = null
 }
 
 function flattenScenarioSteps(steps: ApiScenarioStep[], basePath: number[] = [], level = 0): FlatScenarioStep[] {
@@ -4237,6 +4548,11 @@ async function selectDefinition(id: number) {
 }
 
 async function selectScenario(id: number) {
+  const loadedTab = scenarioEditorTabs.value.find(item => item.id === id)
+  if (loadedTab) {
+    await handleScenarioTabChange(loadedTab.key)
+    return
+  }
   selectedScenarioId.value = id
   const detail = await platformApi.getApiScenarioDetail(workspaceCode.value, id)
   assignScenario(detail)
@@ -4244,17 +4560,18 @@ async function selectScenario(id: number) {
 }
 
 function assignScenario(detail: ApiScenarioDetail) {
-  Object.assign(scenarioForm, JSON.parse(JSON.stringify(detail)))
-  scenarioForm.moduleId = detail.moduleId ?? null
-  scenarioForm.priority = detail.priority || 'P1'
-  scenarioForm.status = detail.status || 'IN_PROGRESS'
-  scenarioForm.scenarioVariables = detail.scenarioVariables || []
-  scenarioForm.scenarioAssertions = detail.scenarioAssertions || []
-  scenarioForm.steps = normalizeScenarioStepPayload(detail.steps || [])
+  applyScenarioDetailToForm(detail)
   scenarioLastRunStepResults.value = []
   const tab = scenarioEditorTabs.value.find(item => item.id === detail.id)
   if (tab) {
     tab.title = detail.name || '场景详情'
+    tab.draft = cloneScenarioDetail({
+      ...detail,
+      steps: normalizeScenarioStepPayload(detail.steps || []),
+    })
+    tab.lastRunStepResults = []
+    tab.savedFingerprint = fingerprintScenarioDetail(tab.draft)
+    tab.isDirty = false
   }
 }
 
@@ -5367,6 +5684,8 @@ async function saveScenario() {
   }
   saving.value = true
   try {
+    const wasNewScenario = !scenarioForm.id
+    const previousScenarioKey = activeScenarioEditorKey.value
     const payload = {
       workspaceCode: isAllScope.value ? scenarioForm.workspaceCode || writableWorkspaces.value[0]?.code : workspaceCode.value,
       name: scenarioForm.name,
@@ -5388,7 +5707,18 @@ async function saveScenario() {
       ? await platformApi.updateApiScenario(workspaceCode.value, scenarioForm.id, payload)
       : await platformApi.createApiScenario(workspaceCode.value, payload)
     ElMessage.success(scenarioForm.id ? '场景已更新' : '场景已创建')
+    const currentTab = activeScenarioEditorTab.value
+    if (currentTab?.draft) {
+      currentTab.savedFingerprint = fingerprintScenarioDetail(currentTab.draft)
+      currentTab.isDirty = false
+    }
     await refreshData()
+    if (wasNewScenario) {
+      scenarioEditorTabs.value = scenarioEditorTabs.value.filter(item => item.key !== previousScenarioKey)
+      if (activeScenarioEditorKey.value === previousScenarioKey) {
+        activeScenarioEditorKey.value = 'scenario-list'
+      }
+    }
     await selectScenario(detail.id)
     openScenarioEditorTab(detail.id)
   }
@@ -5814,23 +6144,62 @@ function formatTimeLabel(value?: string | null) {
 
           <section class="ms-like-main">
             <div class="ms-like-tab-strip">
-              <button
-                v-for="item in visibleRequestEditorTabs"
-                :key="item.key"
-                type="button"
-                :class="['ms-like-editor-tab', { active: item.key === activeRequestEditorKey }]"
-                @click="activateRequestEditorTab(item.key)"
-              >
-                <span :class="['ms-like-method', `method-${item.method.toLowerCase()}`]">
-                  {{ item.method }}
-                </span>
-                <span class="ms-like-editor-tab-label">{{ item.title }}</span>
-                <span v-if="item.isDirty" class="ms-like-editor-tab-dot"></span>
-                <span v-if="requestEditorTabs.length > 1" class="ms-like-editor-tab-close" @click.stop="closeRequestEditorTab(item.key)">
-                  <el-icon><Close /></el-icon>
-                </span>
-              </button>
-              <button type="button" class="ms-like-tab-add" @click="openNewRequestTab()">+</button>
+              <div class="ms-like-tab-strip-main">
+                <button
+                  v-if="requestTabOverflow.overflow"
+                  type="button"
+                  class="ms-like-tab-scroll-button"
+                  :disabled="requestTabOverflow.arrivedLeft"
+                  aria-label="向左滚动标签"
+                  @click="scrollTabStrip(requestTabNavRef, requestTabOverflow, 'left')"
+                >
+                  <el-icon><ArrowLeft /></el-icon>
+                </button>
+                <div ref="requestTabNavRef" class="ms-like-tab-nav">
+                  <button
+                    v-for="item in visibleRequestEditorTabs"
+                    :key="item.key"
+                    type="button"
+                    :class="['ms-like-editor-tab', { active: item.key === activeRequestEditorKey }]"
+                    @click="activateRequestEditorTab(item.key)"
+                  >
+                    <span :class="['ms-like-method', `method-${item.method.toLowerCase()}`]">
+                      {{ item.method }}
+                    </span>
+                    <span class="ms-like-editor-tab-label">{{ item.title }}</span>
+                    <span v-if="item.isDirty" class="ms-like-editor-tab-dot"></span>
+                    <span v-if="requestEditorTabs.length > 1" class="ms-like-editor-tab-close" @click.stop="closeRequestEditorTab(item.key)">
+                      <el-icon><Close /></el-icon>
+                    </span>
+                  </button>
+                </div>
+                <button
+                  v-if="requestTabOverflow.overflow"
+                  type="button"
+                  class="ms-like-tab-scroll-button"
+                  :disabled="requestTabOverflow.arrivedRight"
+                  aria-label="向右滚动标签"
+                  @click="scrollTabStrip(requestTabNavRef, requestTabOverflow, 'right')"
+                >
+                  <el-icon><ArrowRight /></el-icon>
+                </button>
+                <button type="button" class="ms-like-tab-add" @click="openNewRequestTab()">+</button>
+                <el-dropdown
+                  v-if="showRequestEditorMoreAction"
+                  trigger="click"
+                  placement="bottom-start"
+                  @command="closeOtherRequestEditorTabs"
+                >
+                  <button type="button" class="scenario-editor-more-button" aria-label="更多标签操作" @click.stop>
+                    <el-icon><MoreFilled /></el-icon>
+                  </button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="closeOthers">关闭其他标签</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
             </div>
 
             <div class="ms-like-editor-shell">
@@ -7443,12 +7812,86 @@ function formatTimeLabel(value?: string | null) {
           </aside>
 
           <main class="scenario-main-pane">
+            <div class="ms-like-tab-strip scenario-editor-tab-strip">
+              <div class="ms-like-tab-strip-main">
+                <button
+                  v-if="scenarioTabOverflow.overflow"
+                  type="button"
+                  class="ms-like-tab-scroll-button"
+                  :disabled="scenarioTabOverflow.arrivedLeft"
+                  aria-label="向左滚动标签"
+                  @click="scrollTabStrip(scenarioTabNavRef, scenarioTabOverflow, 'left')"
+                >
+                  <el-icon><ArrowLeft /></el-icon>
+                </button>
+                <div ref="scenarioTabNavRef" class="ms-like-tab-nav">
+                  <button
+                    v-for="tab in scenarioEditorTabs"
+                    :key="tab.key"
+                    type="button"
+                    :class="['ms-like-editor-tab', { active: tab.key === activeScenarioEditorKey }]"
+                    @click="activateScenarioEditorTab(tab.key)"
+                  >
+                    <span class="ms-like-editor-tab-label">{{ tab.title }}</span>
+                    <span v-if="tab.isDirty" class="ms-like-editor-tab-dot"></span>
+                    <span
+                      v-if="tab.key !== 'scenario-list'"
+                      class="ms-like-editor-tab-close"
+                      @click.stop="closeScenarioEditorTab(tab.key)"
+                    >
+                      <el-icon><Close /></el-icon>
+                    </span>
+                  </button>
+                </div>
+                <button
+                  v-if="scenarioTabOverflow.overflow"
+                  type="button"
+                  class="ms-like-tab-scroll-button"
+                  :disabled="scenarioTabOverflow.arrivedRight"
+                  aria-label="向右滚动标签"
+                  @click="scrollTabStrip(scenarioTabNavRef, scenarioTabOverflow, 'right')"
+                >
+                  <el-icon><ArrowRight /></el-icon>
+                </button>
+                <button type="button" class="ms-like-tab-add" @click="resetScenarioForm()">+</button>
+                <el-dropdown
+                  v-if="showScenarioEditorMoreAction"
+                  trigger="click"
+                  placement="bottom-start"
+                  @command="handleScenarioEditorMoreAction"
+                >
+                  <button type="button" class="scenario-editor-more-button" aria-label="更多标签操作" @click.stop>
+                    <el-icon><MoreFilled /></el-icon>
+                  </button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="closeOthers">关闭其他标签</el-dropdown-item>
+                      <el-dropdown-item command="closeAll">关闭全部标签</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
+              <div v-if="activeScenarioEditorKey !== 'scenario-list'" class="ms-like-tab-strip-primary">
+                <el-select
+                  v-model="runOptions.environmentId"
+                  class="scenario-header-environment-select"
+                  placeholder="选择环境"
+                  clearable
+                >
+                  <el-option v-for="item in environments" :key="item.id" :label="item.name" :value="item.id" />
+                </el-select>
+                <el-button type="primary" plain class="scenario-header-run-button" :disabled="!scenarioForm.id || !canWriteScenario" :loading="saving" @click="runScenario">
+                  执行
+                </el-button>
+                <el-button type="primary" class="scenario-header-save-button" :disabled="!canWriteScenario" :loading="saving" @click="saveScenario">
+                  保存
+                </el-button>
+              </div>
+            </div>
             <el-tabs
               v-model="activeScenarioEditorKey"
               class="scenario-editor-tabs"
-              addable
               @tab-change="handleScenarioTabChange"
-              @tab-add="resetScenarioForm"
               @tab-remove="closeScenarioEditorTab"
             >
               <el-tab-pane
@@ -7730,9 +8173,7 @@ function formatTimeLabel(value?: string | null) {
                       </div>
                     </section>
                     <aside class="scenario-property-panel">
-                      <div class="scenario-property-actions">
-                        <el-button :disabled="!canWriteScenario" :loading="saving" @click="saveScenario">保存</el-button>
-                        <el-button type="primary" :disabled="!scenarioForm.id || !canWriteScenario" :loading="saving" @click="runScenario">执行</el-button>
+                      <div v-if="scenarioForm.id" class="scenario-property-actions">
                         <el-button v-if="scenarioForm.id" :disabled="!canWriteScenario" @click="removeScenario">删除</el-button>
                       </div>
                       <div class="scenario-property-body">
@@ -9316,95 +9757,20 @@ function formatTimeLabel(value?: string | null) {
   flex-direction: column;
 }
 
+.scenario-editor-tab-strip {
+  padding: 8px 16px 0;
+}
+
 .scenario-editor-tabs :deep(.el-tabs__header) {
-  flex: 0 0 auto;
-  margin: 0;
-  padding: 8px 16px;
-  background: #fff;
-  border-bottom: 1px solid #e5e7eb;
+  display: none;
 }
 
 .scenario-editor-tabs :deep(.el-tabs__nav-wrap::after) {
   display: none;
 }
 
-.scenario-editor-tabs :deep(.el-tabs__nav-scroll) {
-  display: flex;
-  align-items: center;
-}
-
-.scenario-editor-tabs :deep(.el-tabs__nav) {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 32px;
-}
-
 .scenario-editor-tabs :deep(.el-tabs__active-bar) {
   display: none;
-}
-
-.scenario-editor-tabs :deep(.el-tabs__item) {
-  display: inline-flex;
-  align-items: center;
-  height: 32px;
-  max-width: 176px;
-  margin-right: 0;
-  padding: 5px 8px !important;
-  border: 0;
-  border-radius: 4px;
-  background: #f7f8fa;
-  color: #606775;
-  line-height: 22px;
-  gap: 8px;
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
-
-.scenario-editor-tabs :deep(.el-tabs__item .is-icon-close) {
-  visibility: hidden;
-  margin-left: 4px;
-  border-radius: 50%;
-}
-
-.scenario-editor-tabs :deep(.el-tabs__item:hover),
-.scenario-editor-tabs :deep(.el-tabs__item.is-active) {
-  background: #eff6ff;
-  color: #2563eb;
-}
-
-.scenario-editor-tabs :deep(.el-tabs__item:hover .is-icon-close),
-.scenario-editor-tabs :deep(.el-tabs__item.is-active .is-icon-close) {
-  visibility: visible;
-}
-
-.scenario-editor-tabs :deep(.el-tabs__item .is-icon-close:hover) {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-
-.scenario-editor-tabs :deep(.el-tabs__item > span) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.scenario-editor-tabs :deep(.el-tabs__new-tab) {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  margin: 0 0 0 4px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: #8b8f9a;
-}
-
-.scenario-editor-tabs :deep(.el-tabs__new-tab:hover) {
-  background: #f7f8fa;
-  color: #303640;
 }
 
 .scenario-editor-tabs :deep(.el-tabs__content) {
@@ -9447,6 +9813,18 @@ function formatTimeLabel(value?: string | null) {
 
 .scenario-editor-tabs :deep(.el-tab-pane) {
   min-height: 100%;
+}
+
+.scenario-editor-more-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
 }
 
 .scenario-list-toolbar {
@@ -9601,29 +9979,74 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .scenario-detail-tabs :deep(.el-tabs__header) {
+  display: block !important;
   margin: 0;
   padding: 0 16px;
   border-bottom: 1px solid #e5e7eb;
+  background: #fff;
 }
 
 .scenario-detail-tabs :deep(.el-tabs__nav-wrap::after) {
-  display: none;
+  height: 1px;
+  background: #e5e7eb;
+}
+
+.scenario-detail-tabs :deep(.el-tabs__nav-scroll) {
+  display: flex;
+  align-items: center;
+}
+
+.scenario-detail-tabs :deep(.el-tabs__nav) {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  height: 48px;
 }
 
 .scenario-detail-tabs :deep(.el-tabs__item) {
-  height: 44px;
-  padding: 0 14px;
+  position: relative;
+  height: 48px;
+  padding: 0;
+  min-width: auto;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
   color: #303640;
   font-size: 14px;
-  line-height: 44px;
+  line-height: 48px;
+  border-radius: 0;
+  transition: color 0.18s ease;
+}
+
+.scenario-detail-tabs :deep(.el-tabs__item::after) {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 28px;
+  height: 2px;
+  border-radius: 999px;
+  background: #2563eb;
+  transform: translateX(-50%) scaleX(0);
+  transform-origin: center;
+  transition: transform 0.18s ease;
+}
+
+.scenario-detail-tabs :deep(.el-tabs__item:hover) {
+  color: #2563eb;
 }
 
 .scenario-detail-tabs :deep(.el-tabs__item.is-active) {
   color: #2563eb;
+  font-weight: 500;
+}
+
+.scenario-detail-tabs :deep(.el-tabs__item.is-active::after) {
+  transform: translateX(-50%) scaleX(1);
 }
 
 .scenario-detail-tabs :deep(.el-tabs__active-bar) {
-  background: #2563eb;
+  display: none;
 }
 
 .scenario-detail-tabs :deep(.el-tabs__content) {
@@ -9641,7 +10064,7 @@ function formatTimeLabel(value?: string | null) {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  min-height: 57px;
+  min-height: 0;
   padding: 12px 16px;
   border-bottom: 1px solid #e5e7eb;
 }
@@ -11081,10 +11504,74 @@ function formatTimeLabel(value?: string | null) {
   padding: 10px 16px 0;
 }
 
+.ms-like-tab-strip-main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.ms-like-tab-nav {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.ms-like-tab-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.ms-like-tab-strip-actions,
+.ms-like-tab-strip-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.ms-like-tab-strip-primary {
+  margin-left: auto;
+  gap: 8px;
+  padding-bottom: 6px;
+}
+
+.ms-like-tab-scroll-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.ms-like-tab-scroll-button:hover:not(:disabled) {
+  background: #f5f7fa;
+  color: #344054;
+}
+
+.ms-like-tab-scroll-button:disabled {
+  color: #c0c4cc;
+  cursor: not-allowed;
+}
+
 .ms-like-editor-tab {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  flex: 0 0 auto;
   border: 1px solid #e9d5ff;
   border-bottom: 0;
   border-radius: 8px 8px 0 0;
@@ -11093,6 +11580,7 @@ function formatTimeLabel(value?: string | null) {
   padding: 10px 14px;
   font-size: 13px;
   line-height: 1;
+  cursor: pointer;
 }
 
 .ms-like-editor-tab.active,
@@ -11167,12 +11655,37 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-tab-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
   border: 0;
+  border-radius: 6px;
   background: transparent;
   color: var(--el-text-color-secondary);
   font-size: 22px;
   line-height: 1;
   cursor: pointer;
+  flex: 0 0 auto;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.ms-like-tab-add:hover {
+  background: #f5f7fa;
+  color: #344054;
+}
+
+.scenario-header-environment-select {
+  width: 180px;
+  flex: 0 0 auto;
+}
+
+.scenario-header-run-button,
+.scenario-header-save-button {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 6px;
 }
 
 .ms-like-editor-shell {

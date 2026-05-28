@@ -823,6 +823,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .ai-record-page {
   display: grid;
+  align-content: start;
   gap: 16px;
   min-width: 0;
 }

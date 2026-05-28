@@ -9105,19 +9105,19 @@ function formatTimeLabel(value?: string | null) {
   grid-template-columns: 300px minmax(0, 1fr);
   min-height: calc(100vh - 210px);
   overflow: hidden;
-  border-radius: 4px;
-  box-shadow: none;
 }
 
 .ms-scenario-workbench {
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
   background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
 }
 
 .scenario-module-pane {
   display: flex;
   flex-direction: column;
+  gap: 12px;
   min-width: 0;
   min-height: 0;
   padding: 12px;

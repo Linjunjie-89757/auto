@@ -12,8 +12,8 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Starting frontend dev server on http://localhost:4173/
-call npm.cmd run dev
+echo Starting frontend dev server on http://127.0.0.1:4173/
+call npm.cmd run dev -- --host 127.0.0.1 --port 4173
 set "EXIT_CODE=%ERRORLEVEL%"
 
 if not "%EXIT_CODE%"=="0" (

@@ -18,8 +18,11 @@ import type {
   ApiScenarioModuleItem,
   ApiVariableSetItem,
   AiCaseConfig,
+  AiProviderConnection,
+  AiProviderModel,
   AiCaseConfigResponse,
   AiCaseConfigSecretResponse,
+  FetchAiProviderModelsResponse,
   AiGenerationTask,
   AiGenerateResponse,
   AiRequirementAsset,
@@ -66,10 +69,12 @@ import type {
   ReviewCasePayload,
   ReviewAiGeneratedCasesPayload,
   SaveAiCaseConfigPayload,
+  SaveAiProviderConnectionPayload,
   TaskDetail,
   TaskItem,
   TaskTransitionPayload,
   TestAiCaseConfigResponse,
+  TestAiProviderConnectionResponse,
   TestDbConnectionPayload,
   UpdateAiGenerationTaskPayload,
   MoveCaseDirectoryPayload,
@@ -281,6 +286,51 @@ export const platformApi = {
   getAiCaseConfig(workspaceCode: string, targetWorkspaceCode?: string) {
     const query = targetWorkspaceCode ? `?targetWorkspaceCode=${encodeURIComponent(targetWorkspaceCode)}` : ''
     return request<AiCaseConfigResponse>(`/cases/ai/config${query}`, { workspaceCode })
+  },
+  getAiProviderConnections(workspaceCode: string) {
+    return request<AiProviderConnection[]>('/cases/ai/providers', { workspaceCode })
+  },
+  createAiProviderConnection(workspaceCode: string, payload: SaveAiProviderConnectionPayload) {
+    return request<AiProviderConnection>('/cases/ai/providers', {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  updateAiProviderConnection(workspaceCode: string, id: number, payload: SaveAiProviderConnectionPayload) {
+    return request<AiProviderConnection>(`/cases/ai/providers/${id}`, {
+      method: 'PUT',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  deleteAiProviderConnection(workspaceCode: string, id: number) {
+    return request<void>(`/cases/ai/providers/${id}`, {
+      method: 'DELETE',
+      workspaceCode,
+    })
+  },
+  testAiProviderConnection(workspaceCode: string, id: number) {
+    return request<TestAiProviderConnectionResponse>(`/cases/ai/providers/${id}/test`, {
+      method: 'POST',
+      workspaceCode,
+    })
+  },
+  fetchAiProviderModels(workspaceCode: string, id: number) {
+    return request<FetchAiProviderModelsResponse>(`/cases/ai/providers/${id}/fetch-models`, {
+      method: 'POST',
+      workspaceCode,
+    })
+  },
+  getAiProviderModels(workspaceCode: string, id: number) {
+    return request<AiProviderModel[]>(`/cases/ai/providers/${id}/models`, { workspaceCode })
+  },
+  probeAiProviderModel(workspaceCode: string, id: number, modelName: string) {
+    return request<AiProviderModel>(`/cases/ai/providers/${id}/models/probe`, {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify({ modelName }),
+    })
   },
   getAiCaseConfigSecret(workspaceCode: string, id: number) {
     return request<AiCaseConfigSecretResponse>(`/cases/ai/config/${id}/secret`, { workspaceCode })

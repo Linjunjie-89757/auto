@@ -5,6 +5,8 @@ public record AiCaseConfigItem(
         String workspaceCode,
         String workspaceName,
         String roleType,
+        Long providerConnectionId,
+        String providerConnectionName,
         String protocolType,
         String provider,
         String model,
@@ -15,6 +17,9 @@ public record AiCaseConfigItem(
         String reviewChecklist,
         Double temperature,
         Integer maxCases,
+        AiModelCapabilities detectedCapabilities,
+        AiModelCapabilities effectiveCapabilities,
+        AiCapabilityOverride capabilityOverride,
         boolean supportsImageInput,
         Integer status
 ) {

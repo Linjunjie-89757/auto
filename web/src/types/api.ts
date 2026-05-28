@@ -115,9 +115,40 @@ export interface AiReviewResult {
 }
 
 export type AiProtocolType =
-  | 'OPENAI_CHAT_COMPLETIONS'
-  | 'OPENAI_RESPONSES'
+  | 'OPENAI_COMPATIBLE_CHAT'
+  | 'OPENAI_COMPATIBLE_RESPONSES'
   | 'AZURE_OPENAI'
+
+export type AiCapabilitySource =
+  | 'DECLARED'
+  | 'INFERRED'
+  | 'PROBED'
+  | 'MANUAL'
+  | 'UNKNOWN'
+
+export interface AiCapabilityValue {
+  supported: boolean | null
+  source: AiCapabilitySource
+  detail: string | null
+}
+
+export interface AiModelCapabilities {
+  textChat: AiCapabilityValue
+  streamOutput: AiCapabilityValue
+  structuredOutput: AiCapabilityValue
+  imageInput: AiCapabilityValue
+  longContext: AiCapabilityValue
+  stableAvailable: AiCapabilityValue
+}
+
+export interface AiCapabilityOverride {
+  textChat?: boolean | null
+  streamOutput?: boolean | null
+  structuredOutput?: boolean | null
+  imageInput?: boolean | null
+  longContext?: boolean | null
+  stableAvailable?: boolean | null
+}
 
 export interface CreateCasePayload {
   workspaceCode?: string
@@ -149,6 +180,8 @@ export interface AiCaseConfig {
   workspaceCode: string
   workspaceName: string
   roleType: 'CASE_GENERATOR' | 'CASE_REVIEWER'
+  providerConnectionId: number | null
+  providerConnectionName: string | null
   protocolType: AiProtocolType
   provider: string
   model: string
@@ -159,6 +192,9 @@ export interface AiCaseConfig {
   reviewChecklist: string | null
   temperature: number
   maxCases: number
+  detectedCapabilities: AiModelCapabilities
+  effectiveCapabilities: AiModelCapabilities
+  capabilityOverride: AiCapabilityOverride | null
   supportsImageInput: boolean
   status: number
 }
@@ -196,15 +232,17 @@ export interface AiRequirementAsset {
 export interface SaveAiCaseConfigPayload {
   workspaceCode?: string
   roleType: 'CASE_GENERATOR' | 'CASE_REVIEWER'
+  providerConnectionId?: number | null
   protocolType: AiProtocolType
   provider?: string
   model: string
-  baseUrl: string
+  baseUrl?: string
   apiKey?: string
   promptTemplate: string
   reviewChecklist?: string
   temperature: number
   maxCases: number
+  capabilityOverride?: AiCapabilityOverride | null
   supportsImageInput?: boolean
   status?: number
 }
@@ -278,6 +316,58 @@ export interface TestAiCaseConfigResponse {
   provider: string
   model: string
   message: string
+}
+
+export interface AiProviderConnection {
+  id: number
+  workspaceCode: string
+  workspaceName: string
+  connectionName: string
+  protocolType: AiProtocolType
+  baseUrl: string
+  apiKeyMasked: string
+  apiKeyConfigured: boolean
+  status: number
+  modelCount: number
+  lastVerifiedAt: string | null
+  lastFetchModelsAt: string | null
+}
+
+export interface SaveAiProviderConnectionPayload {
+  workspaceCode?: string
+  connectionName: string
+  protocolType: AiProtocolType
+  baseUrl: string
+  apiKey?: string
+  status?: number
+}
+
+export interface AiProviderModel {
+  id: number | null
+  connectionId: number | null
+  modelName: string
+  displayName: string
+  detectedCapabilities: AiModelCapabilities
+  selectable: boolean
+  rawMetadataJson: string | null
+  lastProbedAt: string | null
+}
+
+export interface FetchAiProviderModelsResponse {
+  connectionId: number
+  connectionName: string
+  models: AiProviderModel[]
+  fetchedAt: string | null
+  message: string
+}
+
+export interface TestAiProviderConnectionResponse {
+  success: boolean
+  connectionId: number
+  connectionName: string
+  protocolType: AiProtocolType
+  message: string
+  verifiedAt: string | null
 }
 
 export type AiGenerationOutputMode = 'STREAM' | 'COMPLETE'

@@ -8,39 +8,52 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+
 class AiProviderClientTests {
 
-    private final AiProviderClient client = new AiProviderClient(60);
+    private final OpenAiCompatibleChatAdapter chatAdapter = new OpenAiCompatibleChatAdapter(60);
+    private final OpenAiCompatibleResponsesAdapter responsesAdapter = new OpenAiCompatibleResponsesAdapter(60);
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
     void openAiChatAppendsChatCompletionsForServiceRootBaseUrl() {
-        String endpoint = invokeResolveEndpoint("https://api.openai.com/v1", "OPENAI_CHAT_COMPLETIONS");
+        String endpoint = (String) ReflectionTestUtils.invokeMethod(chatAdapter, "resolveChatEndpoint", "https://api.openai.com/v1");
 
         assertThat(endpoint).isEqualTo("https://api.openai.com/v1/chat/completions");
     }
 
     @Test
     void openAiResponsesAppendsResponsesForServiceRootBaseUrl() {
-        String endpoint = invokeResolveEndpoint("https://proxy.example/v1", "OPENAI_RESPONSES");
+        String endpoint = (String) ReflectionTestUtils.invokeMethod(responsesAdapter, "resolveResponsesEndpoint", "https://proxy.example/v1");
 
         assertThat(endpoint).isEqualTo("https://proxy.example/v1/responses");
     }
 
     @Test
-    void explicitChatCompletionsEndpointIsPreserved() {
-        String endpoint = invokeResolveEndpoint("https://proxy.example/v1/chat/completions", "OPENAI_CHAT_COMPLETIONS");
+    void explicitChatCompletionsEndpointFallsBackToServiceRoot() {
+        String endpoint = (String) ReflectionTestUtils.invokeMethod(chatAdapter, "resolveChatEndpoint", "https://proxy.example/v1/chat/completions");
 
         assertThat(endpoint).isEqualTo("https://proxy.example/v1/chat/completions");
     }
 
     @Test
     void buildsResponsesRequestBodyWithInputField() throws Exception {
-        AiCaseConfigEntity config = new AiCaseConfigEntity();
-        config.setModel("gpt-5");
-        config.setTemperature(0.3);
+        AiProviderRequestProfile profile = new AiProviderRequestProfile(
+                AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_RESPONSES,
+                "OPENAI_COMPATIBLE_RESPONSES",
+                "gpt-5",
+                "https://proxy.example/v1",
+                0.3,
+                20
+        );
 
-        String body = invokeBuildRequestBody(config, "OPENAI_RESPONSES", "hello", List.of(), false);
+        String body = (String) ReflectionTestUtils.invokeMethod(
+                responsesAdapter,
+                "buildResponsesRequestBody",
+                profile,
+                "hello",
+                List.of()
+        );
         JsonNode root = objectMapper.readTree(body);
 
         assertThat(root.path("instructions").asText()).contains("structured JSON");
@@ -53,16 +66,21 @@ class AiProviderClientTests {
 
     @Test
     void buildsResponsesRequestBodyWithInputImageItems() throws Exception {
-        AiCaseConfigEntity config = new AiCaseConfigEntity();
-        config.setModel("gpt-5");
-        config.setTemperature(0.3);
+        AiProviderRequestProfile profile = new AiProviderRequestProfile(
+                AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_RESPONSES,
+                "OPENAI_COMPATIBLE_RESPONSES",
+                "gpt-5",
+                "https://proxy.example/v1",
+                0.3,
+                20
+        );
 
-        String body = invokeBuildRequestBody(
-                config,
-                "OPENAI_RESPONSES",
+        String body = (String) ReflectionTestUtils.invokeMethod(
+                responsesAdapter,
+                "buildResponsesRequestBody",
+                profile,
                 "hello",
-                List.of(new AiProviderClient.ImageInput("a.png", "image/png", new byte[]{1, 2, 3})),
-                false
+                List.of(new AiProviderClient.ImageInput("a.png", "image/png", new byte[]{1, 2, 3}))
         );
         JsonNode root = objectMapper.readTree(body);
 
@@ -74,34 +92,12 @@ class AiProviderClientTests {
 
     @Test
     void extractsResponsesOutputText() {
-        String content = invokeExtractContent("OPENAI_RESPONSES", "{\"output_text\":\"{\\\"ok\\\":true}\"}");
+        String content = (String) ReflectionTestUtils.invokeMethod(
+                responsesAdapter,
+                "extractResponsesContent",
+                "{\"output_text\":\"{\\\"ok\\\":true}\"}"
+        );
 
         assertThat(content).isEqualTo("{\"ok\":true}");
-    }
-
-    private String invokeResolveEndpoint(String baseUrl, String protocolType) {
-        return (String) ReflectionTestUtils.invokeMethod(client, "resolveEndpointByProtocol", baseUrl, protocolType);
-    }
-
-    private String invokeBuildRequestBody(
-            AiCaseConfigEntity config,
-            String protocolType,
-            String prompt,
-            List<AiProviderClient.ImageInput> images,
-            boolean stream
-    ) {
-        return (String) ReflectionTestUtils.invokeMethod(
-                client,
-                "buildRequestBodyByProtocol",
-                config,
-                protocolType,
-                prompt,
-                images,
-                stream
-        );
-    }
-
-    private String invokeExtractContent(String protocolType, String responseBody) {
-        return (String) ReflectionTestUtils.invokeMethod(client, "extractContentByProtocol", protocolType, responseBody);
     }
 }

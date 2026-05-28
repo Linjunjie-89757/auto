@@ -41,6 +41,12 @@ public class AiCaseConfigEntity extends BaseEntity {
     @TableField("max_cases")
     private Integer maxCases;
 
+    @TableField("provider_connection_id")
+    private Long providerConnectionId;
+
+    @TableField("capability_override_json")
+    private String capabilityOverrideJson;
+
     @TableField("supports_image_input")
     private Integer supportsImageInput;
 

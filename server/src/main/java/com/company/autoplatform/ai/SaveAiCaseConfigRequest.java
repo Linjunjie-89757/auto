@@ -10,10 +10,11 @@ import jakarta.validation.constraints.NotNull;
 public record SaveAiCaseConfigRequest(
         String workspaceCode,
         @NotBlank(message = "AI role type is required") String roleType,
+        Long providerConnectionId,
         String protocolType,
         String provider,
         @NotBlank(message = "AI model is required") String model,
-        @NotBlank(message = "AI base URL is required") String baseUrl,
+        String baseUrl,
         String apiKey,
         @NotBlank(message = "Prompt template is required") String promptTemplate,
         String reviewChecklist,
@@ -25,6 +26,7 @@ public record SaveAiCaseConfigRequest(
         @Min(value = 1, message = "Max cases must be >= 1")
         @Max(value = 100, message = "Max cases must be <= 100")
         Integer maxCases,
+        AiCapabilityOverride capabilityOverride,
         Boolean supportsImageInput,
         Integer status
 ) {

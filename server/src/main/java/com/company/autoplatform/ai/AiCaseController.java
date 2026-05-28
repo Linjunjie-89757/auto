@@ -63,6 +63,72 @@ public class AiCaseController {
         return ApiResponse.ok(aiCaseService.updateConfig(id, workspaceCode, request), "AI config updated");
     }
 
+    @GetMapping("/providers")
+    public ApiResponse<java.util.List<AiProviderConnectionItem>> getProviders(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(aiCaseService.getProviders(workspaceCode));
+    }
+
+    @PostMapping("/providers")
+    public ApiResponse<AiProviderConnectionItem> createProvider(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody SaveAiProviderConnectionRequest request
+    ) {
+        return ApiResponse.ok(aiCaseService.createProvider(workspaceCode, request), "AI provider created");
+    }
+
+    @PutMapping("/providers/{id}")
+    public ApiResponse<AiProviderConnectionItem> updateProvider(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody SaveAiProviderConnectionRequest request
+    ) {
+        return ApiResponse.ok(aiCaseService.updateProvider(id, workspaceCode, request), "AI provider updated");
+    }
+
+    @DeleteMapping("/providers/{id}")
+    public ApiResponse<Void> deleteProvider(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        aiCaseService.deleteProvider(id, workspaceCode);
+        return ApiResponse.ok(null, "AI provider deleted");
+    }
+
+    @PostMapping("/providers/{id}/test")
+    public ApiResponse<TestAiProviderConnectionResponse> testProvider(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(aiCaseService.testProvider(id, workspaceCode), "AI provider connection tested");
+    }
+
+    @PostMapping("/providers/{id}/fetch-models")
+    public ApiResponse<FetchAiProviderModelsResponse> fetchProviderModels(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(aiCaseService.fetchProviderModels(id, workspaceCode), "AI provider models fetched");
+    }
+
+    @GetMapping("/providers/{id}/models")
+    public ApiResponse<java.util.List<AiProviderModelItem>> getProviderModels(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(aiCaseService.getProviderModels(id, workspaceCode));
+    }
+
+    @PostMapping("/providers/{id}/models/probe")
+    public ApiResponse<AiProviderModelItem> probeProviderModel(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody ProbeAiProviderModelRequest request
+    ) {
+        return ApiResponse.ok(aiCaseService.probeProviderModel(id, workspaceCode, request), "AI provider model probed");
+    }
+
     @GetMapping("/config/{id}/secret")
     public ApiResponse<AiCaseConfigSecretResponse> getConfigSecret(
             @PathVariable Long id,

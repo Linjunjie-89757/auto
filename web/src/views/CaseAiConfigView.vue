@@ -1,70 +1,85 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
-import { Connection, Hide, Setting, View } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { MagicStick, Plus, RefreshRight, Setting } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useCaseCenterShared } from '../composables/useCaseCenterShared'
 import { platformApi } from '../api/platform'
-import type { AiCaseConfig, AiProtocolType, SaveAiCaseConfigPayload } from '../types/api'
+import type {
+  AiCapabilityOverride,
+  AiCapabilitySource,
+  AiCaseConfig,
+  AiModelCapabilities,
+  AiProtocolType,
+  AiProviderConnection,
+  AiProviderModel,
+  SaveAiCaseConfigPayload,
+  SaveAiProviderConnectionPayload,
+} from '../types/api'
 
-type GenerationStyle = 'stable' | 'balanced' | 'creative' | 'custom'
 type RoleType = 'CASE_GENERATOR' | 'CASE_REVIEWER'
+type GenerationStyle = 'stable' | 'balanced' | 'creative' | 'custom'
+type CapabilityKey =
+  | 'textChat'
+  | 'streamOutput'
+  | 'structuredOutput'
+  | 'imageInput'
+  | 'longContext'
+  | 'stableAvailable'
 
 type RoleForm = {
   id: number | null
-  protocolType: AiProtocolType
+  providerConnectionId: number | null
   model: string
-  baseUrl: string
-  apiKey: string
-  apiKeyMasked: string
   promptTemplate: string
   reviewChecklist: string
   temperature: number
   maxCases: number
+  status: number
+  capabilityOverride: AiCapabilityOverride
+  detectedCapabilities: AiModelCapabilities
+  effectiveCapabilities: AiModelCapabilities
   supportsImageInput: boolean
+}
+
+type ProviderDialogForm = {
+  id: number | null
+  connectionName: string
+  protocolType: AiProtocolType
+  baseUrl: string
+  apiKey: string
   status: number
 }
 
-const DEFAULT_GENERATOR_PROMPT = `你是自动化测试平台中的用例生成模型。
-请根据需求内容输出结构化测试用例，返回结果将直接用于测试团队评审。
+const DEFAULT_GENERATOR_PROMPT = `你是自动化测试平台中的用例生成模型。请根据需求内容输出结构化测试用例，返回结果会直接进入候选用例池。
 
 输出要求：
 1. 只返回 JSON，不要返回 markdown 或额外说明。
-2. 可以返回数组，或 {"cases":[...]} 结构。
-3. 每条用例都必须包含：
-   - title
-   - caseType
-   - priority
-   - precondition
-   - steps
-   - expectedResult
-   - riskNotes
-4. caseType 只允许：FUNCTION、BOUNDARY、EXCEPTION、REGRESSION
-5. priority 只允许：P0、P1、P2、P3
-6. 标题、步骤、预期结果必须具体、可执行、可验证。`
+2. 返回结构必须是数组，或 {"cases":[...]}。
+3. 每条用例必须包含：title、caseType、priority、precondition、steps、expectedResult、riskNotes。
+4. caseType 仅允许：FUNCTION、BOUNDARY、EXCEPTION、REGRESSION。
+5. priority 仅允许：P0、P1、P2、P3。
+6. 标题、步骤和预期结果要具体、可执行、可验证。`
 
-const DEFAULT_GENERATOR_CHECKLIST = `优先覆盖主流程、边界条件、异常分支和高风险回归点，避免重复或低价值用例。`
+const DEFAULT_GENERATOR_CHECKLIST = '优先覆盖主流程、边界条件、异常分支和高风险回归点，避免重复或低价值用例。'
 
-const DEFAULT_REVIEW_PROMPT = `你是自动化测试平台中的用例评审模型。
-请对候选测试用例做完整性与覆盖性评审，并返回结构化 JSON。
+const DEFAULT_REVIEW_PROMPT = `你是自动化测试平台中的用例评审模型。请对候选测试用例做完整性和覆盖性评审，并返回结构化 JSON。
 
 输出要求：
 1. 只返回 JSON，不要返回 markdown 或额外说明。
-2. 返回结构必须包含：
-   - result
-   - summary
-   - issues
-   - suggestions
-3. result 只允许：APPROVE、REJECT、SUGGEST
-4. issues 用于指出缺失场景、重复场景、不可执行步骤或不可验证结果。
+2. 返回结构必须包含：result、summary、issues、suggestions。
+3. result 仅允许：APPROVE、REJECT、SUGGEST。
+4. issues 用于指出缺失场景、重复场景、不清晰步骤或不可验证结果。
 5. suggestions 用于给出可以继续补充生成的方向。`
 
-const DEFAULT_REVIEW_CHECKLIST = `优先检查主流程、边界、异常、重复场景以及步骤与预期结果是否清晰可验证。`
+const DEFAULT_REVIEW_CHECKLIST = '优先检查主流程、边界、异常、重复场景，以及步骤与预期结果是否清晰可验证。'
 
-const roleMeta: Array<{
-  roleType: RoleType
-  title: string
-  subtitle: string
-}> = [
+const protocolOptions: Array<{ label: string; value: AiProtocolType }> = [
+  { label: 'OpenAI 兼容 Chat', value: 'OPENAI_COMPATIBLE_CHAT' },
+  { label: 'OpenAI 兼容 Responses', value: 'OPENAI_COMPATIBLE_RESPONSES' },
+  { label: 'Azure OpenAI', value: 'AZURE_OPENAI' },
+]
+
+const roleMeta: Array<{ roleType: RoleType; title: string; subtitle: string }> = [
   {
     roleType: 'CASE_GENERATOR',
     title: '用例生成模型',
@@ -73,33 +88,52 @@ const roleMeta: Array<{
   {
     roleType: 'CASE_REVIEWER',
     title: '用例评审模型',
-    subtitle: '负责对生成结果做覆盖性和完整性评审。',
+    subtitle: '负责评估生成结果的覆盖性、完整性和可执行性。',
   },
 ]
 
-const protocolOptions: Array<{ label: string; value: AiProtocolType }> = [
-  { label: '通用兼容（Chat Completions）', value: 'OPENAI_CHAT_COMPLETIONS' },
-  { label: '通用兼容（Responses API）', value: 'OPENAI_RESPONSES' },
-  { label: 'Azure OpenAI', value: 'AZURE_OPENAI' },
+const capabilityMeta: Array<{ key: CapabilityKey; label: string; hint: string }> = [
+  { key: 'textChat', label: '文本对话', hint: '能否完成基础文本生成与问答。' },
+  { key: 'streamOutput', label: '流式输出', hint: '能否以流式形式返回结果。' },
+  { key: 'structuredOutput', label: 'JSON 结构化输出', hint: '能否稳定返回可解析 JSON。' },
+  { key: 'imageInput', label: '图片输入', hint: '能否读取需求截图、原型图等图片。' },
+  { key: 'longContext', label: '长上下文', hint: '用于提示模型可能具备更大的上下文窗口。' },
+  { key: 'stableAvailable', label: '最近可用', hint: '最近一次测试连接或探测是否成功。' },
 ]
+
+const capabilitySourceText: Record<AiCapabilitySource, string> = {
+  DECLARED: '接口声明',
+  INFERRED: '规则推断',
+  PROBED: '主动探测',
+  MANUAL: '人工修正',
+  UNKNOWN: '未知',
+}
 
 const { isPlatformAdmin, loadSharedBase } = useCaseCenterShared()
 
 const loading = ref(false)
 const savingRole = ref<RoleType | null>(null)
-const testingRole = ref<RoleType | null>(null)
-const loadingSecretRole = ref<RoleType | null>(null)
+const providerLoading = ref(false)
+const providerDialogVisible = ref(false)
+const savingProvider = ref(false)
+const providerTestingId = ref<number | null>(null)
+const providerFetchingId = ref<number | null>(null)
+const probingRole = ref<RoleType | null>(null)
+
+const providers = ref<AiProviderConnection[]>([])
+const providerModels = reactive<Record<number, AiProviderModel[]>>({})
 const generationStyle = ref<Record<RoleType, GenerationStyle>>({
   CASE_GENERATOR: 'balanced',
   CASE_REVIEWER: 'balanced',
 })
-const revealedApiKeys = reactive<Record<RoleType, string>>({
-  CASE_GENERATOR: '',
-  CASE_REVIEWER: '',
-})
-const revealApiKey = reactive<Record<RoleType, boolean>>({
-  CASE_GENERATOR: false,
-  CASE_REVIEWER: false,
+
+const providerDialogForm = reactive<ProviderDialogForm>({
+  id: null,
+  connectionName: '',
+  protocolType: 'OPENAI_COMPATIBLE_CHAT',
+  baseUrl: 'https://api.openai.com/v1',
+  apiKey: '',
+  status: 1,
 })
 
 const forms = reactive<Record<RoleType, RoleForm>>({
@@ -107,34 +141,65 @@ const forms = reactive<Record<RoleType, RoleForm>>({
   CASE_REVIEWER: createDefaultForm('CASE_REVIEWER'),
 })
 
+function createUnknownCapabilities(): AiModelCapabilities {
+  const unknown = { supported: null, source: 'UNKNOWN' as const, detail: null }
+  return {
+    textChat: { ...unknown },
+    streamOutput: { ...unknown },
+    structuredOutput: { ...unknown },
+    imageInput: { ...unknown },
+    longContext: { ...unknown },
+    stableAvailable: { ...unknown },
+  }
+}
+
+function applyOverrideToCapabilities(capabilities: AiModelCapabilities, override: AiCapabilityOverride): AiModelCapabilities {
+  const next = JSON.parse(JSON.stringify(capabilities)) as AiModelCapabilities
+  capabilityMeta.forEach(({ key }) => {
+    const overrideValue = override[key]
+    if (overrideValue === null || overrideValue === undefined) {
+      return
+    }
+    next[key] = {
+      supported: overrideValue,
+      source: 'MANUAL',
+      detail: '管理员手工修正',
+    }
+  })
+  return next
+}
+
 function createDefaultForm(roleType: RoleType): RoleForm {
+  const detectedCapabilities = createUnknownCapabilities()
+  const capabilityOverride: AiCapabilityOverride = roleType === 'CASE_GENERATOR' ? { imageInput: true } : {}
+  const effectiveCapabilities = applyOverrideToCapabilities(detectedCapabilities, capabilityOverride)
   return {
     id: null,
-    protocolType: 'OPENAI_CHAT_COMPLETIONS',
-    model: 'gpt-5.5',
-    baseUrl: 'https://api.openai.com/v1',
-    apiKey: '',
-    apiKeyMasked: '',
+    providerConnectionId: null,
+    model: '',
     promptTemplate: roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_PROMPT : DEFAULT_REVIEW_PROMPT,
     reviewChecklist: roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_CHECKLIST : DEFAULT_REVIEW_CHECKLIST,
     temperature: 0.3,
     maxCases: 20,
-    supportsImageInput: roleType === 'CASE_GENERATOR',
     status: 1,
+    capabilityOverride,
+    detectedCapabilities,
+    effectiveCapabilities,
+    supportsImageInput: effectiveCapabilities.imageInput.supported === true,
   }
 }
 
-function getDefaultPrompt(roleType: RoleType) {
-  return roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_PROMPT : DEFAULT_REVIEW_PROMPT
+function resetProviderDialog() {
+  providerDialogForm.id = null
+  providerDialogForm.connectionName = ''
+  providerDialogForm.protocolType = 'OPENAI_COMPATIBLE_CHAT'
+  providerDialogForm.baseUrl = 'https://api.openai.com/v1'
+  providerDialogForm.apiKey = ''
+  providerDialogForm.status = 1
 }
 
-function getDefaultChecklist(roleType: RoleType) {
-  return roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_CHECKLIST : DEFAULT_REVIEW_CHECKLIST
-}
-
-function resetForm(roleType: RoleType) {
-  const defaults = createDefaultForm(roleType)
-  Object.assign(forms[roleType], defaults)
+function resetRoleForm(roleType: RoleType) {
+  Object.assign(forms[roleType], createDefaultForm(roleType))
   syncStyleFromTemperature(roleType)
 }
 
@@ -162,8 +227,8 @@ function applyStyle(roleType: RoleType, style: GenerationStyle) {
   }
 }
 
-function statusText(roleType: RoleType) {
-  return forms[roleType].status === 1 ? '启用中' : '已停用'
+function statusText(status: number) {
+  return status === 1 ? '启用中' : '已停用'
 }
 
 function temperatureLabel(roleType: RoleType) {
@@ -174,157 +239,121 @@ function temperatureLabel(roleType: RoleType) {
   return '自定义'
 }
 
-function capabilityHint(roleType: RoleType) {
-  if (roleType === 'CASE_GENERATOR') {
-    return forms[roleType].supportsImageInput
-      ? '当前生成模型将按图文模式工作，请确认所选模型本身支持图片输入。'
-      : '当前生成模型按纯文本模式工作。若要结合需求图片生成，请开启图片输入并切换到支持视觉的模型。'
-  }
-  return '评审模型默认按文本评审使用，只有明确需要图文评审时才建议切换为支持视觉的模型。'
+function reviewChecklistLabel(roleType: RoleType) {
+  return roleType === 'CASE_GENERATOR' ? '补充要求' : '评审清单'
 }
 
-function baseUrlHint(roleType: RoleType) {
-  const protocolType = forms[roleType].protocolType
-  if (protocolType === 'OPENAI_RESPONSES') {
-    return '填写服务根地址，例如 https://xxx/v1，系统会自动访问 /responses'
-  }
-  if (protocolType === 'AZURE_OPENAI') {
-    return '填写 Azure OpenAI 对应的服务地址；当前阶段仍按 Azure 专用方式调用'
-  }
-  return '填写服务根地址，例如 https://xxx/v1，系统会自动访问 /chat/completions'
+function formatTime(value: string | null) {
+  if (!value) return '-'
+  return value.replace('T', ' ').slice(0, 19)
 }
 
-function protocolLabel(protocolType: AiProtocolType) {
-  return protocolOptions.find(option => option.value === protocolType)?.label ?? protocolType
+function capabilityStateText(supported: boolean | null) {
+  if (supported === true) return '支持'
+  if (supported === false) return '不支持'
+  return '未知'
 }
 
-function apiKeyHint(roleType: RoleType) {
-  if (forms[roleType].apiKey.trim()) {
-    return '已输入新的 API Key，保存后会覆盖当前配置。'
-  }
-  if (revealApiKey[roleType]) {
-    return '当前正在显示已保存的明文 API Key，请注意周围环境并及时关闭。'
-  }
-  return forms[roleType].id === null
-    ? '首次创建时必须填写 API Key'
-    : ''
+function overrideValueForSelect(value: boolean | null | undefined) {
+  if (value === true) return 'true'
+  if (value === false) return 'false'
+  return 'inherit'
 }
 
-function resetApiKeyState(roleType: RoleType) {
-  forms[roleType].apiKey = ''
-  revealedApiKeys[roleType] = ''
-  revealApiKey[roleType] = false
+function providerNameMap() {
+  return new Map(providers.value.map(item => [item.id, item]))
 }
 
-function displayedApiKey(roleType: RoleType) {
-  if (forms[roleType].apiKey.trim()) {
-    return forms[roleType].apiKey
-  }
-  if (revealApiKey[roleType] && revealedApiKeys[roleType]) {
-    return revealedApiKeys[roleType]
-  }
-  return forms[roleType].id !== null ? forms[roleType].apiKeyMasked : ''
+const providerSelectOptions = computed(() => providers.value.map(item => ({
+  label: `${item.connectionName} / ${item.protocolType}`,
+  value: item.id,
+})))
+
+function getProviderById(id: number | null) {
+  if (!id) return null
+  return providerNameMap().get(id) ?? null
 }
 
-function updateApiKey(roleType: RoleType, value: string) {
-  forms[roleType].apiKey = value
-  if (value.trim()) {
-    revealApiKey[roleType] = false
-  }
+function getRoleModels(roleType: RoleType) {
+  const connectionId = forms[roleType].providerConnectionId
+  if (!connectionId) return []
+  return providerModels[connectionId] ?? []
 }
 
-async function toggleApiKeyReveal(roleType: RoleType) {
-  if (!forms[roleType].id) {
-    return
-  }
-  if (revealApiKey[roleType]) {
-    revealApiKey[roleType] = false
-    return
-  }
-  if (!revealedApiKeys[roleType]) {
-    loadingSecretRole.value = roleType
-    try {
-      const response = await platformApi.getAiCaseConfigSecret('ALL', forms[roleType].id!)
-      revealedApiKeys[roleType] = response.apiKey
-    } catch (error) {
-      ElMessage.error((error as Error).message)
-      return
-    } finally {
-      loadingSecretRole.value = null
-    }
-  }
-  revealApiKey[roleType] = true
+function recomputeEffectiveCapabilities(roleType: RoleType) {
+  forms[roleType].effectiveCapabilities = applyOverrideToCapabilities(
+    forms[roleType].detectedCapabilities,
+    forms[roleType].capabilityOverride,
+  )
+  forms[roleType].supportsImageInput = forms[roleType].effectiveCapabilities.imageInput.supported === true
 }
 
-function canSave(roleType: RoleType) {
-  const form = forms[roleType]
-  return isPlatformAdmin.value
-    && !!form.protocolType
-    && !!form.model.trim()
-    && !!form.baseUrl.trim()
-    && form.temperature >= 0
-    && form.temperature <= 1
-    && form.maxCases >= 1
-    && form.maxCases <= 100
-    && (!!form.id || !!form.apiKey.trim())
-}
-
-function canTest(roleType: RoleType) {
-  const form = forms[roleType]
-  return isPlatformAdmin.value
-    && !!form.protocolType
-    && !!form.model.trim()
-    && !!form.baseUrl.trim()
-    && (!!form.id || !!form.apiKey.trim())
-}
-
-function buildPayload(roleType: RoleType): SaveAiCaseConfigPayload {
-  const form = forms[roleType]
-  const promptTemplate = form.promptTemplate.trim() || getDefaultPrompt(roleType)
-  const reviewChecklist = form.reviewChecklist.trim() || getDefaultChecklist(roleType)
-  return {
-    roleType,
-    protocolType: form.protocolType,
-    model: form.model.trim(),
-    baseUrl: form.baseUrl.trim(),
-    apiKey: form.apiKey.trim() || undefined,
-    promptTemplate,
-    reviewChecklist,
-    temperature: Number(form.temperature),
-    maxCases: Number(form.maxCases),
-    supportsImageInput: form.supportsImageInput,
-    status: form.status,
-  }
-}
-
-function applyLoadedConfig(roleType: RoleType, config: AiCaseConfig | null) {
-  resetForm(roleType)
+function applyLoadedRole(roleType: RoleType, config: AiCaseConfig | null) {
+  resetRoleForm(roleType)
   if (!config) {
     return
   }
   forms[roleType].id = config.id
-  forms[roleType].protocolType = config.protocolType
+  forms[roleType].providerConnectionId = config.providerConnectionId
   forms[roleType].model = config.model
-  forms[roleType].baseUrl = config.baseUrl
   forms[roleType].promptTemplate = config.promptTemplate
   forms[roleType].reviewChecklist = config.reviewChecklist ?? ''
   forms[roleType].temperature = config.temperature
   forms[roleType].maxCases = config.maxCases
-  forms[roleType].supportsImageInput = config.supportsImageInput
   forms[roleType].status = config.status
-  forms[roleType].apiKeyMasked = config.apiKeyMasked
-  resetApiKeyState(roleType)
+  forms[roleType].capabilityOverride = config.capabilityOverride ?? {}
+  forms[roleType].detectedCapabilities = config.detectedCapabilities ?? createUnknownCapabilities()
+  forms[roleType].effectiveCapabilities = config.effectiveCapabilities ?? applyOverrideToCapabilities(
+    forms[roleType].detectedCapabilities,
+    forms[roleType].capabilityOverride,
+  )
+  forms[roleType].supportsImageInput = config.supportsImageInput
   syncStyleFromTemperature(roleType)
 }
 
+async function loadProviders() {
+  providerLoading.value = true
+  try {
+    providers.value = await platformApi.getAiProviderConnections('ALL')
+  } catch (error) {
+    ElMessage.error((error as Error).message)
+  } finally {
+    providerLoading.value = false
+  }
+}
+
+async function loadProviderModels(connectionId: number, forceFetch = false) {
+  if (!connectionId) {
+    return []
+  }
+  try {
+    if (forceFetch) {
+      const response = await platformApi.fetchAiProviderModels('ALL', connectionId)
+      providerModels[connectionId] = response.models
+      ElMessage.success(response.message || '模型列表已刷新')
+    } else {
+      providerModels[connectionId] = await platformApi.getAiProviderModels('ALL', connectionId)
+    }
+  } catch (error) {
+    ElMessage.error((error as Error).message)
+    providerModels[connectionId] = providerModels[connectionId] ?? []
+  }
+  return providerModels[connectionId] ?? []
+}
+
 async function loadConfig() {
-  resetForm('CASE_GENERATOR')
-  resetForm('CASE_REVIEWER')
   loading.value = true
+  resetRoleForm('CASE_GENERATOR')
+  resetRoleForm('CASE_REVIEWER')
   try {
     const response = await platformApi.getAiCaseConfig('ALL')
-    applyLoadedConfig('CASE_GENERATOR', response.generatorConfig)
-    applyLoadedConfig('CASE_REVIEWER', response.reviewerConfig)
+    applyLoadedRole('CASE_GENERATOR', response.generatorConfig)
+    applyLoadedRole('CASE_REVIEWER', response.reviewerConfig)
+    const connectionIds = Array.from(new Set(
+      [forms.CASE_GENERATOR.providerConnectionId, forms.CASE_REVIEWER.providerConnectionId]
+        .filter((item): item is number => typeof item === 'number' && item > 0),
+    ))
+    await Promise.all(connectionIds.map(connectionId => loadProviderModels(connectionId)))
   } catch (error) {
     ElMessage.error((error as Error).message)
   } finally {
@@ -332,44 +361,213 @@ async function loadConfig() {
   }
 }
 
-async function testConnection(roleType: RoleType) {
-  if (!canTest(roleType)) {
-    ElMessage.error('请先补全测试连接所需的配置项')
+function openCreateProviderDialog() {
+  resetProviderDialog()
+  providerDialogVisible.value = true
+}
+
+function openEditProviderDialog(provider: AiProviderConnection) {
+  providerDialogForm.id = provider.id
+  providerDialogForm.connectionName = provider.connectionName
+  providerDialogForm.protocolType = provider.protocolType
+  providerDialogForm.baseUrl = provider.baseUrl
+  providerDialogForm.apiKey = ''
+  providerDialogForm.status = provider.status
+  providerDialogVisible.value = true
+}
+
+async function saveProvider() {
+  if (!providerDialogForm.connectionName.trim() || !providerDialogForm.baseUrl.trim()) {
+    ElMessage.error('请先填写连接名称和 API URL')
     return
   }
-  testingRole.value = roleType
+  if (!providerDialogForm.id && !providerDialogForm.apiKey.trim()) {
+    ElMessage.error('新建连接时必须填写 API Key')
+    return
+  }
+  const payload: SaveAiProviderConnectionPayload = {
+    connectionName: providerDialogForm.connectionName.trim(),
+    protocolType: providerDialogForm.protocolType,
+    baseUrl: providerDialogForm.baseUrl.trim(),
+    apiKey: providerDialogForm.apiKey.trim() || undefined,
+    status: providerDialogForm.status,
+  }
+  savingProvider.value = true
   try {
-    const response = await platformApi.testAiCaseConfig('ALL', buildPayload(roleType))
-    ElMessage.success(response.message || 'AI 连接测试成功')
+    if (providerDialogForm.id) {
+      await platformApi.updateAiProviderConnection('ALL', providerDialogForm.id, payload)
+      ElMessage.success('AI 连接已更新')
+    } else {
+      await platformApi.createAiProviderConnection('ALL', payload)
+      ElMessage.success('AI 连接已创建')
+    }
+    providerDialogVisible.value = false
+    await loadProviders()
+    await loadConfig()
   } catch (error) {
     ElMessage.error((error as Error).message)
   } finally {
-    testingRole.value = null
+    savingProvider.value = false
   }
 }
 
-async function saveConfig(roleType: RoleType) {
-  if (!canSave(roleType)) {
-    ElMessage.error('请先补全当前模型配置的必填项')
+async function testProvider(provider: AiProviderConnection) {
+  providerTestingId.value = provider.id
+  try {
+    const response = await platformApi.testAiProviderConnection('ALL', provider.id)
+    ElMessage.success(response.message || '连接测试成功')
+    await loadProviders()
+  } catch (error) {
+    ElMessage.error((error as Error).message)
+  } finally {
+    providerTestingId.value = null
+  }
+}
+
+async function fetchModelsForProvider(provider: AiProviderConnection) {
+  providerFetchingId.value = provider.id
+  try {
+    const response = await platformApi.fetchAiProviderModels('ALL', provider.id)
+    providerModels[provider.id] = response.models
+    ElMessage.success(response.message || '模型列表已更新')
+    await loadProviders()
+  } catch (error) {
+    ElMessage.error((error as Error).message)
+  } finally {
+    providerFetchingId.value = null
+  }
+}
+
+async function deleteProvider(provider: AiProviderConnection) {
+  try {
+    await ElMessageBox.confirm(`确定删除连接“${provider.connectionName}”吗？`, '删除 AI 连接', {
+      type: 'warning',
+    })
+    await platformApi.deleteAiProviderConnection('ALL', provider.id)
+    delete providerModels[provider.id]
+    if (forms.CASE_GENERATOR.providerConnectionId === provider.id) {
+      forms.CASE_GENERATOR.providerConnectionId = null
+    }
+    if (forms.CASE_REVIEWER.providerConnectionId === provider.id) {
+      forms.CASE_REVIEWER.providerConnectionId = null
+    }
+    ElMessage.success('AI 连接已删除')
+    await loadProviders()
+  } catch (error) {
+    if ((error as Error).message !== 'cancel') {
+      ElMessage.error((error as Error).message)
+    }
+  }
+}
+
+async function handleRoleConnectionChanged(roleType: RoleType) {
+  const connectionId = forms[roleType].providerConnectionId
+  forms[roleType].detectedCapabilities = createUnknownCapabilities()
+  recomputeEffectiveCapabilities(roleType)
+  if (!connectionId) {
+    return
+  }
+  await loadProviderModels(connectionId)
+  if (forms[roleType].model.trim()) {
+    const matched = (providerModels[connectionId] ?? []).find(item => item.modelName === forms[roleType].model.trim())
+    if (matched) {
+      forms[roleType].detectedCapabilities = matched.detectedCapabilities
+      recomputeEffectiveCapabilities(roleType)
+    }
+  }
+}
+
+async function handleRoleModelChanged(roleType: RoleType) {
+  const connectionId = forms[roleType].providerConnectionId
+  const model = forms[roleType].model.trim()
+  if (!connectionId || !model) {
+    forms[roleType].detectedCapabilities = createUnknownCapabilities()
+    recomputeEffectiveCapabilities(roleType)
+    return
+  }
+  const cached = (providerModels[connectionId] ?? []).find(item => item.modelName === model)
+  if (cached) {
+    forms[roleType].detectedCapabilities = cached.detectedCapabilities
+    recomputeEffectiveCapabilities(roleType)
+  }
+  await probeRoleModel(roleType)
+}
+
+async function probeRoleModel(roleType: RoleType) {
+  const connectionId = forms[roleType].providerConnectionId
+  const model = forms[roleType].model.trim()
+  if (!connectionId || !model) {
+    return
+  }
+  probingRole.value = roleType
+  try {
+    const result = await platformApi.probeAiProviderModel('ALL', connectionId, model)
+    const nextModels = providerModels[connectionId] ?? []
+    const index = nextModels.findIndex(item => item.modelName === result.modelName)
+    if (index >= 0) {
+      nextModels.splice(index, 1, result)
+    } else {
+      nextModels.unshift(result)
+    }
+    providerModels[connectionId] = [...nextModels]
+    forms[roleType].detectedCapabilities = result.detectedCapabilities
+    recomputeEffectiveCapabilities(roleType)
+  } catch (error) {
+    ElMessage.error((error as Error).message)
+  } finally {
+    probingRole.value = null
+  }
+}
+
+function updateCapabilityOverride(roleType: RoleType, key: CapabilityKey, value: string) {
+  forms[roleType].capabilityOverride[key] = value === 'inherit' ? null : value === 'true'
+  recomputeEffectiveCapabilities(roleType)
+}
+
+function canSaveRole(roleType: RoleType) {
+  const form = forms[roleType]
+  return isPlatformAdmin.value
+    && !!form.providerConnectionId
+    && !!form.model.trim()
+    && !!form.promptTemplate.trim()
+    && form.temperature >= 0
+    && form.temperature <= 1
+    && form.maxCases >= 1
+    && form.maxCases <= 100
+}
+
+function buildRolePayload(roleType: RoleType): SaveAiCaseConfigPayload {
+  const form = forms[roleType]
+  return {
+    roleType,
+    providerConnectionId: form.providerConnectionId,
+    protocolType: getProviderById(form.providerConnectionId)?.protocolType ?? 'OPENAI_COMPATIBLE_CHAT',
+    model: form.model.trim(),
+    promptTemplate: form.promptTemplate.trim() || (roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_PROMPT : DEFAULT_REVIEW_PROMPT),
+    reviewChecklist: form.reviewChecklist.trim() || (roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_CHECKLIST : DEFAULT_REVIEW_CHECKLIST),
+    temperature: Number(form.temperature),
+    maxCases: Number(form.maxCases),
+    capabilityOverride: { ...form.capabilityOverride },
+    supportsImageInput: form.supportsImageInput,
+    status: form.status,
+  }
+}
+
+async function saveRole(roleType: RoleType) {
+  if (!canSaveRole(roleType)) {
+    ElMessage.error('请先补全当前角色绑定配置')
     return
   }
   savingRole.value = roleType
   try {
-    if (!forms[roleType].promptTemplate.trim()) {
-      forms[roleType].promptTemplate = getDefaultPrompt(roleType)
-    }
-    if (!forms[roleType].reviewChecklist.trim()) {
-      forms[roleType].reviewChecklist = getDefaultChecklist(roleType)
-    }
-    const payload = buildPayload(roleType)
-    let savedConfig: AiCaseConfig
-    if (forms[roleType].id === null) {
-      savedConfig = await platformApi.createAiCaseConfig('ALL', payload)
+    const payload = buildRolePayload(roleType)
+    if (forms[roleType].id) {
+      await platformApi.updateAiCaseConfig('ALL', forms[roleType].id!, payload)
     } else {
-      savedConfig = await platformApi.updateAiCaseConfig('ALL', forms[roleType].id!, payload)
+      await platformApi.createAiCaseConfig('ALL', payload)
     }
-    applyLoadedConfig(roleType, savedConfig)
     ElMessage.success(`${roleType === 'CASE_GENERATOR' ? '用例生成模型' : '用例评审模型'}已保存`)
+    await loadConfig()
   } catch (error) {
     ElMessage.error((error as Error).message)
   } finally {
@@ -382,12 +580,59 @@ watch(() => forms.CASE_REVIEWER.temperature, () => syncStyleFromTemperature('CAS
 
 onMounted(async () => {
   await loadSharedBase()
-  await loadConfig()
+  await Promise.all([loadProviders(), loadConfig()])
 })
 </script>
 
 <template>
   <section class="page-shell">
+    <article class="panel-card section-card">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">供应商连接池</div>
+          <div class="panel-subtitle">统一维护 API URL、API Key 和协议类型，角色配置只做绑定和模型选择。</div>
+        </div>
+        <div class="panel-header-actions">
+          <el-button v-if="isPlatformAdmin" type="primary" @click="openCreateProviderDialog">
+            <el-icon><Plus /></el-icon>
+            新建连接
+          </el-button>
+        </div>
+      </div>
+
+      <el-table :data="providers" v-loading="providerLoading" class="provider-table">
+        <el-table-column prop="connectionName" label="连接名称" min-width="180" />
+        <el-table-column prop="protocolType" label="协议类型" min-width="220" />
+        <el-table-column prop="baseUrl" label="API URL" min-width="280" />
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }">
+            <el-tag :type="row.status === 1 ? 'success' : 'info'">{{ statusText(row.status) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="modelCount" label="缓存模型数" width="110" />
+        <el-table-column label="最近验证" min-width="150">
+          <template #default="{ row }">{{ formatTime(row.lastVerifiedAt) }}</template>
+        </el-table-column>
+        <el-table-column label="最近拉取模型" min-width="170">
+          <template #default="{ row }">{{ formatTime(row.lastFetchModelsAt) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="320" fixed="right">
+          <template #default="{ row }">
+            <div class="table-actions">
+              <el-button link @click="openEditProviderDialog(row)">编辑</el-button>
+              <el-button link :loading="providerTestingId === row.id" @click="testProvider(row)">测试连接</el-button>
+              <el-button link :loading="providerFetchingId === row.id" @click="fetchModelsForProvider(row)">获取模型列表</el-button>
+              <el-button link type="danger" @click="deleteProvider(row)">删除</el-button>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div v-if="providers.length === 0" class="empty-inline">
+        还没有 AI 连接。先新建一个连接，再把它绑定到“用例生成 / 用例评审”角色上。
+      </div>
+    </article>
+
     <div class="ai-config-grid">
       <article v-for="meta in roleMeta" :key="meta.roleType" class="panel-card ai-config-card">
         <div class="panel-header">
@@ -398,86 +643,83 @@ onMounted(async () => {
           <div class="panel-header-actions">
             <el-button
               v-if="isPlatformAdmin"
-              :loading="testingRole === meta.roleType"
-              :disabled="!canTest(meta.roleType)"
-              @click="testConnection(meta.roleType)"
+              :loading="probingRole === meta.roleType"
+              :disabled="!forms[meta.roleType].providerConnectionId || !forms[meta.roleType].model.trim()"
+              @click="probeRoleModel(meta.roleType)"
             >
-              <el-icon><Connection /></el-icon>
-              测试连接
+              <el-icon><MagicStick /></el-icon>
+              探测能力
             </el-button>
             <el-button
               v-if="isPlatformAdmin"
               type="primary"
               :loading="savingRole === meta.roleType"
-              :disabled="!canSave(meta.roleType)"
-              @click="saveConfig(meta.roleType)"
+              :disabled="!canSaveRole(meta.roleType)"
+              @click="saveRole(meta.roleType)"
             >
               <el-icon><Setting /></el-icon>
-              保存配置
+              保存绑定
             </el-button>
           </div>
         </div>
 
-        <el-form label-width="96px" class="ai-config-form" :disabled="loading || !isPlatformAdmin">
-          <el-form-item label="接入类型">
-            <el-select v-model="forms[meta.roleType].protocolType">
+        <el-form label-width="100px" :disabled="loading || !isPlatformAdmin" class="ai-config-form">
+          <el-form-item label="绑定连接">
+            <el-select
+              v-model="forms[meta.roleType].providerConnectionId"
+              placeholder="请选择已保存的 AI 连接"
+              @change="handleRoleConnectionChanged(meta.roleType)"
+            >
               <el-option
-                v-for="option in protocolOptions"
+                v-for="option in providerSelectOptions"
                 :key="option.value"
                 :label="option.label"
                 :value="option.value"
               />
             </el-select>
           </el-form-item>
+
           <el-form-item label="模型">
-            <el-input v-model="forms[meta.roleType].model" />
-            <div class="field-hint">{{ capabilityHint(meta.roleType) }}</div>
-          </el-form-item>
-          <el-form-item label="Base URL">
-            <el-input v-model="forms[meta.roleType].baseUrl" />
-            <div class="field-hint">{{ baseUrlHint(meta.roleType) }}</div>
-          </el-form-item>
-          <el-form-item label="API Key">
-            <el-input
-              :model-value="displayedApiKey(meta.roleType)"
-              placeholder="请输入 API Key"
-              @update:model-value="(value: string) => updateApiKey(meta.roleType, value)"
-            >
-              <template #suffix>
-                <el-button
-                  v-if="forms[meta.roleType].id !== null"
-                  link
-                  :loading="loadingSecretRole === meta.roleType"
-                  @click="toggleApiKeyReveal(meta.roleType)"
+            <div class="field-stack">
+              <div class="inline-row">
+                <el-select
+                  v-model="forms[meta.roleType].model"
+                  filterable
+                  allow-create
+                  default-first-option
+                  clearable
+                  placeholder="先获取模型列表，或直接手工输入模型名"
+                  class="flex-select"
+                  @change="handleRoleModelChanged(meta.roleType)"
                 >
-                  <el-icon>
-                    <component :is="revealApiKey[meta.roleType] ? Hide : View" />
-                  </el-icon>
+                  <el-option
+                    v-for="item in getRoleModels(meta.roleType)"
+                    :key="item.modelName"
+                    :label="item.displayName || item.modelName"
+                    :value="item.modelName"
+                  />
+                </el-select>
+                <el-button
+                  :disabled="!forms[meta.roleType].providerConnectionId"
+                  @click="loadProviderModels(forms[meta.roleType].providerConnectionId!, true)"
+                >
+                  <el-icon><RefreshRight /></el-icon>
+                  获取模型列表
                 </el-button>
-              </template>
-            </el-input>
-            <div v-if="revealApiKey[meta.roleType]" class="secret-alert">
-              正在显示已保存的明文 API Key
+              </div>
+              <div class="field-hint">
+                支持下拉选择，也支持在对方不提供 `/models` 时直接手工输入模型名。
+              </div>
             </div>
-            <div class="field-hint">{{ apiKeyHint(meta.roleType) }}</div>
           </el-form-item>
+
           <el-form-item label="状态">
-            <div class="status-pair-row">
-              <div class="status-pair-item">
-                <div class="status-toggle-row">
-                  <el-switch v-model="forms[meta.roleType].status" :active-value="1" :inactive-value="0" />
-                  <span class="status-toggle-text">{{ statusText(meta.roleType) }}</span>
-                </div>
-              </div>
-              <div v-if="meta.roleType === 'CASE_GENERATOR'" class="status-pair-item">
-                <span class="status-pair-label">图片输入</span>
-                <div class="status-toggle-row">
-                  <el-switch v-model="forms[meta.roleType].supportsImageInput" />
-                  <span class="status-toggle-text">{{ forms[meta.roleType].supportsImageInput ? '已开启' : '已关闭' }}</span>
-                </div>
-              </div>
+            <div class="status-toggle-row">
+              <el-switch v-model="forms[meta.roleType].status" :active-value="1" :inactive-value="0" />
+              <span class="status-toggle-text">{{ statusText(forms[meta.roleType].status) }}</span>
             </div>
           </el-form-item>
+
           <el-form-item label="生成风格">
             <el-segmented
               :model-value="generationStyle[meta.roleType]"
@@ -490,6 +732,7 @@ onMounted(async () => {
               @change="(value: string | number | boolean) => applyStyle(meta.roleType, value as GenerationStyle)"
             />
           </el-form-item>
+
           <el-form-item label="Temperature">
             <div class="temperature-field">
               <el-slider v-model="forms[meta.roleType].temperature" :min="0" :max="1" :step="0.1" />
@@ -499,13 +742,54 @@ onMounted(async () => {
               </div>
             </div>
           </el-form-item>
-          <el-form-item label="系统生成上限">
+
+          <el-form-item label="系统上限">
             <el-input-number v-model="forms[meta.roleType].maxCases" :min="1" :max="100" />
           </el-form-item>
-          <el-form-item label="Prompt 模板">
-            <el-input v-model="forms[meta.roleType].promptTemplate" type="textarea" :rows="12" resize="vertical" />
+
+          <el-form-item label="能力矩阵">
+            <div class="capability-panel">
+              <div class="capability-header">
+                <div>自动探测结果</div>
+                <div>人工修正</div>
+                <div>最终生效</div>
+              </div>
+              <div v-for="item in capabilityMeta" :key="item.key" class="capability-row">
+                <div class="capability-name">
+                  <div>{{ item.label }}</div>
+                  <div class="capability-hint">{{ item.hint }}</div>
+                </div>
+                <div class="capability-value">
+                  <el-tag size="small" effect="plain" :type="forms[meta.roleType].detectedCapabilities[item.key].supported === true ? 'success' : forms[meta.roleType].detectedCapabilities[item.key].supported === false ? 'danger' : 'info'">
+                    {{ capabilityStateText(forms[meta.roleType].detectedCapabilities[item.key].supported) }}
+                  </el-tag>
+                  <span class="source-text">{{ capabilitySourceText[forms[meta.roleType].detectedCapabilities[item.key].source] }}</span>
+                </div>
+                <div>
+                  <el-select
+                    :model-value="overrideValueForSelect(forms[meta.roleType].capabilityOverride[item.key])"
+                    @change="(value: string) => updateCapabilityOverride(meta.roleType, item.key, value)"
+                  >
+                    <el-option label="跟随自动探测" value="inherit" />
+                    <el-option label="强制支持" value="true" />
+                    <el-option label="强制禁用" value="false" />
+                  </el-select>
+                </div>
+                <div class="capability-value">
+                  <el-tag size="small" :type="forms[meta.roleType].effectiveCapabilities[item.key].supported === true ? 'success' : forms[meta.roleType].effectiveCapabilities[item.key].supported === false ? 'danger' : 'info'">
+                    {{ capabilityStateText(forms[meta.roleType].effectiveCapabilities[item.key].supported) }}
+                  </el-tag>
+                  <span class="source-text">{{ capabilitySourceText[forms[meta.roleType].effectiveCapabilities[item.key].source] }}</span>
+                </div>
+              </div>
+            </div>
           </el-form-item>
-          <el-form-item :label="meta.roleType === 'CASE_GENERATOR' ? '补充要求' : '评审清单'">
+
+          <el-form-item label="Prompt 模板">
+            <el-input v-model="forms[meta.roleType].promptTemplate" type="textarea" :rows="10" resize="vertical" />
+          </el-form-item>
+
+          <el-form-item :label="reviewChecklistLabel(meta.roleType)">
             <el-input v-model="forms[meta.roleType].reviewChecklist" type="textarea" :rows="5" resize="vertical" />
           </el-form-item>
         </el-form>
@@ -513,13 +797,14 @@ onMounted(async () => {
         <div class="detail-card ai-config-summary">
           <div class="detail-title">{{ meta.title }}</div>
           <div class="detail-meta">
-            {{ forms[meta.roleType].id ? '全局已保存该模型配置' : '全局还未保存该模型配置' }}
+            {{ forms[meta.roleType].providerConnectionId ? '已绑定连接，可直接参与用例中心 AI 业务链路' : '尚未绑定连接' }}
           </div>
-          <div class="detail-body"><strong>当前接入：</strong>{{ protocolLabel(forms[meta.roleType].protocolType) }} / {{ forms[meta.roleType].model }}</div>
+          <div class="detail-body"><strong>当前连接：</strong>{{ getProviderById(forms[meta.roleType].providerConnectionId)?.connectionName ?? '-' }}</div>
+          <div class="detail-body"><strong>当前模型：</strong>{{ forms[meta.roleType].model || '-' }}</div>
           <div class="detail-body"><strong>Temperature：</strong>{{ forms[meta.roleType].temperature.toFixed(1) }}（{{ temperatureLabel(meta.roleType) }}）</div>
-          <div class="detail-body"><strong>系统生成上限：</strong>{{ forms[meta.roleType].maxCases }} 条</div>
-          <div v-if="meta.roleType === 'CASE_GENERATOR'" class="detail-body"><strong>图文生成：</strong>{{ forms[meta.roleType].supportsImageInput ? '已开启' : '未开启' }}</div>
-          <div class="detail-body"><strong>状态：</strong>{{ statusText(meta.roleType) }}</div>
+          <div class="detail-body"><strong>系统上限：</strong>{{ forms[meta.roleType].maxCases }} 条</div>
+          <div class="detail-body"><strong>图片输入：</strong>{{ forms[meta.roleType].supportsImageInput ? '已开启' : '未开启' }}</div>
+          <div class="detail-body"><strong>状态：</strong>{{ statusText(forms[meta.roleType].status) }}</div>
         </div>
       </article>
     </div>
@@ -527,17 +812,62 @@ onMounted(async () => {
     <article v-if="!isPlatformAdmin" class="panel-card">
       <div class="empty-block compact-block">
         <div class="empty-title">当前账号只读</div>
-        <div class="empty-desc">AI 配置维护仅对管理员开放，你当前可以查看现有配置，但不能修改。</div>
+        <div class="empty-desc">AI 配置维护仅对管理员开放，你现在可以查看现有配置，但不能修改。</div>
       </div>
     </article>
+
+    <el-dialog
+      v-model="providerDialogVisible"
+      :title="providerDialogForm.id ? '编辑 AI 连接' : '新建 AI 连接'"
+      width="640px"
+      destroy-on-close
+    >
+      <el-form label-width="96px">
+        <el-form-item label="连接名称">
+          <el-input v-model="providerDialogForm.connectionName" placeholder="例如：OpenAI 官方 / DeepSeek 中转 / 团队代理" />
+        </el-form-item>
+        <el-form-item label="协议类型">
+          <el-select v-model="providerDialogForm.protocolType">
+            <el-option
+              v-for="option in protocolOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="API URL">
+          <el-input v-model="providerDialogForm.baseUrl" placeholder="例如：https://api.openai.com/v1" />
+        </el-form-item>
+        <el-form-item label="API Key">
+          <el-input
+            v-model="providerDialogForm.apiKey"
+            type="password"
+            show-password
+            :placeholder="providerDialogForm.id ? '留空表示继续使用当前已保存的 API Key' : '请输入 API Key'"
+          />
+        </el-form-item>
+        <el-form-item label="状态">
+          <div class="status-toggle-row">
+            <el-switch v-model="providerDialogForm.status" :active-value="1" :inactive-value="0" />
+            <span class="status-toggle-text">{{ statusText(providerDialogForm.status) }}</span>
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="providerDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="savingProvider" @click="saveProvider">保存连接</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
 <style scoped>
-.ai-config-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+.section-card {
+  margin-bottom: 16px;
 }
 
 .panel-header-actions {
@@ -546,8 +876,46 @@ onMounted(async () => {
   gap: 8px;
 }
 
+.provider-table {
+  margin-top: 8px;
+}
+
+.table-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.empty-inline {
+  margin-top: 12px;
+  color: var(--text-subtle);
+  font-size: 13px;
+}
+
+.ai-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
 .ai-config-form {
   margin-top: 4px;
+}
+
+.field-stack {
+  width: 100%;
+}
+
+.inline-row {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+
+.flex-select {
+  flex: 1;
+  min-width: 0;
 }
 
 .field-hint {
@@ -556,42 +924,10 @@ onMounted(async () => {
   color: var(--text-subtle);
 }
 
-.secret-alert {
-  margin-top: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: rgba(245, 158, 11, 0.12);
-  color: #b45309;
-  font-size: 12px;
-  line-height: 1.4;
-}
-
 .status-toggle-row {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-}
-
-.status-pair-row {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: center;
-  column-gap: 28px;
-  width: 100%;
-}
-
-.status-pair-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-  justify-self: start;
-}
-
-.status-pair-label {
-  font-size: 13px;
-  color: var(--text-subtle);
-  flex-shrink: 0;
 }
 
 .status-toggle-text {
@@ -621,6 +957,56 @@ onMounted(async () => {
   color: #2563eb;
 }
 
+.capability-panel {
+  width: 100%;
+  border: 1px solid var(--el-border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.capability-header,
+.capability-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 1fr;
+  gap: 12px;
+  padding: 12px 14px;
+  align-items: center;
+}
+
+.capability-header {
+  background: var(--el-fill-color-light);
+  color: var(--text-subtle);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.capability-row + .capability-row {
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.capability-name {
+  min-width: 0;
+}
+
+.capability-hint {
+  margin-top: 4px;
+  color: var(--text-subtle);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.capability-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.source-text {
+  color: var(--text-subtle);
+  font-size: 12px;
+}
+
 .ai-config-summary {
   margin-top: 12px;
 }
@@ -629,9 +1015,29 @@ onMounted(async () => {
   margin-top: 0;
 }
 
-@media (max-width: 1200px) {
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (max-width: 1280px) {
   .ai-config-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 960px) {
+  .capability-header {
+    display: none;
+  }
+
+  .capability-row {
+    grid-template-columns: 1fr;
+  }
+
+  .inline-row {
+    flex-direction: column;
   }
 }
 </style>

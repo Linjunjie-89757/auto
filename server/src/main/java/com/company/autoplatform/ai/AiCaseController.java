@@ -127,6 +127,14 @@ public class AiCaseController {
         return ApiResponse.ok(aiCaseService.fetchProviderModels(id, workspaceCode), "AI provider models fetched");
     }
 
+    @GetMapping("/providers/{id}/secret")
+    public ApiResponse<AiProviderConnectionSecretResponse> getProviderSecret(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(aiCaseService.getProviderSecret(id, workspaceCode));
+    }
+
     @GetMapping("/providers/{id}/models")
     public ApiResponse<java.util.List<AiProviderModelItem>> getProviderModels(
             @PathVariable Long id,

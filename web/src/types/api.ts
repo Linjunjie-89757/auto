@@ -212,6 +212,11 @@ export interface AiCaseConfigSecretResponse {
   apiKey: string
 }
 
+export interface AiProviderConnectionSecretResponse {
+  id: number
+  apiKey: string
+}
+
 export interface ImportRequirementDocumentResponse {
   fileName: string
   title: string

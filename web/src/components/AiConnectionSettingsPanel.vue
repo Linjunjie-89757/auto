@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { Plus, RefreshRight } from '@element-plus/icons-vue'
+import { Hide, Plus, RefreshRight, View } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ListToolbar from './ListToolbar.vue'
 import { platformApi } from '../api/platform'
@@ -32,9 +32,11 @@ const providerLoading = ref(false)
 const providerDialogVisible = ref(false)
 const savingProvider = ref(false)
 const providerTestingId = ref<number | null>(null)
-const providerFetchingId = ref<number | null>(null)
 const providerDialogModelLoading = ref(false)
 const providerDialogModelRequestSeq = ref(0)
+const apiKeyVisible = ref(false)
+const apiKeySecretLoading = ref(false)
+const apiKeyUsingSavedSecret = ref(false)
 
 const providers = ref<AiProviderConnection[]>([])
 const providerDialogModels = ref<AiProviderModel[]>([])
@@ -56,6 +58,10 @@ const providerDialogForm = reactive<ProviderDialogForm>({
   status: 1,
 })
 
+const defaultSavedApiKeyMaskLength = 16
+
+const apiKeyInputType = computed(() => (apiKeyVisible.value ? 'text' : 'password'))
+
 const filteredProviders = computed(() => {
   const keyword = filters.keyword.trim().toLowerCase()
   return providers.value.filter((item) => {
@@ -72,6 +78,9 @@ const filteredProviders = computed(() => {
 function resetProviderDialog() {
   providerDialogModelRequestSeq.value += 1
   providerDialogModelLoading.value = false
+  apiKeyVisible.value = false
+  apiKeySecretLoading.value = false
+  apiKeyUsingSavedSecret.value = false
   providerDialogForm.id = null
   providerDialogForm.connectionName = ''
   providerDialogForm.protocolType = 'OPENAI_COMPATIBLE_CHAT'
@@ -102,6 +111,20 @@ function formatRequestTimeout(value: number | null) {
   return value == null ? '系统默认' : `${value} 秒`
 }
 
+function buildSavedApiKeyMask(provider: AiProviderConnection) {
+  const maskLength = provider.apiKeyMasked?.length || defaultSavedApiKeyMaskLength
+  return 'x'.repeat(maskLength)
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => reject(new Error(message)), timeoutMs)
+    }),
+  ])
+}
+
 async function loadProviders() {
   providerLoading.value = true
   try {
@@ -126,7 +149,8 @@ function openEditProviderDialog(provider: AiProviderConnection) {
   providerDialogForm.baseUrl = provider.baseUrl
   providerDialogForm.requestTimeoutSeconds = provider.requestTimeoutSeconds ?? 180
   providerDialogForm.modelName = provider.modelName ?? ''
-  providerDialogForm.apiKey = ''
+  providerDialogForm.apiKey = provider.apiKeyConfigured ? buildSavedApiKeyMask(provider) : ''
+  apiKeyUsingSavedSecret.value = provider.apiKeyConfigured
   providerDialogForm.status = provider.status
   providerDialogVisible.value = true
 }
@@ -150,7 +174,7 @@ async function saveProvider() {
     baseUrl: providerDialogForm.baseUrl.trim(),
     requestTimeoutSeconds: providerDialogForm.requestTimeoutSeconds,
     modelName: providerDialogForm.modelName.trim(),
-    apiKey: providerDialogForm.apiKey.trim() || undefined,
+    apiKey: apiKeyUsingSavedSecret.value ? undefined : providerDialogForm.apiKey.trim() || undefined,
     status: providerDialogForm.status,
   }
   savingProvider.value = true
@@ -181,11 +205,46 @@ function applyDialogModels(models: AiProviderModel[]) {
   providerDialogForm.modelName = matched?.modelName ?? models[0].modelName
 }
 
+function handleApiKeyInput() {
+  if (apiKeyUsingSavedSecret.value) {
+    apiKeyUsingSavedSecret.value = false
+  }
+}
+
+async function toggleApiKeyVisible() {
+  if (!providerDialogForm.id) {
+    apiKeyVisible.value = !apiKeyVisible.value
+    return
+  }
+  if (apiKeyUsingSavedSecret.value) {
+    if (!providerDialogForm.id || apiKeySecretLoading.value) {
+      return
+    }
+    apiKeySecretLoading.value = true
+    try {
+      const response = await withTimeout(
+        platformApi.getAiProviderConnectionSecret('ALL', providerDialogForm.id),
+        15000,
+        '读取 API Key 超时，请确认后端已重启并包含最新接口',
+      )
+      providerDialogForm.apiKey = response.apiKey
+      apiKeyUsingSavedSecret.value = false
+      apiKeyVisible.value = true
+    } catch (error) {
+      ElMessage.error((error as Error).message)
+    } finally {
+      apiKeySecretLoading.value = false
+    }
+    return
+  }
+  apiKeyVisible.value = !apiKeyVisible.value
+}
+
 async function loadDialogModels(provider?: AiProviderConnection) {
   if (providerDialogModelLoading.value) {
     return
   }
-  if (!providerDialogForm.baseUrl.trim() || !providerDialogForm.apiKey.trim()) {
+  if (!providerDialogForm.baseUrl.trim() || (!providerDialogForm.id && !providerDialogForm.apiKey.trim())) {
     ElMessage.error('请先填写 API URL 和 API Key')
     return
   }
@@ -193,12 +252,14 @@ async function loadDialogModels(provider?: AiProviderConnection) {
   providerDialogModelRequestSeq.value = requestSeq
   providerDialogModelLoading.value = true
   try {
-    const response = await platformApi.previewAiProviderModels('ALL', {
-      protocolType: providerDialogForm.protocolType,
-      baseUrl: providerDialogForm.baseUrl.trim(),
-      requestTimeoutSeconds: providerDialogForm.requestTimeoutSeconds,
-      apiKey: providerDialogForm.apiKey.trim(),
-    })
+    const response = providerDialogForm.id && (apiKeyUsingSavedSecret.value || !providerDialogForm.apiKey.trim())
+      ? await platformApi.fetchAiProviderModels('ALL', providerDialogForm.id)
+      : await platformApi.previewAiProviderModels('ALL', {
+          protocolType: providerDialogForm.protocolType,
+          baseUrl: providerDialogForm.baseUrl.trim(),
+          requestTimeoutSeconds: providerDialogForm.requestTimeoutSeconds,
+          apiKey: providerDialogForm.apiKey.trim(),
+        })
     if (requestSeq !== providerDialogModelRequestSeq.value) {
       return
     }
@@ -229,19 +290,6 @@ async function testProvider(provider: AiProviderConnection) {
     ElMessage.error((error as Error).message)
   } finally {
     providerTestingId.value = null
-  }
-}
-
-async function fetchModelsForProvider(provider: AiProviderConnection) {
-  providerFetchingId.value = provider.id
-  try {
-    const response = await platformApi.fetchAiProviderModels('ALL', provider.id)
-    ElMessage.success(response.message || '模型列表已刷新')
-    await loadProviders()
-  } catch (error) {
-    ElMessage.error((error as Error).message)
-  } finally {
-    providerFetchingId.value = null
   }
 }
 
@@ -304,19 +352,17 @@ onMounted(() => {
           </span>
         </template>
       </el-table-column>
-      <el-table-column prop="modelCount" label="缓存模型数" width="110" />
+      <el-table-column label="模型名称" min-width="180">
+        <template #default="{ row }">{{ row.modelName || '-' }}</template>
+      </el-table-column>
       <el-table-column label="最近验证" min-width="160">
         <template #default="{ row }">{{ formatTime(row.lastVerifiedAt) }}</template>
       </el-table-column>
-      <el-table-column label="最近拉取模型" min-width="180">
-        <template #default="{ row }">{{ formatTime(row.lastFetchModelsAt) }}</template>
-      </el-table-column>
-      <el-table-column label="操作" width="320" fixed="right">
+      <el-table-column label="操作" width="240" fixed="right">
         <template #default="{ row }">
           <div class="table-actions">
             <el-button text type="primary" @click="openEditProviderDialog(row)">编辑</el-button>
             <el-button text :loading="providerTestingId === row.id" @click="testProvider(row)">测试连接</el-button>
-            <el-button text :loading="providerFetchingId === row.id" @click="fetchModelsForProvider(row)">获取模型</el-button>
             <el-button text type="danger" @click="deleteProvider(row)">删除</el-button>
           </div>
         </template>
@@ -345,10 +391,24 @@ onMounted(() => {
         <el-form-item label="API Key">
           <el-input
             v-model="providerDialogForm.apiKey"
-            type="password"
-            show-password
-            :placeholder="providerDialogForm.id ? '留空表示继续使用当前已保存的 API Key' : '请输入 API Key'"
-          />
+            :type="apiKeyInputType"
+            placeholder="请输入 API Key"
+            @input="handleApiKeyInput"
+          >
+            <template #suffix>
+              <el-button
+                text
+                class="api-key-eye-button"
+                :loading="apiKeySecretLoading"
+                @click.stop="toggleApiKeyVisible"
+              >
+                <el-icon>
+                  <View v-if="!apiKeyVisible" />
+                  <Hide v-else />
+                </el-icon>
+              </el-button>
+            </template>
+          </el-input>
         </el-form-item>
         <el-form-item label="模型名称">
           <div class="field-stack">
@@ -470,6 +530,13 @@ onMounted(() => {
 
 .status-toggle-text {
   font-size: 13px;
+  color: var(--text-subtle);
+}
+
+.api-key-eye-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
   color: var(--text-subtle);
 }
 

@@ -19,6 +19,7 @@ import type {
   ApiVariableSetItem,
   AiCaseConfig,
   AiProviderConnection,
+  AiProviderConnectionSecretResponse,
   AiProviderModel,
   AiCaseConfigResponse,
   AiCaseConfigSecretResponse,
@@ -333,6 +334,9 @@ export const platformApi = {
   },
   getAiProviderModels(workspaceCode: string, id: number) {
     return request<AiProviderModel[]>(`/cases/ai/providers/${id}/models`, { workspaceCode })
+  },
+  getAiProviderConnectionSecret(workspaceCode: string, id: number) {
+    return request<AiProviderConnectionSecretResponse>(`/cases/ai/providers/${id}/secret`, { workspaceCode })
   },
   probeAiProviderModel(workspaceCode: string, id: number, modelName: string) {
     return request<AiProviderModel>(`/cases/ai/providers/${id}/models/probe`, {

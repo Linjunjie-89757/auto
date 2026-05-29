@@ -152,6 +152,14 @@ public class AiCaseService {
         );
     }
 
+    public AiProviderConnectionSecretResponse getProviderSecret(Long id, String headerWorkspaceCode) {
+        AiProviderConnectionEntity entity = requireProviderConnection(id);
+        return new AiProviderConnectionSecretResponse(
+                entity.getId(),
+                requireProviderApiKey(entity)
+        );
+    }
+
     public GenerateAiCasesResponse generateCases(String headerWorkspaceCode, GenerateAiCasesRequest request) {
         WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
                 workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode())
@@ -604,6 +612,7 @@ public class AiCaseService {
         entity.setProtocolType(normalizeProtocolType(request.protocolType(), null, request.baseUrl()));
         entity.setBaseUrl(request.baseUrl().trim());
         entity.setRequestTimeoutSeconds(normalizeRequestTimeoutSeconds(request.requestTimeoutSeconds()));
+        entity.setSelectedModelName(blankToNull(request.modelName()));
         if (creating) {
             entity.setApiKeyCipherText(aiSecretCodec.encrypt(request.apiKey().trim()));
         } else if (blankToNull(request.apiKey()) != null) {
@@ -913,6 +922,10 @@ public class AiCaseService {
     }
 
     private String resolvePreferredModelForConnection(Long connectionId) {
+        AiProviderConnectionEntity connection = aiProviderConnectionMapper.selectById(connectionId);
+        if (connection != null && blankToNull(connection.getSelectedModelName()) != null) {
+            return connection.getSelectedModelName();
+        }
         AiProviderModelEntity cachedModel = aiProviderModelMapper.selectOne(new LambdaQueryWrapper<AiProviderModelEntity>()
                 .eq(AiProviderModelEntity::getConnectionId, connectionId)
                 .orderByDesc(AiProviderModelEntity::getLastProbedAt)

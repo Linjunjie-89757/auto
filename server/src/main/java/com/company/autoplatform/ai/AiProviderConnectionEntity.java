@@ -31,6 +31,9 @@ public class AiProviderConnectionEntity extends BaseEntity {
     @TableField("request_timeout_seconds")
     private Integer requestTimeoutSeconds;
 
+    @TableField("selected_model_name")
+    private String selectedModelName;
+
     @TableField("api_key_cipher_text")
     private String apiKeyCipherText;
 

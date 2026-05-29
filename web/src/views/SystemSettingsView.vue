@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Plus, RefreshRight } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
+import AiConnectionSettingsPanel from '../components/AiConnectionSettingsPanel.vue'
 import ListToolbar from '../components/ListToolbar.vue'
 import { usePersistedFilters } from '../composables/usePersistedFilters'
 import { useWorkspace } from '../composables/useWorkspace'
@@ -25,8 +27,12 @@ import type {
 
 const { workspaceCode, isAllScope } = useWorkspace()
 const { currentUser, isPlatformAdmin, isSuperAdmin } = useWorkspaceAccess()
+const route = useRoute()
+const router = useRouter()
 
-const activeTab = ref<'env' | 'param' | 'dbConnection' | 'workspace' | 'member'>('env')
+type SettingsTab = 'aiConnection' | 'env' | 'param' | 'dbConnection' | 'workspace' | 'member'
+
+const activeTab = ref<SettingsTab>('aiConnection')
 const memberViewMode = ref<'user' | 'workspace'>('user')
 const memberWorkspaceCode = ref('')
 
@@ -205,6 +211,13 @@ const dbConnectionForm = reactive<CreateDbConnectionPayload & { id: number | nul
 const businessWorkspaces = computed(() => workspaces.value.filter(item => !item.allScope))
 const canManageSettings = computed(() => isPlatformAdmin.value)
 const canManageAdminUsers = computed(() => isSuperAdmin.value)
+const visibleTabs = computed<SettingsTab[]>(() => {
+  const base: SettingsTab[] = ['aiConnection']
+  if (canManageSettings.value) {
+    base.push('env', 'param', 'dbConnection', 'workspace', 'member')
+  }
+  return base
+})
 const visibleWorkspaceCodes = computed(() => currentUser.value?.workspaceCodes ?? [])
 const writableWorkspaceOptions = computed(() => {
   if (isPlatformAdmin.value) {
@@ -301,6 +314,18 @@ const filteredDbConnections = computed(() => {
     return matchKeyword && matchType && matchStatus
   })
 })
+
+function normalizeSettingsTab(tab: unknown): SettingsTab {
+  const candidate = typeof tab === 'string' ? tab : ''
+  if (visibleTabs.value.includes(candidate as SettingsTab)) {
+    return candidate as SettingsTab
+  }
+  return canManageSettings.value ? 'env' : 'aiConnection'
+}
+
+function syncSettingsTabFromRoute() {
+  activeTab.value = normalizeSettingsTab(route.query.tab)
+}
 
 function resetWorkspaceFilters() {
   workspaceFilterMemory.reset()
@@ -1020,7 +1045,34 @@ watch(() => workspaceCode.value, () => {
   void loadScopedSettings()
 })
 
+watch(() => route.query.tab, () => {
+  syncSettingsTabFromRoute()
+})
+
+watch(visibleTabs, () => {
+  syncSettingsTabFromRoute()
+})
+
+watch(activeTab, (tab) => {
+  const nextTab = normalizeSettingsTab(tab)
+  if (nextTab !== tab) {
+    activeTab.value = nextTab
+    return
+  }
+  const currentQueryTab = typeof route.query.tab === 'string' ? route.query.tab : ''
+  if (currentQueryTab === nextTab) {
+    return
+  }
+  void router.replace({
+    query: {
+      ...route.query,
+      tab: nextTab,
+    },
+  })
+})
+
 onMounted(async () => {
+  syncSettingsTabFromRoute()
   workspaceFilterMemory.load()
   userFilterMemory.load()
   memberFilterMemory.load()
@@ -1043,7 +1095,10 @@ onMounted(async () => {
         </div>
       </header>
 
-      <el-tabs v-model="activeTab" class="settings-tabs">
+      <el-tabs v-if="canManageSettings" v-model="activeTab" class="settings-tabs">
+        <el-tab-pane label="AI连接" name="aiConnection">
+          <AiConnectionSettingsPanel />
+        </el-tab-pane>
         <el-tab-pane label="环境配置" name="env">
           <ListToolbar title="环境配置">
             <template #filters>
@@ -1350,6 +1405,10 @@ onMounted(async () => {
           </template>
         </el-tab-pane>
       </el-tabs>
+
+      <div v-else class="settings-single-panel">
+        <AiConnectionSettingsPanel />
+      </div>
     </article>
 
     <el-dialog v-model="workspaceDialogVisible" :title="workspaceDialogMode === 'create' ? '新增工作空间' : '编辑工作空间'" width="560px">
@@ -1597,6 +1656,10 @@ onMounted(async () => {
 <style scoped>
 .settings-tabs :deep(.el-tabs__header) {
   margin-bottom: 8px;
+}
+
+.settings-single-panel {
+  padding-top: 8px;
 }
 
 .page-header {

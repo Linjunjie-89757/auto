@@ -14,6 +14,9 @@ public class AiCaseConfigEntity extends BaseEntity {
     @TableField("workspace_id")
     private Long workspaceId;
 
+    @TableField("owner_user_id")
+    private Long ownerUserId;
+
     @TableField("role_type")
     private String roleType;
 

@@ -167,7 +167,7 @@ const aiConfigReady = computed(() => (
   && !!form.outputMode
 ))
 const aiConfigStatusText = computed(() => (
-  aiConfigReady.value ? '配置完整，可直接生成' : '配置缺失，请检查模型配置'
+  aiConfigReady.value ? '配置完整，可直接生成' : '配置缺失，请先补充个人 AI 连接或角色绑定'
 ))
 const aiConfigStatusClass = computed(() => (
   aiConfigReady.value ? 'config-status-success' : 'config-status-danger'
@@ -386,6 +386,19 @@ function openTaskDetail(recordId: string) {
 function openTaskRecordsPage() {
   router.push({
     name: 'cases-ai-records',
+  })
+}
+
+function goToAiConfig() {
+  router.push({
+    name: 'cases-ai-config',
+  })
+}
+
+function goToAiConnections() {
+  router.push({
+    path: '/settings',
+    query: { tab: 'aiConnection' },
   })
 }
 
@@ -1031,7 +1044,11 @@ onBeforeUnmount(() => {
           </div>
           <div class="section-desc">展示当前空间下本次生成任务会使用的 AI 配置摘要。</div>
         </div>
-        <el-button :icon="RefreshRight" text @click="loadConfig">刷新配置</el-button>
+        <div class="ai-config-actions">
+          <el-button v-if="!aiConfigReady" text @click="goToAiConnections">去创建连接</el-button>
+          <el-button v-if="!aiConfigReady" text @click="goToAiConfig">去配置AI</el-button>
+          <el-button :icon="RefreshRight" text @click="loadConfig">刷新配置</el-button>
+        </div>
       </div>
 
       <div class="ai-config-grid ai-config-grid-five">
@@ -1062,6 +1079,10 @@ onBeforeUnmount(() => {
           <div class="config-info-label">输出模式</div>
           <div class="config-info-value">{{ form.outputMode === 'STREAM' ? '实时流式输出' : '完整输出' }}</div>
         </div>
+      </div>
+
+      <div v-if="!aiConfigReady" class="ai-config-empty-hint">
+        当前账号的 AI 配置还没准备好。先在“系统设置 > AI连接”里创建个人连接，再到“AI配置”页绑定生成模型和评审模型。
       </div>
 
       <div class="recent-task-card">
@@ -1241,6 +1262,20 @@ onBeforeUnmount(() => {
 
 .section-desc {
   margin-top: 6px;
+}
+
+.ai-config-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-config-empty-hint {
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-subtle);
 }
 
 .output-mode-grid {

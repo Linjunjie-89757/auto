@@ -202,6 +202,8 @@ export interface AiCaseConfig {
 export interface AiCaseConfigResponse {
   generatorConfig: AiCaseConfig | null
   reviewerConfig: AiCaseConfig | null
+  hasLegacyConfig: boolean
+  canBootstrapFromLegacy: boolean
 }
 
 export interface AiCaseConfigSecretResponse {
@@ -325,6 +327,8 @@ export interface AiProviderConnection {
   connectionName: string
   protocolType: AiProtocolType
   baseUrl: string
+  requestTimeoutSeconds: number | null
+  modelName: string | null
   apiKeyMasked: string
   apiKeyConfigured: boolean
   status: number
@@ -338,8 +342,17 @@ export interface SaveAiProviderConnectionPayload {
   connectionName: string
   protocolType: AiProtocolType
   baseUrl: string
+  requestTimeoutSeconds?: number | null
+  modelName?: string | null
   apiKey?: string
   status?: number
+}
+
+export interface PreviewAiProviderModelsPayload {
+  protocolType: AiProtocolType
+  baseUrl: string
+  requestTimeoutSeconds?: number | null
+  apiKey: string
 }
 
 export interface AiProviderModel {
@@ -356,6 +369,12 @@ export interface AiProviderModel {
 export interface FetchAiProviderModelsResponse {
   connectionId: number
   connectionName: string
+  models: AiProviderModel[]
+  fetchedAt: string | null
+  message: string
+}
+
+export interface PreviewAiProviderModelsResponse {
   models: AiProviderModel[]
   fetchedAt: string | null
   message: string

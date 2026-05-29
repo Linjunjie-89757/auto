@@ -9,6 +9,8 @@ public record AiProviderConnectionItem(
         String connectionName,
         String protocolType,
         String baseUrl,
+        Integer requestTimeoutSeconds,
+        String modelName,
         String apiKeyMasked,
         boolean apiKeyConfigured,
         Integer status,

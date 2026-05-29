@@ -6,6 +6,7 @@ public record AiProviderRequestProfile(
         String model,
         String baseUrl,
         Double temperature,
-        Integer maxCases
+        Integer maxCases,
+        Integer requestTimeoutSeconds
 ) {
 }

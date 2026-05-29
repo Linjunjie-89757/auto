@@ -63,6 +63,13 @@ public class AiCaseController {
         return ApiResponse.ok(aiCaseService.updateConfig(id, workspaceCode, request), "AI config updated");
     }
 
+    @PostMapping("/config/bootstrap-from-legacy")
+    public ApiResponse<AiCaseConfigResponse> bootstrapConfigFromLegacy(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(aiCaseService.bootstrapConfigFromLegacy(workspaceCode), "AI config bootstrapped from legacy");
+    }
+
     @GetMapping("/providers")
     public ApiResponse<java.util.List<AiProviderConnectionItem>> getProviders(
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
@@ -76,6 +83,14 @@ public class AiCaseController {
             @Valid @RequestBody SaveAiProviderConnectionRequest request
     ) {
         return ApiResponse.ok(aiCaseService.createProvider(workspaceCode, request), "AI provider created");
+    }
+
+    @PostMapping("/providers/preview-models")
+    public ApiResponse<PreviewAiProviderModelsResponse> previewProviderModels(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody PreviewAiProviderModelsRequest request
+    ) {
+        return ApiResponse.ok(aiCaseService.previewProviderModels(workspaceCode, request), "AI provider models previewed");
     }
 
     @PutMapping("/providers/{id}")

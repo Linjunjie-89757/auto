@@ -25,10 +25,12 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
     protected final Logger log = LoggerFactory.getLogger(getClass());
     protected final ObjectMapper objectMapper = new ObjectMapper();
     private final HttpClient httpClient;
+    private final long defaultRequestTimeoutSeconds;
 
     protected AbstractOpenAiCompatibleAdapter(long timeoutSeconds) {
+        this.defaultRequestTimeoutSeconds = Math.max(5, timeoutSeconds);
         this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(Math.max(5, timeoutSeconds)))
+                .connectTimeout(Duration.ofSeconds(this.defaultRequestTimeoutSeconds))
                 .build();
     }
 
@@ -53,7 +55,7 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
     public AiModelFetchResult fetchModels(AiProviderRequestProfile profile, String apiKey) {
         String endpoint = resolveModelsEndpoint(profile.baseUrl());
         try {
-            HttpResponse<String> response = sendRequest("GET", endpoint, apiKey, null);
+            HttpResponse<String> response = sendRequest("GET", endpoint, apiKey, null, profile.requestTimeoutSeconds());
             if (response.statusCode() == 404 || response.statusCode() == 405) {
                 return new AiModelFetchResult(List.of(), "当前连接未提供模型列表接口，可手工输入模型名");
             }
@@ -138,7 +140,7 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
         String endpoint = resolveChatEndpoint(profile.baseUrl());
         try {
             String requestBody = buildChatCompletionsRequestBody(profile, prompt, images, stream);
-            HttpResponse<String> response = sendRequest("POST", endpoint, apiKey, requestBody);
+            HttpResponse<String> response = sendRequest("POST", endpoint, apiKey, requestBody, profile.requestTimeoutSeconds());
             if (response.statusCode() >= 400) {
                 if (requiresImageCapability(response.body(), images)) {
                     throw new BadRequestException("当前模型或服务不支持图片输入");
@@ -175,7 +177,7 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
         String endpoint = resolveResponsesEndpoint(profile.baseUrl());
         try {
             String requestBody = buildResponsesRequestBody(profile, prompt, images);
-            HttpResponse<String> response = sendRequest("POST", endpoint, apiKey, requestBody);
+            HttpResponse<String> response = sendRequest("POST", endpoint, apiKey, requestBody, profile.requestTimeoutSeconds());
             if (response.statusCode() >= 400) {
                 if (requiresImageCapability(response.body(), images)) {
                     throw new BadRequestException("当前模型或服务不支持图片输入");
@@ -199,6 +201,21 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
             List<AiProviderClient.ImageInput> images,
             boolean stream
     ) throws IOException {
+        return objectMapper.writeValueAsString(Map.of(
+                "model", profile.model(),
+                "temperature", profile.temperature(),
+                "stream", stream,
+                "messages", List.of(
+                        Map.of("role", "system", "content", "You are a QA assistant that outputs only structured JSON."),
+                        Map.of("role", "user", "content", buildChatUserContent(prompt, images))
+                )
+        ));
+    }
+
+    protected Object buildChatUserContent(String prompt, List<AiProviderClient.ImageInput> images) {
+        if (images == null || images.isEmpty()) {
+            return prompt;
+        }
         List<Object> userContent = new ArrayList<>();
         userContent.add(Map.of("type", "text", "text", prompt));
         for (AiProviderClient.ImageInput image : images) {
@@ -207,15 +224,7 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
                     "image_url", Map.of("url", buildDataUrl(image))
             ));
         }
-        return objectMapper.writeValueAsString(Map.of(
-                "model", profile.model(),
-                "temperature", profile.temperature(),
-                "stream", stream,
-                "messages", List.of(
-                        Map.of("role", "system", "content", "You are a QA assistant that outputs only structured JSON."),
-                        Map.of("role", "user", "content", userContent)
-                )
-        ));
+        return userContent;
     }
 
     protected String buildResponsesRequestBody(
@@ -241,11 +250,17 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
         ));
     }
 
-    protected HttpResponse<String> sendRequest(String method, String endpoint, String apiKey, String requestBody)
+    protected HttpResponse<String> sendRequest(
+            String method,
+            String endpoint,
+            String apiKey,
+            String requestBody,
+            Integer requestTimeoutSeconds
+    )
             throws IOException, InterruptedException {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(endpoint))
-                .timeout(Duration.ofSeconds(60))
+                .timeout(Duration.ofSeconds(resolveRequestTimeoutSeconds(requestTimeoutSeconds)))
                 .header("Content-Type", "application/json");
         applyAuthHeader(builder, apiKey);
         if ("GET".equalsIgnoreCase(method)) {
@@ -255,6 +270,13 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
                 builder.POST(HttpRequest.BodyPublishers.ofString(requestBody == null ? "" : requestBody)).build(),
                 HttpResponse.BodyHandlers.ofString()
         );
+    }
+
+    protected long resolveRequestTimeoutSeconds(Integer requestTimeoutSeconds) {
+        if (requestTimeoutSeconds == null) {
+            return defaultRequestTimeoutSeconds;
+        }
+        return Math.max(5, requestTimeoutSeconds);
     }
 
     protected void applyAuthHeader(HttpRequest.Builder builder, String apiKey) {

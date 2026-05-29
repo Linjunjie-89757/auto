@@ -16,6 +16,9 @@ public class AiProviderConnectionEntity extends BaseEntity {
     @TableField("workspace_id")
     private Long workspaceId;
 
+    @TableField("owner_user_id")
+    private Long ownerUserId;
+
     @TableField("connection_name")
     private String connectionName;
 
@@ -24,6 +27,9 @@ public class AiProviderConnectionEntity extends BaseEntity {
 
     @TableField("base_url")
     private String baseUrl;
+
+    @TableField("request_timeout_seconds")
+    private Integer requestTimeoutSeconds;
 
     @TableField("api_key_cipher_text")
     private String apiKeyCipherText;

@@ -1,19 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { MagicStick, Plus, RefreshRight, Setting } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { useCaseCenterShared } from '../composables/useCaseCenterShared'
+import { useRouter } from 'vue-router'
+import { MagicStick, RefreshRight, Setting } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { platformApi } from '../api/platform'
 import type {
   AiCapabilityOverride,
   AiCapabilitySource,
   AiCaseConfig,
   AiModelCapabilities,
-  AiProtocolType,
   AiProviderConnection,
   AiProviderModel,
   SaveAiCaseConfigPayload,
-  SaveAiProviderConnectionPayload,
 } from '../types/api'
 
 type RoleType = 'CASE_GENERATOR' | 'CASE_REVIEWER'
@@ -41,43 +39,12 @@ type RoleForm = {
   supportsImageInput: boolean
 }
 
-type ProviderDialogForm = {
-  id: number | null
-  connectionName: string
-  protocolType: AiProtocolType
-  baseUrl: string
-  apiKey: string
-  status: number
-}
+const router = useRouter()
 
-const DEFAULT_GENERATOR_PROMPT = `你是自动化测试平台中的用例生成模型。请根据需求内容输出结构化测试用例，返回结果会直接进入候选用例池。
-
-输出要求：
-1. 只返回 JSON，不要返回 markdown 或额外说明。
-2. 返回结构必须是数组，或 {"cases":[...]}。
-3. 每条用例必须包含：title、caseType、priority、precondition、steps、expectedResult、riskNotes。
-4. caseType 仅允许：FUNCTION、BOUNDARY、EXCEPTION、REGRESSION。
-5. priority 仅允许：P0、P1、P2、P3。
-6. 标题、步骤和预期结果要具体、可执行、可验证。`
-
+const DEFAULT_GENERATOR_PROMPT = `你是测试用例生成模型。请根据需求内容输出结构化测试用例，只返回 JSON，不要返回 markdown 或解释说明。`
 const DEFAULT_GENERATOR_CHECKLIST = '优先覆盖主流程、边界条件、异常分支和高风险回归点，避免重复或低价值用例。'
-
-const DEFAULT_REVIEW_PROMPT = `你是自动化测试平台中的用例评审模型。请对候选测试用例做完整性和覆盖性评审，并返回结构化 JSON。
-
-输出要求：
-1. 只返回 JSON，不要返回 markdown 或额外说明。
-2. 返回结构必须包含：result、summary、issues、suggestions。
-3. result 仅允许：APPROVE、REJECT、SUGGEST。
-4. issues 用于指出缺失场景、重复场景、不清晰步骤或不可验证结果。
-5. suggestions 用于给出可以继续补充生成的方向。`
-
+const DEFAULT_REVIEW_PROMPT = `你是测试用例评审模型。请对候选测试用例做完整性与覆盖性评审，只返回结构化 JSON。`
 const DEFAULT_REVIEW_CHECKLIST = '优先检查主流程、边界、异常、重复场景，以及步骤与预期结果是否清晰可验证。'
-
-const protocolOptions: Array<{ label: string; value: AiProtocolType }> = [
-  { label: 'OpenAI 兼容 Chat', value: 'OPENAI_COMPATIBLE_CHAT' },
-  { label: 'OpenAI 兼容 Responses', value: 'OPENAI_COMPATIBLE_RESPONSES' },
-  { label: 'Azure OpenAI', value: 'AZURE_OPENAI' },
-]
 
 const roleMeta: Array<{ roleType: RoleType; title: string; subtitle: string }> = [
   {
@@ -93,12 +60,12 @@ const roleMeta: Array<{ roleType: RoleType; title: string; subtitle: string }> =
 ]
 
 const capabilityMeta: Array<{ key: CapabilityKey; label: string; hint: string }> = [
-  { key: 'textChat', label: '文本对话', hint: '能否完成基础文本生成与问答。' },
-  { key: 'streamOutput', label: '流式输出', hint: '能否以流式形式返回结果。' },
-  { key: 'structuredOutput', label: 'JSON 结构化输出', hint: '能否稳定返回可解析 JSON。' },
-  { key: 'imageInput', label: '图片输入', hint: '能否读取需求截图、原型图等图片。' },
-  { key: 'longContext', label: '长上下文', hint: '用于提示模型可能具备更大的上下文窗口。' },
-  { key: 'stableAvailable', label: '最近可用', hint: '最近一次测试连接或探测是否成功。' },
+  { key: 'textChat', label: '文本对话', hint: '是否具备基础文本理解和生成能力。' },
+  { key: 'streamOutput', label: '流式输出', hint: '是否支持任务执行过程中分段返回结果。' },
+  { key: 'structuredOutput', label: '结构化输出', hint: '是否能稳定返回可解析 JSON。' },
+  { key: 'imageInput', label: '图片输入', hint: '是否可读取原型图、截图等图片素材。' },
+  { key: 'longContext', label: '长上下文', hint: '是否适合处理更长的需求文本或多图输入。' },
+  { key: 'stableAvailable', label: '最近可用', hint: '最近一次探测或测试是否成功。' },
 ]
 
 const capabilitySourceText: Record<AiCapabilitySource, string> = {
@@ -109,31 +76,20 @@ const capabilitySourceText: Record<AiCapabilitySource, string> = {
   UNKNOWN: '未知',
 }
 
-const { isPlatformAdmin, loadSharedBase } = useCaseCenterShared()
-
 const loading = ref(false)
-const savingRole = ref<RoleType | null>(null)
 const providerLoading = ref(false)
-const providerDialogVisible = ref(false)
-const savingProvider = ref(false)
-const providerTestingId = ref<number | null>(null)
-const providerFetchingId = ref<number | null>(null)
+const savingRole = ref<RoleType | null>(null)
 const probingRole = ref<RoleType | null>(null)
+const providerFetchingId = ref<number | null>(null)
+const bootstrappingLegacy = ref(false)
+const hasLegacyConfig = ref(false)
+const canBootstrapFromLegacy = ref(false)
 
 const providers = ref<AiProviderConnection[]>([])
 const providerModels = reactive<Record<number, AiProviderModel[]>>({})
 const generationStyle = ref<Record<RoleType, GenerationStyle>>({
   CASE_GENERATOR: 'balanced',
   CASE_REVIEWER: 'balanced',
-})
-
-const providerDialogForm = reactive<ProviderDialogForm>({
-  id: null,
-  connectionName: '',
-  protocolType: 'OPENAI_COMPATIBLE_CHAT',
-  baseUrl: 'https://api.openai.com/v1',
-  apiKey: '',
-  status: 1,
 })
 
 const forms = reactive<Record<RoleType, RoleForm>>({
@@ -163,7 +119,7 @@ function applyOverrideToCapabilities(capabilities: AiModelCapabilities, override
     next[key] = {
       supported: overrideValue,
       source: 'MANUAL',
-      detail: '管理员手工修正',
+      detail: '人工修正',
     }
   })
   return next
@@ -187,15 +143,6 @@ function createDefaultForm(roleType: RoleType): RoleForm {
     effectiveCapabilities,
     supportsImageInput: effectiveCapabilities.imageInput.supported === true,
   }
-}
-
-function resetProviderDialog() {
-  providerDialogForm.id = null
-  providerDialogForm.connectionName = ''
-  providerDialogForm.protocolType = 'OPENAI_COMPATIBLE_CHAT'
-  providerDialogForm.baseUrl = 'https://api.openai.com/v1'
-  providerDialogForm.apiKey = ''
-  providerDialogForm.status = 1
 }
 
 function resetRoleForm(roleType: RoleType) {
@@ -243,11 +190,6 @@ function reviewChecklistLabel(roleType: RoleType) {
   return roleType === 'CASE_GENERATOR' ? '补充要求' : '评审清单'
 }
 
-function formatTime(value: string | null) {
-  if (!value) return '-'
-  return value.replace('T', ' ').slice(0, 19)
-}
-
 function capabilityStateText(supported: boolean | null) {
   if (supported === true) return '支持'
   if (supported === false) return '不支持'
@@ -260,18 +202,16 @@ function overrideValueForSelect(value: boolean | null | undefined) {
   return 'inherit'
 }
 
-function providerNameMap() {
-  return new Map(providers.value.map(item => [item.id, item]))
-}
-
 const providerSelectOptions = computed(() => providers.value.map(item => ({
   label: `${item.connectionName} / ${item.protocolType}`,
   value: item.id,
 })))
 
+const hasNoProviders = computed(() => providers.value.length === 0)
+
 function getProviderById(id: number | null) {
   if (!id) return null
-  return providerNameMap().get(id) ?? null
+  return providers.value.find(item => item.id === id) ?? null
 }
 
 function getRoleModels(roleType: RoleType) {
@@ -347,6 +287,8 @@ async function loadConfig() {
   resetRoleForm('CASE_REVIEWER')
   try {
     const response = await platformApi.getAiCaseConfig('ALL')
+    hasLegacyConfig.value = response.hasLegacyConfig
+    canBootstrapFromLegacy.value = response.canBootstrapFromLegacy
     applyLoadedRole('CASE_GENERATOR', response.generatorConfig)
     applyLoadedRole('CASE_REVIEWER', response.reviewerConfig)
     const connectionIds = Array.from(new Set(
@@ -361,103 +303,26 @@ async function loadConfig() {
   }
 }
 
-function openCreateProviderDialog() {
-  resetProviderDialog()
-  providerDialogVisible.value = true
-}
-
-function openEditProviderDialog(provider: AiProviderConnection) {
-  providerDialogForm.id = provider.id
-  providerDialogForm.connectionName = provider.connectionName
-  providerDialogForm.protocolType = provider.protocolType
-  providerDialogForm.baseUrl = provider.baseUrl
-  providerDialogForm.apiKey = ''
-  providerDialogForm.status = provider.status
-  providerDialogVisible.value = true
-}
-
-async function saveProvider() {
-  if (!providerDialogForm.connectionName.trim() || !providerDialogForm.baseUrl.trim()) {
-    ElMessage.error('请先填写连接名称和 API URL')
-    return
-  }
-  if (!providerDialogForm.id && !providerDialogForm.apiKey.trim()) {
-    ElMessage.error('新建连接时必须填写 API Key')
-    return
-  }
-  const payload: SaveAiProviderConnectionPayload = {
-    connectionName: providerDialogForm.connectionName.trim(),
-    protocolType: providerDialogForm.protocolType,
-    baseUrl: providerDialogForm.baseUrl.trim(),
-    apiKey: providerDialogForm.apiKey.trim() || undefined,
-    status: providerDialogForm.status,
-  }
-  savingProvider.value = true
+async function bootstrapLegacyConfig() {
+  bootstrappingLegacy.value = true
   try {
-    if (providerDialogForm.id) {
-      await platformApi.updateAiProviderConnection('ALL', providerDialogForm.id, payload)
-      ElMessage.success('AI 连接已更新')
-    } else {
-      await platformApi.createAiProviderConnection('ALL', payload)
-      ElMessage.success('AI 连接已创建')
-    }
-    providerDialogVisible.value = false
-    await loadProviders()
-    await loadConfig()
+    const response = await platformApi.bootstrapAiCaseConfigFromLegacy('ALL')
+    hasLegacyConfig.value = response.hasLegacyConfig
+    canBootstrapFromLegacy.value = response.canBootstrapFromLegacy
+    ElMessage.success('旧版 AI 配置已复制到当前账号')
+    await Promise.all([loadProviders(), loadConfig()])
   } catch (error) {
     ElMessage.error((error as Error).message)
   } finally {
-    savingProvider.value = false
+    bootstrappingLegacy.value = false
   }
 }
 
-async function testProvider(provider: AiProviderConnection) {
-  providerTestingId.value = provider.id
-  try {
-    const response = await platformApi.testAiProviderConnection('ALL', provider.id)
-    ElMessage.success(response.message || '连接测试成功')
-    await loadProviders()
-  } catch (error) {
-    ElMessage.error((error as Error).message)
-  } finally {
-    providerTestingId.value = null
-  }
-}
-
-async function fetchModelsForProvider(provider: AiProviderConnection) {
-  providerFetchingId.value = provider.id
-  try {
-    const response = await platformApi.fetchAiProviderModels('ALL', provider.id)
-    providerModels[provider.id] = response.models
-    ElMessage.success(response.message || '模型列表已更新')
-    await loadProviders()
-  } catch (error) {
-    ElMessage.error((error as Error).message)
-  } finally {
-    providerFetchingId.value = null
-  }
-}
-
-async function deleteProvider(provider: AiProviderConnection) {
-  try {
-    await ElMessageBox.confirm(`确定删除连接“${provider.connectionName}”吗？`, '删除 AI 连接', {
-      type: 'warning',
-    })
-    await platformApi.deleteAiProviderConnection('ALL', provider.id)
-    delete providerModels[provider.id]
-    if (forms.CASE_GENERATOR.providerConnectionId === provider.id) {
-      forms.CASE_GENERATOR.providerConnectionId = null
-    }
-    if (forms.CASE_REVIEWER.providerConnectionId === provider.id) {
-      forms.CASE_REVIEWER.providerConnectionId = null
-    }
-    ElMessage.success('AI 连接已删除')
-    await loadProviders()
-  } catch (error) {
-    if ((error as Error).message !== 'cancel') {
-      ElMessage.error((error as Error).message)
-    }
-  }
+function goToAiConnections() {
+  router.push({
+    path: '/settings',
+    query: { tab: 'aiConnection' },
+  })
 }
 
 async function handleRoleConnectionChanged(roleType: RoleType) {
@@ -526,8 +391,7 @@ function updateCapabilityOverride(roleType: RoleType, key: CapabilityKey, value:
 
 function canSaveRole(roleType: RoleType) {
   const form = forms[roleType]
-  return isPlatformAdmin.value
-    && !!form.providerConnectionId
+  return !!form.providerConnectionId
     && !!form.model.trim()
     && !!form.promptTemplate.trim()
     && form.temperature >= 0
@@ -579,57 +443,45 @@ watch(() => forms.CASE_GENERATOR.temperature, () => syncStyleFromTemperature('CA
 watch(() => forms.CASE_REVIEWER.temperature, () => syncStyleFromTemperature('CASE_REVIEWER'))
 
 onMounted(async () => {
-  await loadSharedBase()
   await Promise.all([loadProviders(), loadConfig()])
 })
 </script>
 
 <template>
-  <section class="page-shell">
-    <article class="panel-card section-card">
+  <section class="page-shell ai-role-page">
+    <article class="panel-card overview-card">
       <div class="panel-header">
         <div>
-          <div class="panel-title">供应商连接池</div>
-          <div class="panel-subtitle">统一维护 API URL、API Key 和协议类型，角色配置只做绑定和模型选择。</div>
+          <div class="panel-title">AI角色配置</div>
+          <div class="panel-subtitle">这里负责绑定你自己的 AI 连接，并配置生成模型、评审模型及对应 Prompt。</div>
         </div>
         <div class="panel-header-actions">
-          <el-button v-if="isPlatformAdmin" type="primary" @click="openCreateProviderDialog">
-            <el-icon><Plus /></el-icon>
-            新建连接
+          <el-button @click="loadConfig">
+            <el-icon><RefreshRight /></el-icon>
+            刷新配置
+          </el-button>
+          <el-button type="primary" @click="goToAiConnections">
+            <el-icon><Setting /></el-icon>
+            管理AI连接
           </el-button>
         </div>
       </div>
 
-      <el-table :data="providers" v-loading="providerLoading" class="provider-table">
-        <el-table-column prop="connectionName" label="连接名称" min-width="180" />
-        <el-table-column prop="protocolType" label="协议类型" min-width="220" />
-        <el-table-column prop="baseUrl" label="API URL" min-width="280" />
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.status === 1 ? 'success' : 'info'">{{ statusText(row.status) }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="modelCount" label="缓存模型数" width="110" />
-        <el-table-column label="最近验证" min-width="150">
-          <template #default="{ row }">{{ formatTime(row.lastVerifiedAt) }}</template>
-        </el-table-column>
-        <el-table-column label="最近拉取模型" min-width="170">
-          <template #default="{ row }">{{ formatTime(row.lastFetchModelsAt) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="320" fixed="right">
-          <template #default="{ row }">
-            <div class="table-actions">
-              <el-button link @click="openEditProviderDialog(row)">编辑</el-button>
-              <el-button link :loading="providerTestingId === row.id" @click="testProvider(row)">测试连接</el-button>
-              <el-button link :loading="providerFetchingId === row.id" @click="fetchModelsForProvider(row)">获取模型列表</el-button>
-              <el-button link type="danger" @click="deleteProvider(row)">删除</el-button>
-            </div>
-          </template>
-        </el-table-column>
-      </el-table>
+      <div v-if="canBootstrapFromLegacy" class="legacy-banner">
+        <div>
+          <div class="legacy-title">检测到旧版全局 AI 配置</div>
+          <div class="legacy-desc">当前账号还没有个人 AI 配置，可以一键复制旧版配置到“我的连接”和“我的角色配置”。</div>
+        </div>
+        <el-button type="primary" :loading="bootstrappingLegacy" @click="bootstrapLegacyConfig">复制为我的配置</el-button>
+      </div>
 
-      <div v-if="providers.length === 0" class="empty-inline">
-        还没有 AI 连接。先新建一个连接，再把它绑定到“用例生成 / 用例评审”角色上。
+      <div v-else-if="hasLegacyConfig" class="legacy-note">
+        旧版全局 AI 配置仍保留在系统中，但当前页面只展示并使用你自己的 AI 配置。
+      </div>
+
+      <div v-if="hasNoProviders" class="empty-inline">
+        你还没有可用的 AI 连接，请先到系统设置中创建。
+        <el-button link type="primary" @click="goToAiConnections">去创建连接</el-button>
       </div>
     </article>
 
@@ -642,7 +494,6 @@ onMounted(async () => {
           </div>
           <div class="panel-header-actions">
             <el-button
-              v-if="isPlatformAdmin"
               :loading="probingRole === meta.roleType"
               :disabled="!forms[meta.roleType].providerConnectionId || !forms[meta.roleType].model.trim()"
               @click="probeRoleModel(meta.roleType)"
@@ -651,7 +502,6 @@ onMounted(async () => {
               探测能力
             </el-button>
             <el-button
-              v-if="isPlatformAdmin"
               type="primary"
               :loading="savingRole === meta.roleType"
               :disabled="!canSaveRole(meta.roleType)"
@@ -663,20 +513,26 @@ onMounted(async () => {
           </div>
         </div>
 
-        <el-form label-width="100px" :disabled="loading || !isPlatformAdmin" class="ai-config-form">
+        <el-form label-width="100px" :disabled="loading" class="ai-config-form">
           <el-form-item label="绑定连接">
-            <el-select
-              v-model="forms[meta.roleType].providerConnectionId"
-              placeholder="请选择已保存的 AI 连接"
-              @change="handleRoleConnectionChanged(meta.roleType)"
-            >
-              <el-option
-                v-for="option in providerSelectOptions"
-                :key="option.value"
-                :label="option.label"
-                :value="option.value"
-              />
-            </el-select>
+            <div class="field-stack">
+              <el-select
+                v-model="forms[meta.roleType].providerConnectionId"
+                placeholder="请选择已保存的 AI 连接"
+                @change="handleRoleConnectionChanged(meta.roleType)"
+              >
+                <el-option
+                  v-for="option in providerSelectOptions"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
+                />
+              </el-select>
+              <div v-if="hasNoProviders" class="field-hint">
+                当前没有可绑定的 AI 连接。
+                <el-button link type="primary" @click="goToAiConnections">去创建连接</el-button>
+              </div>
+            </div>
           </el-form-item>
 
           <el-form-item label="模型">
@@ -700,15 +556,16 @@ onMounted(async () => {
                   />
                 </el-select>
                 <el-button
+                  :loading="providerFetchingId === forms[meta.roleType].providerConnectionId"
                   :disabled="!forms[meta.roleType].providerConnectionId"
                   @click="loadProviderModels(forms[meta.roleType].providerConnectionId!, true)"
                 >
                   <el-icon><RefreshRight /></el-icon>
-                  获取模型列表
+                  获取模型
                 </el-button>
               </div>
               <div class="field-hint">
-                支持下拉选择，也支持在对方不提供 `/models` 时直接手工输入模型名。
+                支持下拉选择，也支持在服务端不提供 `/models` 时直接手工输入模型名称。
               </div>
             </div>
           </el-form-item>
@@ -750,7 +607,8 @@ onMounted(async () => {
           <el-form-item label="能力矩阵">
             <div class="capability-panel">
               <div class="capability-header">
-                <div>自动探测结果</div>
+                <div>能力项</div>
+                <div>自动探测</div>
                 <div>人工修正</div>
                 <div>最终生效</div>
               </div>
@@ -797,7 +655,7 @@ onMounted(async () => {
         <div class="detail-card ai-config-summary">
           <div class="detail-title">{{ meta.title }}</div>
           <div class="detail-meta">
-            {{ forms[meta.roleType].providerConnectionId ? '已绑定连接，可直接参与用例中心 AI 业务链路' : '尚未绑定连接' }}
+            {{ forms[meta.roleType].providerConnectionId ? '已绑定连接，可直接参与当前账号的 AI 业务链路。' : '尚未绑定连接。' }}
           </div>
           <div class="detail-body"><strong>当前连接：</strong>{{ getProviderById(forms[meta.roleType].providerConnectionId)?.connectionName ?? '-' }}</div>
           <div class="detail-body"><strong>当前模型：</strong>{{ forms[meta.roleType].model || '-' }}</div>
@@ -808,89 +666,54 @@ onMounted(async () => {
         </div>
       </article>
     </div>
-
-    <article v-if="!isPlatformAdmin" class="panel-card">
-      <div class="empty-block compact-block">
-        <div class="empty-title">当前账号只读</div>
-        <div class="empty-desc">AI 配置维护仅对管理员开放，你现在可以查看现有配置，但不能修改。</div>
-      </div>
-    </article>
-
-    <el-dialog
-      v-model="providerDialogVisible"
-      :title="providerDialogForm.id ? '编辑 AI 连接' : '新建 AI 连接'"
-      width="640px"
-      destroy-on-close
-    >
-      <el-form label-width="96px">
-        <el-form-item label="连接名称">
-          <el-input v-model="providerDialogForm.connectionName" placeholder="例如：OpenAI 官方 / DeepSeek 中转 / 团队代理" />
-        </el-form-item>
-        <el-form-item label="协议类型">
-          <el-select v-model="providerDialogForm.protocolType">
-            <el-option
-              v-for="option in protocolOptions"
-              :key="option.value"
-              :label="option.label"
-              :value="option.value"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="API URL">
-          <el-input v-model="providerDialogForm.baseUrl" placeholder="例如：https://api.openai.com/v1" />
-        </el-form-item>
-        <el-form-item label="API Key">
-          <el-input
-            v-model="providerDialogForm.apiKey"
-            type="password"
-            show-password
-            :placeholder="providerDialogForm.id ? '留空表示继续使用当前已保存的 API Key' : '请输入 API Key'"
-          />
-        </el-form-item>
-        <el-form-item label="状态">
-          <div class="status-toggle-row">
-            <el-switch v-model="providerDialogForm.status" :active-value="1" :inactive-value="0" />
-            <span class="status-toggle-text">{{ statusText(providerDialogForm.status) }}</span>
-          </div>
-        </el-form-item>
-      </el-form>
-
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button @click="providerDialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="savingProvider" @click="saveProvider">保存连接</el-button>
-        </div>
-      </template>
-    </el-dialog>
   </section>
 </template>
 
 <style scoped>
-.section-card {
-  margin-bottom: 16px;
+.ai-role-page {
+  display: grid;
+  gap: 16px;
+}
+
+.overview-card {
+  display: grid;
+  gap: 12px;
 }
 
 .panel-header-actions {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-}
-
-.provider-table {
-  margin-top: 8px;
-}
-
-.table-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
   flex-wrap: wrap;
 }
 
+.legacy-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: rgba(36, 107, 255, 0.08);
+  border: 1px solid rgba(36, 107, 255, 0.16);
+}
+
+.legacy-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.legacy-desc,
+.legacy-note,
 .empty-inline {
-  margin-top: 12px;
-  color: var(--text-subtle);
   font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-subtle);
+}
+
+.legacy-note {
+  padding: 2px 0;
 }
 
 .ai-config-grid {
@@ -922,6 +745,7 @@ onMounted(async () => {
   margin-top: 6px;
   font-size: 12px;
   color: var(--text-subtle);
+  line-height: 1.6;
 }
 
 .status-toggle-row {
@@ -1011,16 +835,6 @@ onMounted(async () => {
   margin-top: 12px;
 }
 
-.compact-block {
-  margin-top: 0;
-}
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
 @media (max-width: 1280px) {
   .ai-config-grid {
     grid-template-columns: 1fr;
@@ -1028,6 +842,11 @@ onMounted(async () => {
 }
 
 @media (max-width: 960px) {
+  .legacy-banner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .capability-header {
     display: none;
   }

@@ -23,6 +23,8 @@ import type {
   AiCaseConfigResponse,
   AiCaseConfigSecretResponse,
   FetchAiProviderModelsResponse,
+  PreviewAiProviderModelsPayload,
+  PreviewAiProviderModelsResponse,
   AiGenerationTask,
   AiGenerateResponse,
   AiRequirementAsset,
@@ -297,6 +299,13 @@ export const platformApi = {
       body: JSON.stringify(payload),
     })
   },
+  previewAiProviderModels(workspaceCode: string, payload: PreviewAiProviderModelsPayload) {
+    return request<PreviewAiProviderModelsResponse>('/cases/ai/providers/preview-models', {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
   updateAiProviderConnection(workspaceCode: string, id: number, payload: SaveAiProviderConnectionPayload) {
     return request<AiProviderConnection>(`/cases/ai/providers/${id}`, {
       method: 'PUT',
@@ -347,6 +356,12 @@ export const platformApi = {
       method: 'PUT',
       workspaceCode,
       body: JSON.stringify(payload),
+    })
+  },
+  bootstrapAiCaseConfigFromLegacy(workspaceCode: string) {
+    return request<AiCaseConfigResponse>('/cases/ai/config/bootstrap-from-legacy', {
+      method: 'POST',
+      workspaceCode,
     })
   },
   generateAiCases(workspaceCode: string, payload: GenerateAiCasesPayload) {

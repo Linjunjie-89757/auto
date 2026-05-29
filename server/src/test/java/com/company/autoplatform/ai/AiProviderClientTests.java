@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.lang.reflect.Method;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,6 +38,64 @@ class AiProviderClientTests {
     }
 
     @Test
+    void buildsChatRequestBodyWithPlainStringContentWhenNoImages() throws Exception {
+        AiProviderRequestProfile profile = new AiProviderRequestProfile(
+                AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_CHAT,
+                "OPENAI_COMPATIBLE_CHAT",
+                "gpt-5",
+                "https://proxy.example/v1",
+                0.3,
+                20,
+                60
+        );
+
+        String body = (String) ReflectionTestUtils.invokeMethod(
+                chatAdapter,
+                "buildChatCompletionsRequestBody",
+                profile,
+                "hello",
+                List.of(),
+                false
+        );
+        JsonNode root = objectMapper.readTree(body);
+
+        assertThat(root.path("messages").path(1).path("role").asText()).isEqualTo("user");
+        assertThat(root.path("messages").path(1).path("content").isTextual()).isTrue();
+        assertThat(root.path("messages").path(1).path("content").asText()).isEqualTo("hello");
+    }
+
+    @Test
+    void buildsChatRequestBodyWithArrayContentWhenImagesPresent() throws Exception {
+        AiProviderRequestProfile profile = new AiProviderRequestProfile(
+                AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_CHAT,
+                "OPENAI_COMPATIBLE_CHAT",
+                "gpt-5",
+                "https://proxy.example/v1",
+                0.3,
+                20,
+                60
+        );
+
+        String body = (String) ReflectionTestUtils.invokeMethod(
+                chatAdapter,
+                "buildChatCompletionsRequestBody",
+                profile,
+                "hello",
+                List.of(new AiProviderClient.ImageInput("a.png", "image/png", new byte[]{1, 2, 3})),
+                false
+        );
+        JsonNode root = objectMapper.readTree(body);
+
+        assertThat(root.path("messages").path(1).path("content").isArray()).isTrue();
+        assertThat(root.path("messages").path(1).path("content").size()).isEqualTo(2);
+        assertThat(root.path("messages").path(1).path("content").path(0).path("type").asText()).isEqualTo("text");
+        assertThat(root.path("messages").path(1).path("content").path(0).path("text").asText()).isEqualTo("hello");
+        assertThat(root.path("messages").path(1).path("content").path(1).path("type").asText()).isEqualTo("image_url");
+        assertThat(root.path("messages").path(1).path("content").path(1).path("image_url").path("url").asText())
+                .startsWith("data:image/png;base64,");
+    }
+
+    @Test
     void buildsResponsesRequestBodyWithInputField() throws Exception {
         AiProviderRequestProfile profile = new AiProviderRequestProfile(
                 AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_RESPONSES,
@@ -44,7 +103,8 @@ class AiProviderClientTests {
                 "gpt-5",
                 "https://proxy.example/v1",
                 0.3,
-                20
+                20,
+                60
         );
 
         String body = (String) ReflectionTestUtils.invokeMethod(
@@ -72,7 +132,8 @@ class AiProviderClientTests {
                 "gpt-5",
                 "https://proxy.example/v1",
                 0.3,
-                20
+                20,
+                60
         );
 
         String body = (String) ReflectionTestUtils.invokeMethod(
@@ -99,5 +160,23 @@ class AiProviderClientTests {
         );
 
         assertThat(content).isEqualTo("{\"ok\":true}");
+    }
+
+    @Test
+    void requestTimeoutFallsBackToAdapterDefaultWhenProfileDoesNotOverride() throws Exception {
+        Method method = AbstractOpenAiCompatibleAdapter.class.getDeclaredMethod("resolveRequestTimeoutSeconds", Integer.class);
+        method.setAccessible(true);
+        Long timeoutSeconds = (Long) method.invoke(chatAdapter, new Object[]{null});
+
+        assertThat(timeoutSeconds).isEqualTo(60L);
+    }
+
+    @Test
+    void requestTimeoutUsesProfileOverrideWhenProvided() throws Exception {
+        Method method = AbstractOpenAiCompatibleAdapter.class.getDeclaredMethod("resolveRequestTimeoutSeconds", Integer.class);
+        method.setAccessible(true);
+        Long timeoutSeconds = (Long) method.invoke(chatAdapter, 180);
+
+        assertThat(timeoutSeconds).isEqualTo(180L);
     }
 }

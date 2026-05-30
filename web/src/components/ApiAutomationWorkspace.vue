@@ -6203,11 +6203,12 @@ function formatTimeLabel(value?: string | null) {
             </div>
 
             <div class="ms-like-editor-shell">
-              <div v-if="isAllScope && !definitionForm.workspaceCode" class="scope-hint">
-                &#24403;&#21069;&#22788;&#20110; ALL &#35270;&#35282;&#65292;&#35831;&#20808;&#22312;&#39030;&#37096;&#36873;&#25321;&#30446;&#26631;&#31354;&#38388;&#21518;&#20877;&#20445;&#23384;&#25110;&#35843;&#35797;&#12290;
-              </div>
+              <div class="ms-like-request-shell">
+                <div v-if="isAllScope && !definitionForm.workspaceCode" class="scope-hint">
+                  &#24403;&#21069;&#22788;&#20110; ALL &#35270;&#35282;&#65292;&#35831;&#20808;&#22312;&#39030;&#37096;&#36873;&#25321;&#30446;&#26631;&#31354;&#38388;&#21518;&#20877;&#20445;&#23384;&#25110;&#35843;&#35797;&#12290;
+                </div>
 
-              <div class="ms-like-request-row">
+                <div class="ms-like-request-row">
                 <el-select
                   v-model="definitionForm.requestConfig.method"
                   :class="['request-method-select', requestMethodClass(definitionForm.requestConfig.method)]"
@@ -6239,28 +6240,29 @@ function formatTimeLabel(value?: string | null) {
                 </el-dropdown>
               </div>
 
-              <div class="ms-like-top-tabs">
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'headers' }]" @click="setActiveRequestContentTab('headers')">&#35831;&#27714;&#22836;</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'body' }]" @click="setActiveRequestContentTab('body')">&#35831;&#27714;&#20307;</button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'params' }]" @click="setActiveRequestContentTab('params')">
-                  Params
-                  <span v-if="queryEnabledCount" class="ms-like-tab-badge">{{ queryEnabledCount }}</span>
-                </button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'auth' }]" @click="setActiveRequestContentTab('auth')">Auth</button>
-                <button data-testid="request-tab-pre" :class="['ms-like-top-tab', { active: activeRequestTab === 'pre' }]" @click="setActiveRequestContentTab('pre')">前置处理</button>
-                <button data-testid="request-tab-post" :class="['ms-like-top-tab', { active: activeRequestTab === 'post' }]" @click="setActiveRequestContentTab('post')">后置处理</button>
-                <button data-testid="request-tab-tests" :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="setActiveRequestContentTab('tests')">
-                  断言
-                  <span v-if="assertionEnabledCount" class="ms-like-tab-badge">{{ assertionEnabledCount }}</span>
-                </button>
-                <button :class="['ms-like-top-tab', { active: activeRequestTab === 'settings' }]" @click="setActiveRequestContentTab('settings')">&#35774;&#32622;</button>
-                <button v-if="activeRequestEditorTab?.resourceType === 'definition'" :class="['ms-like-top-tab', { active: activeRequestTab === 'cases' }]" @click="setActiveRequestContentTab('cases')">
-                  用例
-                  <span v-if="currentDefinitionCaseCount" class="ms-like-tab-badge">{{ currentDefinitionCaseCount }}</span>
-                </button>
-              </div>
+                <div class="ms-like-request-content-panel">
+                  <div class="ms-like-top-tabs">
+                    <button :class="['ms-like-top-tab', { active: activeRequestTab === 'headers' }]" @click="setActiveRequestContentTab('headers')">&#35831;&#27714;&#22836;</button>
+                    <button :class="['ms-like-top-tab', { active: activeRequestTab === 'body' }]" @click="setActiveRequestContentTab('body')">&#35831;&#27714;&#20307;</button>
+                    <button :class="['ms-like-top-tab', { active: activeRequestTab === 'params' }]" @click="setActiveRequestContentTab('params')">
+                      Params
+                      <span v-if="queryEnabledCount" class="ms-like-tab-badge">{{ queryEnabledCount }}</span>
+                    </button>
+                    <button :class="['ms-like-top-tab', { active: activeRequestTab === 'auth' }]" @click="setActiveRequestContentTab('auth')">Auth</button>
+                    <button data-testid="request-tab-pre" :class="['ms-like-top-tab', { active: activeRequestTab === 'pre' }]" @click="setActiveRequestContentTab('pre')">前置处理</button>
+                    <button data-testid="request-tab-post" :class="['ms-like-top-tab', { active: activeRequestTab === 'post' }]" @click="setActiveRequestContentTab('post')">后置处理</button>
+                    <button data-testid="request-tab-tests" :class="['ms-like-top-tab', { active: activeRequestTab === 'tests' }]" @click="setActiveRequestContentTab('tests')">
+                      断言
+                      <span v-if="assertionEnabledCount" class="ms-like-tab-badge">{{ assertionEnabledCount }}</span>
+                    </button>
+                    <button :class="['ms-like-top-tab', { active: activeRequestTab === 'settings' }]" @click="setActiveRequestContentTab('settings')">&#35774;&#32622;</button>
+                    <button v-if="activeRequestEditorTab?.resourceType === 'definition'" :class="['ms-like-top-tab', { active: activeRequestTab === 'cases' }]" @click="setActiveRequestContentTab('cases')">
+                      用例
+                      <span v-if="currentDefinitionCaseCount" class="ms-like-tab-badge">{{ currentDefinitionCaseCount }}</span>
+                    </button>
+                  </div>
 
-              <div v-if="showCaseListContent" class="ms-like-request-body">
+                  <div v-if="showCaseListContent" class="ms-like-request-body">
                 <div class="request-section case-list-panel">
                   <div class="editor-actions left">
                     <el-button
@@ -6342,9 +6344,9 @@ function formatTimeLabel(value?: string | null) {
                   </div>
                   </div>
                 </div>
-              </div>
+                  </div>
 
-              <div v-else class="ms-like-request-body">
+                  <div v-else class="ms-like-request-body">
                 <template v-if="activeRequestTab === 'params'">
                   <div class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--query">
                     <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--query">
@@ -6496,7 +6498,7 @@ function formatTimeLabel(value?: string | null) {
                       v-if="['RAW_JSON', 'RAW_XML', 'RAW_TEXT'].includes(definitionForm.requestConfig.body.type)"
                       v-model="activeBodyRawText"
                       :language="activeBodyLanguage"
-                      height="300px"
+                      height="100%"
                     />
                     <div v-else-if="definitionForm.requestConfig.body.type === 'BINARY'" class="request-section ms-like-form-panel">
                       <div class="ms-like-form-row">
@@ -6729,9 +6731,11 @@ function formatTimeLabel(value?: string | null) {
                     </div>
                   </div>
                 </template>
+                  </div>
+                </div>
               </div>
 
-            <div v-if="shouldShowResponsePanel" class="ms-like-response-shell">
+              <div v-if="shouldShowResponsePanel" class="ms-like-response-shell">
               <div class="ms-like-response-header">
                 <div class="ms-like-response-title">响应内容</div>
                 <div v-if="!showResponseEmptyState" class="ms-like-response-metrics">
@@ -6748,28 +6752,29 @@ function formatTimeLabel(value?: string | null) {
                 {{ currentDebugError }}
               </div>
 
-              <div v-if="showResponseEmptyState" class="ms-like-response-empty">
-                <div class="ms-like-response-empty-card">
-                  <div class="ms-like-response-empty-visual">
-                    <div class="ms-like-response-empty-window">
-                      <span></span>
-                      <span></span>
-                      <span></span>
+              <div class="ms-like-response-content-panel">
+                <div v-if="showResponseEmptyState" class="ms-like-response-empty">
+                  <div class="ms-like-response-empty-card">
+                    <div class="ms-like-response-empty-visual">
+                      <div class="ms-like-response-empty-window">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                      </div>
                     </div>
+                    <div class="ms-like-response-empty-text">点击 <span>发送</span> 获取响应内容</div>
                   </div>
-                  <div class="ms-like-response-empty-text">点击 <span>发送</span> 获取响应内容</div>
                 </div>
-              </div>
-              <template v-else>
-                <div class="ms-like-response-tabs">
-                  <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'body' }]" @click="responsePreviewTab = 'body'">Body</button>
-                  <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'header' }]" @click="responsePreviewTab = 'header'">Header</button>
-                  <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'console' }]" @click="responsePreviewTab = 'console'">控制台</button>
-                  <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'actualRequest' }]" @click="responsePreviewTab = 'actualRequest'">实际请求</button>
-                  <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'assertions' }]" @click="responsePreviewTab = 'assertions'">断言</button>
-                </div>
+                <template v-else>
+                  <div class="ms-like-response-tabs">
+                    <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'body' }]" @click="responsePreviewTab = 'body'">Body</button>
+                    <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'header' }]" @click="responsePreviewTab = 'header'">Header</button>
+                    <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'console' }]" @click="responsePreviewTab = 'console'">控制台</button>
+                    <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'actualRequest' }]" @click="responsePreviewTab = 'actualRequest'">实际请求</button>
+                    <button :class="['ms-like-top-tab', { active: responsePreviewTab === 'assertions' }]" @click="responsePreviewTab = 'assertions'">断言</button>
+                  </div>
 
-                <div class="ms-like-response-body">
+                  <div class="ms-like-response-body">
                     <MonacoCodeEditor
                       v-if="responsePreviewTab === 'body'"
                       :model-value="responseBodyPreview"
@@ -6838,11 +6843,11 @@ function formatTimeLabel(value?: string | null) {
                         </el-table-column>
                       </el-table>
                     </div>
-                </div>
-              </template>
+                  </div>
+                </template>
+              </div>
             </div>
-
-            </div>
+          </div>
           </section>
 
           <ApiCaseDrawer
@@ -7493,10 +7498,10 @@ function formatTimeLabel(value?: string | null) {
                               :max-fit-content-height="1000"
                               height="100%"
                             />
-                          </div>
-                        </template>
-                      </div>
-                    </div>
+                  </div>
+                </template>
+              </div>
+              </div>
 
                     <div class="case-drawer-history-section">
                       <div class="case-drawer-history-section-title">响应结果</div>
@@ -9452,7 +9457,27 @@ function formatTimeLabel(value?: string | null) {
 .api-automation-page {
   display: flex;
   flex-direction: column;
+  min-height: 760px;
+  height: calc(100vh - 118px);
   gap: 16px;
+}
+
+.api-tabs {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.api-tabs :deep(.el-tabs__content) {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.api-tabs :deep(.el-tab-pane) {
+  min-height: 0;
+  height: 100%;
 }
 
 .shell-card {
@@ -9537,8 +9562,9 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-layout {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  min-height: 820px;
+  grid-template-columns: clamp(280px, 17vw, 332px) minmax(0, 1fr);
+  min-height: 0;
+  height: 100%;
 }
 
 .scenario-workbench {
@@ -10962,7 +10988,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-layout .ms-like-main {
-  overflow: auto;
+  overflow: hidden;
 }
 
 .ms-like-sidebar {
@@ -11689,17 +11715,48 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-editor-shell {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-rows: minmax(360px, 46%) minmax(320px, 1fr);
+  min-height: 0;
+  gap: 14px;
+  padding: 14px 18px 18px;
+  background: #f5f7fb;
+}
+
+.ms-like-request-shell {
   display: flex;
+  min-height: 0;
+  min-width: 0;
   flex-direction: column;
   gap: 14px;
-  padding: 12px 16px 16px;
-  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid #e5ebf3;
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
 .ms-like-request-row {
   display: grid;
-  grid-template-columns: 120px minmax(0, 1fr) auto auto auto;
+  grid-template-columns: 112px minmax(0, 1fr) 72px auto auto;
   align-items: center;
+  gap: 12px;
+  padding: 14px 16px 0;
+}
+
+.ms-like-request-content-panel {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+  margin: 0 16px 16px;
+  border: 1px solid #e7edf5;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
 }
 
 .ms-like-top-tabs,
@@ -11760,21 +11817,31 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-request-body {
+  display: flex;
+  flex: 1 1 auto;
   min-height: 0;
-  overflow: visible;
+  overflow: auto;
   background: #fff;
-  padding: 0;
+  padding: 12px 14px 14px;
 }
 
 .ms-like-body-type-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0;
   margin-bottom: 4px;
 }
 
 .ms-like-body-mode-shell {
-  min-height: 300px;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  border: 1px solid #e8edf5;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
 }
 
 .ms-like-body-mode-shell > .ms-monaco-editor,
@@ -11782,6 +11849,8 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-body-mode-shell > .ms-like-form-panel,
 .ms-like-body-mode-shell > .ms-like-empty-body {
   width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .ms-like-body-mode-shell > .ms-like-table-surface,
@@ -12185,12 +12254,27 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-response-shell {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  min-height: 290px;
-  flex: 0 0 auto;
-  border-top: 1px solid var(--el-border-color-light);
+  gap: 12px;
+  min-height: 0;
+  min-width: 0;
+  border: 1px solid #e5ebf3;
+  border-radius: 12px;
   background: #fff;
-  padding: 10px 16px 16px;
+  padding: 12px 16px 16px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.ms-like-response-content-panel {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+  border: 1px solid #e7edf5;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
 }
 
 .ms-like-response-metrics {
@@ -12211,17 +12295,20 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-response-body {
-  min-height: 0;
-  overflow: visible;
   display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
   flex-direction: column;
+  padding: 12px 14px 14px;
 }
 
 .ms-like-response-empty {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   justify-content: center;
-  min-height: 220px;
+  min-height: 0;
   padding: 12px 0 4px;
 }
 
@@ -12635,6 +12722,17 @@ function formatTimeLabel(value?: string | null) {
   gap: 14px;
 }
 
+.ms-like-request-body > .request-section,
+.ms-like-request-body > .body-form-grid,
+.ms-like-request-body > .case-list-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.ms-like-request-body > .case-list-panel {
+  padding: 0;
+}
+
 .scope-hint {
   padding: 10px 12px;
   border: 1px dashed var(--el-color-warning-light-5);
@@ -12988,6 +13086,14 @@ pre {
 }
 
 @media (max-width: 1480px) {
+  .ms-like-layout {
+    grid-template-columns: 272px minmax(0, 1fr);
+  }
+
+  .ms-like-editor-shell {
+    grid-template-rows: minmax(340px, 48%) minmax(300px, 1fr);
+  }
+
   .ms-like-param-table-grid--query {
       grid-template-columns: 24px 28px minmax(190px, 1.15fr) 112px minmax(220px, 1fr) 72px minmax(170px, 0.95fr) 64px;
   }
@@ -13002,6 +13108,11 @@ pre {
 }
 
 @media (max-width: 1200px) {
+  .api-automation-page,
+  .api-tabs {
+    min-height: 0;
+  }
+
   .ms-like-layout,
   .workspace-grid,
   .execution-grid,
@@ -13014,6 +13125,27 @@ pre {
 
   .ms-like-main {
     flex: 1;
+  }
+
+  .ms-like-layout {
+    height: auto;
+    min-height: 0;
+  }
+
+  .ms-like-editor-shell {
+    display: flex;
+    flex-direction: column;
+    padding: 12px;
+  }
+
+  .ms-like-request-shell,
+  .ms-like-response-shell {
+    flex: 0 0 auto;
+    min-height: 0;
+  }
+
+  .ms-like-request-content-panel {
+    margin: 0 12px 12px;
   }
 
   .ms-like-request-row,

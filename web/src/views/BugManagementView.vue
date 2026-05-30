@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, RefreshRight, Setting } from '@element-plus/icons-vue'
+import { Plus, RefreshRight, Search, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { platformApi } from '../api/platform'
 import BugDetailDrawer from '../components/BugDetailDrawer.vue'
-import ListToolbar from '../components/ListToolbar.vue'
 import TableSettingsDrawer from '../components/TableSettingsDrawer.vue'
 import { useListToolbarState } from '../composables/useListToolbarState'
 import type { TableSettingsColumn } from '../composables/useTableSettings'
@@ -193,6 +192,27 @@ const statCards = computed(() => [
   { label: '待验证', value: statusCounts.value.PENDING_VERIFY ?? 0, status: 'PENDING_VERIFY', description: '等待验证结果' },
 ])
 
+const currentWorkspaceName = computed(() => {
+  if (isAllScope.value) {
+    return '全部空间'
+  }
+  const matched = workspaces.value.find(item => item.code === workspaceCode.value)
+  return matched?.name ?? workspaceCode.value
+})
+
+const pageSubtitle = computed(() => `当前范围：${currentWorkspaceName.value}，支持按状态、优先级、严重程度和处理人快速定位缺陷。`)
+
+const activeFilterCount = computed(() => {
+  let count = 0
+  if (bugFilters.keyword.trim()) count += 1
+  if (bugFilters.status) count += 1
+  if (bugFilters.priority) count += 1
+  if (bugFilters.severity) count += 1
+  if (bugFilters.assigneeId !== null) count += 1
+  if (isAllScope.value && bugFilters.workspaceCode) count += 1
+  return count
+})
+
 function selectStatCard(status: string) {
   bugFilters.status = status
   pageNo.value = 1
@@ -318,6 +338,71 @@ function formatColumnValue(row: BugSummary, key: BugColumnKey) {
       return String(row.relatedCaseCount ?? 0)
     default:
       return '-'
+  }
+}
+
+function formatCompactDateTime(value: string | null | undefined) {
+  if (!value) {
+    return '-'
+  }
+  return value.slice(5, 16).replace('T', ' ')
+}
+
+function rowTitleMeta(row: BugSummary) {
+  const meta: string[] = []
+  if (isAllScope.value && row.workspaceName) {
+    meta.push(row.workspaceName)
+  }
+  if (row.updatedAt) {
+    meta.push(`更新于 ${formatCompactDateTime(row.updatedAt)}`)
+  }
+  return meta.join(' · ')
+}
+
+function statusTone(status: string | null | undefined) {
+  switch (status) {
+    case 'ASSIGNED':
+      return 'assigned'
+    case 'IN_PROGRESS':
+      return 'processing'
+    case 'PENDING_VERIFY':
+      return 'verify'
+    case 'CLOSED':
+      return 'success'
+    case 'REJECTED':
+      return 'muted'
+    default:
+      return 'neutral'
+  }
+}
+
+function priorityTone(priority: string | null | undefined) {
+  switch (priority) {
+    case 'P0':
+      return 'critical'
+    case 'P1':
+      return 'high'
+    case 'P2':
+      return 'medium'
+    case 'P3':
+      return 'low'
+    default:
+      return 'neutral'
+  }
+}
+
+function severityTone(severity: string | null | undefined) {
+  switch (severity) {
+    case 'CRITICAL':
+      return 'critical'
+    case 'HIGH':
+      return 'high'
+    case 'MEDIUM':
+      return 'medium'
+    case 'LOW':
+      return 'low'
+    default:
+      return 'neutral'
   }
 }
 
@@ -762,16 +847,24 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="page-shell">
-    <div class="page-header">
-      <div class="page-title">缺陷管理</div>
+  <section class="page-shell bug-page-shell">
+    <div class="page-header bug-page-header">
+      <div class="bug-page-heading">
+        <div class="page-title">缺陷管理</div>
+        <p class="bug-page-subtitle">{{ pageSubtitle }}</p>
+      </div>
     </div>
 
     <div class="stats-grid bug-stats-grid">
       <article
         v-for="item in statCards"
         :key="item.label"
-        :class="['metric-card', 'bug-stat-card', { 'bug-stat-card-active': isStatCardActive(item.status) }]"
+        :class="[
+          'metric-card',
+          'bug-stat-card',
+          `bug-stat-card-${statusTone(item.status)}`,
+          { 'bug-stat-card-active': isStatCardActive(item.status) },
+        ]"
         role="button"
         tabindex="0"
         @click="selectStatCard(item.status)"
@@ -781,50 +874,68 @@ onMounted(() => {
         <div class="metric-label">{{ item.label }}</div>
         <div class="metric-value">{{ item.value }}</div>
         <div class="metric-trend">{{ item.description }}</div>
+        <div class="bug-stat-caption">
+          {{ item.status ? '点击筛选该状态' : '查看全部缺陷' }}
+        </div>
       </article>
     </div>
 
-    <article class="panel-card">
-      <div class="panel-header panel-header-bug-list">
-        <ListToolbar title="缺陷列表">
-          <template #filters>
-            <el-input
-              v-model="bugFilters.keyword"
-              placeholder="搜索编号或名称"
-              clearable
-              class="toolbar-filter-input"
-            />
-            <el-select v-model="bugFilters.status" clearable :value-on-clear="''" placeholder="状态" class="toolbar-filter-select">
-              <el-option v-for="item in bugStatusOptions" :key="item.value" :label="item.label" :value="item.value" />
-            </el-select>
-            <el-select v-model="bugFilters.priority" clearable placeholder="优先级" class="toolbar-filter-select">
-              <el-option v-for="item in priorityOptions" :key="item" :label="item" :value="item" />
-            </el-select>
-            <el-select v-model="bugFilters.severity" clearable placeholder="严重程度" class="toolbar-filter-select">
-              <el-option v-for="item in severityOptions" :key="item" :label="formatSeverity(item)" :value="item" />
-            </el-select>
-            <el-select v-model="bugFilters.assigneeId" clearable placeholder="处理人" class="toolbar-filter-select">
-              <el-option v-for="item in users" :key="item.id" :label="item.displayName" :value="item.id" />
-            </el-select>
-            <el-select
-              v-if="isAllScope"
-              v-model="bugFilters.workspaceCode"
-              clearable
-              placeholder="所属空间"
-              class="toolbar-filter-select"
-            >
-              <el-option v-for="item in workspaces" :key="item.code" :label="item.name" :value="item.code" />
-            </el-select>
-            <el-button text @click="resetFilters">
-              <el-icon><RefreshRight /></el-icon>
-              重置
-            </el-button>
-          </template>
-        </ListToolbar>
-        <el-button type="primary" class="bug-create-button" @click="openCreateDialog">
-          <el-icon><Plus /></el-icon>
-          新建缺陷
-        </el-button>
+    <article class="panel-card bug-list-panel">
+      <div class="bug-list-header">
+        <div class="bug-list-heading">
+          <div class="bug-list-title">缺陷列表</div>
+          <div class="bug-list-subtitle">
+            当前共 {{ total }} 条记录
+            <span class="bug-list-divider">·</span>
+            {{ activeFilterCount }} 个筛选条件生效
+          </div>
+        </div>
+        <div class="bug-list-actions">
+          <el-button type="primary" class="bug-create-button" @click="openCreateDialog">
+            <el-icon><Plus /></el-icon>
+            新建缺陷
+          </el-button>
+        </div>
+      </div>
+
+      <div class="bug-filter-toolbar">
+        <el-input
+          v-model="bugFilters.keyword"
+          placeholder="搜索缺陷编号或标题"
+          clearable
+          class="bug-filter-search"
+        />
+        <el-select v-model="bugFilters.status" clearable :value-on-clear="''" placeholder="状态" class="bug-filter-select">
+          <el-option v-for="item in bugStatusOptions" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+        <el-select v-model="bugFilters.priority" clearable placeholder="优先级" class="bug-filter-select">
+          <el-option v-for="item in priorityOptions" :key="item" :label="item" :value="item" />
+        </el-select>
+        <el-select v-model="bugFilters.severity" clearable placeholder="严重程度" class="bug-filter-select">
+          <el-option v-for="item in severityOptions" :key="item" :label="formatSeverity(item)" :value="item" />
+        </el-select>
+        <el-select v-model="bugFilters.assigneeId" clearable placeholder="处理人" class="bug-filter-select">
+          <el-option v-for="item in users" :key="item.id" :label="item.displayName" :value="item.id" />
+        </el-select>
+        <el-select
+          v-if="isAllScope"
+          v-model="bugFilters.workspaceCode"
+          clearable
+          placeholder="所属空间"
+          class="bug-filter-select"
+        >
+          <el-option v-for="item in workspaces" :key="item.code" :label="item.name" :value="item.code" />
+        </el-select>
+        <div class="bug-filter-actions">
+          <el-button @click="pageNo = 1">
+            <el-icon><Search /></el-icon>
+            查询
+          </el-button>
+          <el-button @click="resetFilters">
+            <el-icon><RefreshRight /></el-icon>
+            重置
+          </el-button>
+        </div>
       </div>
 
       <div v-loading="loading" class="bug-table-shell">
@@ -840,70 +951,103 @@ onMounted(() => {
               </div>
             </div>
 
-            <div
-              v-for="row in pagedBugs"
-              :key="row.id"
-              class="bug-grid bug-grid-row"
-              :style="{ gridTemplateColumns: bugGridTemplateColumns, minWidth: bugGridMinWidth }"
-            >
+            <template v-if="pagedBugs.length">
               <div
-                v-for="column in visibleColumns"
-                :key="row.id + '-' + column.key"
-                :class="['bug-cell', 'bug-cell-' + column.key]"
+                v-for="row in pagedBugs"
+                :key="row.id"
+                class="bug-grid bug-grid-row"
+                :style="{ gridTemplateColumns: bugGridTemplateColumns, minWidth: bugGridMinWidth }"
               >
-                <el-button
-                  v-if="column.key === 'bugNo'"
-                  text
-                  type="primary"
-                  class="bug-no-trigger"
-                  @click="openDetail(row.id)"
+                <div
+                  v-for="column in visibleColumns"
+                  :key="row.id + '-' + column.key"
+                  :class="['bug-cell', 'bug-cell-' + column.key]"
                 >
-                  {{ formatColumnValue(row, column.key) }}
-                </el-button>
-                <el-tooltip
-                  v-else-if="column.key === 'title' || column.key === 'tags'"
-                  :content="formatColumnValue(row, column.key)"
-                  placement="top"
-                >
-                  <span class="bug-cell-text">{{ formatColumnValue(row, column.key) }}</span>
-                </el-tooltip>
-                <template v-else-if="column.key === 'status'">
-                  <el-tag effect="plain">{{ formatColumnValue(row, column.key) }}</el-tag>
-                </template>
-                <template v-else>
-                  <span class="bug-cell-text">{{ formatColumnValue(row, column.key) }}</span>
-                </template>
+                  <el-button
+                    v-if="column.key === 'bugNo'"
+                    text
+                    type="primary"
+                    class="bug-no-trigger"
+                    @click="openDetail(row.id)"
+                  >
+                    {{ formatColumnValue(row, column.key) }}
+                  </el-button>
+
+                  <div v-else-if="column.key === 'title'" class="bug-title-cell">
+                    <el-tooltip :content="row.title" placement="top">
+                      <span class="bug-title-text">{{ row.title }}</span>
+                    </el-tooltip>
+                    <span v-if="rowTitleMeta(row)" class="bug-title-meta">{{ rowTitleMeta(row) }}</span>
+                  </div>
+
+                  <span
+                    v-else-if="column.key === 'status'"
+                    :class="['bug-status-pill', `bug-status-pill-${statusTone(row.status)}`]"
+                  >
+                    {{ formatColumnValue(row, column.key) }}
+                  </span>
+
+                  <span
+                    v-else-if="column.key === 'priority'"
+                    :class="['bug-badge', `bug-badge-${priorityTone(row.priority)}`]"
+                  >
+                    {{ formatColumnValue(row, column.key) }}
+                  </span>
+
+                  <span
+                    v-else-if="column.key === 'severity'"
+                    :class="['bug-badge', `bug-badge-${severityTone(row.severity)}`]"
+                  >
+                    {{ formatColumnValue(row, column.key) }}
+                  </span>
+
+                  <el-tooltip
+                    v-else-if="column.key === 'tags'"
+                    :content="formatColumnValue(row, column.key)"
+                    placement="top"
+                  >
+                    <span class="bug-cell-text">{{ formatColumnValue(row, column.key) }}</span>
+                  </el-tooltip>
+
+                  <span v-else class="bug-cell-text">{{ formatColumnValue(row, column.key) }}</span>
+                </div>
               </div>
+            </template>
+
+            <div v-else class="bug-table-empty">
+              当前筛选条件下暂无缺陷记录
             </div>
           </div>
         </div>
 
         <div class="bug-table-actions">
           <div class="bug-actions-header">
-            <div class="bug-actions-header-title">
-              <span>操作</span>
-              <el-button text class="table-settings-trigger" @click="bugListToolbar.settingsVisible.value = true">
-                <el-icon><Setting /></el-icon>
-              </el-button>
-            </div>
+            <span>操作</span>
+            <el-button text class="bug-table-settings-trigger" @click="bugListToolbar.settingsVisible.value = true">
+              <el-icon><Setting /></el-icon>
+            </el-button>
           </div>
-          <div
-            v-for="row in pagedBugs"
-            :key="'action-' + row.id"
-            class="bug-actions-row"
-          >
-            <div class="row-actions">
-              <el-button text type="primary" size="small" @click="openDetail(row.id)">查看</el-button>
-              <el-button text type="primary" size="small" @click="openEditFromRow(row.id)">编辑</el-button>
+          <template v-if="pagedBugs.length">
+            <div
+              v-for="row in pagedBugs"
+              :key="'action-' + row.id"
+              class="bug-actions-row"
+            >
+              <div class="row-actions">
+                <el-button text type="primary" size="small" @click="openDetail(row.id)">查看</el-button>
+                <el-button text type="primary" size="small" @click="openEditFromRow(row.id)">编辑</el-button>
+              </div>
             </div>
-          </div>
+          </template>
+          <div v-else class="bug-actions-empty">-</div>
         </div>
       </div>
 
       <div class="table-pagination">
-        <div class="table-pagination-left" />
+        <div class="table-pagination-summary">
+          当前页 {{ pagedBugs.length }} 条，共 {{ total }} 条
+        </div>
         <div class="table-pagination-right">
-          <div class="table-pagination-summary">共 {{ total }} 条 / {{ totalPages }} 页</div>
           <el-pagination
             v-model:current-page="pageNo"
             v-model:page-size="pageSize"
@@ -1011,36 +1155,33 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.panel-header-bug-list {
+.bug-page-shell {
+  gap: 20px;
+}
+
+.bug-page-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
 }
 
-.panel-header-bug-list :deep(.list-toolbar) {
+.bug-page-heading {
   min-width: 0;
-  flex: 1;
 }
 
-.panel-header-bug-list :deep(.list-toolbar-subline) {
-  justify-content: flex-start;
-}
-
-.panel-header-bug-list :deep(.list-toolbar-filters) {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: thin;
-}
-
-.panel-header-bug-list :deep(.list-toolbar-filters::-webkit-scrollbar) {
-  height: 6px;
+.bug-page-subtitle {
+  margin: 8px 0 0;
+  color: var(--text-subtle);
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .bug-create-button {
-  flex: 0 0 auto;
-  align-self: flex-start;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 10px;
+  box-shadow: 0 10px 24px rgba(64, 158, 255, 0.18);
 }
 
 .detail-body :deep(img) {
@@ -1055,6 +1196,7 @@ onMounted(() => {
 
 .bug-stats-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
 }
 
 .bug-stat-card {
@@ -1062,51 +1204,172 @@ onMounted(() => {
   min-width: 0;
   cursor: pointer;
   outline: none;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.94));
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    background 0.18s ease;
+}
+
+.bug-stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 18px;
+  right: 18px;
+  height: 3px;
+  border-radius: 999px;
+  opacity: 0.78;
 }
 
 .bug-stat-card:hover,
 .bug-stat-card:focus-visible {
-  border-color: rgba(64, 158, 255, 0.42);
-  box-shadow: 0 10px 28px rgba(64, 158, 255, 0.12);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  border-color: rgba(148, 163, 184, 0.36);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
 }
 
 .bug-stat-card-active {
-  border-color: rgba(64, 158, 255, 0.72);
-  background: linear-gradient(180deg, rgba(64, 158, 255, 0.08), #ffffff 62%);
-  box-shadow: 0 12px 30px rgba(64, 158, 255, 0.14);
+  border-color: rgba(64, 158, 255, 0.32);
+  box-shadow: 0 18px 40px rgba(64, 158, 255, 0.12);
 }
 
-.bug-stat-card-active::after {
-  content: '';
-  position: absolute;
-  left: 18px;
-  right: 18px;
-  bottom: 0;
-  height: 3px;
-  border-radius: 999px 999px 0 0;
-  background: #409eff;
+.bug-stat-card-neutral::before {
+  background: linear-gradient(90deg, #94a3b8, #cbd5e1);
 }
 
-.toolbar-filter-input {
-  width: 200px;
+.bug-stat-card-assigned::before {
+  background: linear-gradient(90deg, #60a5fa, #3b82f6);
 }
 
-.toolbar-filter-select {
+.bug-stat-card-processing::before {
+  background: linear-gradient(90deg, #818cf8, #6366f1);
+}
+
+.bug-stat-card-verify::before {
+  background: linear-gradient(90deg, #2dd4bf, #14b8a6);
+}
+
+.bug-stat-card-success::before {
+  background: linear-gradient(90deg, #34d399, #10b981);
+}
+
+.bug-stat-card-muted::before {
+  background: linear-gradient(90deg, #cbd5e1, #94a3b8);
+}
+
+.bug-stat-caption {
+  margin-top: 10px;
+  color: var(--text-subtle);
+  font-size: 12px;
+}
+
+.bug-list-panel {
+  padding: 16px 16px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.05);
+}
+
+.bug-list-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.bug-list-heading {
+  min-width: 0;
+}
+
+.bug-list-actions {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.bug-list-title {
+  color: #111827;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.bug-list-subtitle {
+  margin-top: 4px;
+  color: var(--text-subtle);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.bug-list-divider {
+  margin: 0 6px;
+  color: #cbd5e1;
+}
+
+.bug-table-settings-trigger {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #64748b;
+  box-shadow: none;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.bug-table-settings-trigger:hover,
+.bug-table-settings-trigger:focus-visible {
+  background: rgba(148, 163, 184, 0.14);
+  color: #334155;
+}
+
+.bug-table-settings-trigger:deep(.el-icon) {
+  font-size: 13px;
+}
+
+.bug-filter-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.96));
+}
+
+.bug-filter-search {
+  width: min(280px, 100%);
+}
+
+.bug-filter-select {
   width: 136px;
+}
+
+.bug-filter-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
 }
 
 .bug-table-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 164px;
+  grid-template-columns: minmax(0, 1fr) 160px;
   width: 100%;
-  flex: 1;
   min-height: 0;
-  border: 1px solid var(--line-soft);
+  border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 10px;
   overflow: hidden;
-  background: var(--bg-panel);
+  background: #fff;
 }
 
 .bug-table-data {
@@ -1118,6 +1381,7 @@ onMounted(() => {
   height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
+  background: #fff;
 }
 
 .bug-grid {
@@ -1125,24 +1389,30 @@ onMounted(() => {
 }
 
 .bug-grid-header {
-  min-height: 50px;
-  border-bottom: 1px solid var(--line-soft);
-  color: var(--text-subtle);
+  min-height: 44px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  color: #64748b;
   font-size: 12px;
   font-weight: 600;
-  background: #fbfcff;
+  background: #f8fafc;
 }
 
 .bug-grid-row {
-  min-height: 52px;
-  border-bottom: 1px solid var(--line-soft);
-  font-size: 13px;
+  min-height: 56px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  font-size: 12px;
+  background: #fff;
+  transition: background 0.16s ease;
+}
+
+.bug-grid-row:hover {
+  background: rgba(248, 250, 252, 0.72);
 }
 
 .bug-cell {
   display: flex;
   align-items: center;
-  padding: 0 10px;
+  padding: 10px 10px;
   min-width: 0;
 }
 
@@ -1152,58 +1422,157 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: #334155;
 }
 
 .bug-no-trigger {
   padding: 0;
   min-width: 0;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.bug-title-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+}
+
+.bug-title-text {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  color: #0f172a;
   font-weight: 500;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bug-title-meta {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bug-status-pill,
+.bug-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.bug-status-pill-neutral,
+.bug-badge-neutral {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.bug-status-pill-assigned {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+
+.bug-status-pill-processing {
+  background: rgba(99, 102, 241, 0.12);
+  color: #4f46e5;
+}
+
+.bug-status-pill-verify {
+  background: rgba(20, 184, 166, 0.12);
+  color: #0f766e;
+}
+
+.bug-status-pill-success {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+}
+
+.bug-status-pill-muted {
+  background: rgba(148, 163, 184, 0.16);
+  color: #64748b;
+}
+
+.bug-badge-critical {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+
+.bug-badge-high {
+  background: rgba(249, 115, 22, 0.12);
+  color: #ea580c;
+}
+
+.bug-badge-medium {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+
+.bug-badge-low {
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
+}
+
+.bug-table-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  color: #94a3b8;
+  font-size: 14px;
 }
 
 .bug-table-actions {
   display: flex;
   flex-direction: column;
-  width: 164px;
-  min-width: 164px;
-  border-left: 1px solid var(--line-soft);
-  background: var(--bg-panel);
-  z-index: 1;
+  width: 160px;
+  min-width: 160px;
+  border-left: 1px solid rgba(148, 163, 184, 0.16);
+  background: #fcfdff;
 }
 
 .bug-actions-header {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 50px;
-  padding: 0 8px;
-  border-bottom: 1px solid var(--line-soft);
-  color: var(--text-subtle);
-  font-size: 13px;
-  font-weight: 600;
-  background: #fbfcff;
-}
-
-.bug-actions-header-title {
-  display: inline-flex;
-  align-items: center;
   gap: 4px;
+  min-height: 44px;
+  padding: 0 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  background: #f8fafc;
+  white-space: nowrap;
 }
 
-.table-settings-trigger {
-  width: 28px;
-  height: 28px;
-  padding: 0;
-}
-
-.bug-actions-row {
+.bug-actions-row,
+.bug-actions-empty {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 52px;
-  padding: 0 8px;
-  border-bottom: 1px solid var(--line-soft);
-  font-size: 13px;
+  min-height: 56px;
+  padding: 0 6px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.bug-actions-empty {
+  color: #cbd5e1;
 }
 
 .row-actions {
@@ -1214,39 +1583,27 @@ onMounted(() => {
 }
 
 .row-actions :deep(.el-button) {
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .table-pagination {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 16px;
-  margin-top: 16px;
-  flex-wrap: nowrap;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
 }
 
-.table-pagination-left {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  flex: 1;
-  min-height: 32px;
+.table-pagination-summary {
+  color: var(--text-subtle);
+  font-size: 12px;
+  line-height: 32px;
 }
 
 .table-pagination-right {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
   min-width: 0;
-  white-space: nowrap;
-}
-
-.table-pagination-summary {
-  color: var(--text-subtle);
-  font-size: 13px;
-  white-space: nowrap;
-  line-height: 32px;
 }
 
 .bug-table-scroll::-webkit-scrollbar {
@@ -1259,7 +1616,7 @@ onMounted(() => {
 
 .bug-table-scroll::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.5);
+  background: rgba(148, 163, 184, 0.44);
 }
 
 .bug-table-scroll::-webkit-scrollbar-thumb:hover {
@@ -1271,27 +1628,70 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-:deep(.table-pagination .el-pagination__sizes),
-:deep(.table-pagination .el-pagination__jump) {
-  margin-left: 8px;
+:deep(.bug-filter-search .el-input__wrapper),
+:deep(.bug-filter-select .el-select__wrapper) {
+  min-height: 34px;
+  border-radius: 9px;
 }
 
-@media (max-width: 1200px) {
+:deep(.bug-filter-actions .el-button) {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 9px;
+}
+
+@media (max-width: 1280px) {
   .bug-stats-grid {
-    grid-template-columns: repeat(4, minmax(180px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .table-pagination,
-  .table-pagination-right {
+  .bug-filter-actions {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 960px) {
+  .bug-page-header,
+  .bug-list-header,
+  .table-pagination {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .bug-list-actions,
+  .table-pagination-right {
+    justify-content: flex-start;
+  }
+
+  .bug-filter-search {
+    width: 100%;
   }
 }
 
 @media (max-width: 720px) {
   .bug-stats-grid {
     grid-template-columns: 1fr;
+  }
+
+  .bug-table-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bug-table-actions {
+    display: none;
+  }
+
+  .bug-filter-select,
+  .bug-filter-actions {
+    width: 100%;
+  }
+
+  .bug-filter-actions {
+    display: flex;
+  }
+
+  .bug-filter-actions :deep(.el-button) {
+    flex: 1;
   }
 }
 </style>

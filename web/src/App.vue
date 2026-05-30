@@ -1,19 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import {
-  ArrowLeft,
-  ArrowRight,
-  ChatDotRound,
-  Connection,
-  DataBoard,
-  DocumentChecked,
-  FolderChecked,
-  Monitor,
-  Setting,
-  SwitchButton,
-} from '@element-plus/icons-vue'
-import { Bell, ChevronDown, Layers } from '@lucide/vue'
+import { SwitchButton } from '@element-plus/icons-vue'
+import { Bell, Bug, ChevronDown, ChevronLeft, ClipboardCheck, Layers, LayoutDashboard, Monitor, Network, Settings, Smartphone } from '@lucide/vue'
 import { ElMessage } from 'element-plus'
 import { platformApi } from './api/platform'
 import { navigationItems } from './data/platform'
@@ -29,13 +18,13 @@ const workspaceReady = ref(false)
 const isMenuCollapsed = ref(localStorage.getItem('app-menu-collapsed') === '1')
 
 const iconMap = {
-  dashboard: DataBoard,
-  cases: DocumentChecked,
-  bugs: ChatDotRound,
-  api: Connection,
+  dashboard: LayoutDashboard,
+  cases: ClipboardCheck,
+  bugs: Bug,
+  api: Network,
   web: Monitor,
-  app: FolderChecked,
-  settings: Setting,
+  app: Smartphone,
+  settings: Settings,
 }
 
 const activeMenu = computed(() => {
@@ -47,6 +36,10 @@ const activeMenu = computed(() => {
 
 const isPublicRoute = computed(() => route.meta.public === true)
 const asideWidth = computed(() => (isMenuCollapsed.value ? '80px' : '256px'))
+const mainClass = computed(() => [
+  'app-main',
+  { 'app-main-workbench': route.path.startsWith('/automation/api') },
+])
 
 function resolveWorkspaceFallback() {
   return workspaceOptions.value.find(item => item.code === 'ALL')?.code
@@ -185,54 +178,55 @@ onMounted(loadWorkspaces)
   <el-container v-else class="app-shell">
     <el-aside class="app-aside" :width="asideWidth">
       <button
-        class="aside-collapse-handle"
+        type="button"
+        :class="['brand-block', { 'brand-block-collapsed': isMenuCollapsed }]"
         :title="isMenuCollapsed ? '展开菜单' : '收起菜单'"
         @click="toggleMenuCollapse"
       >
-        <el-icon>
-          <component :is="isMenuCollapsed ? ArrowRight : ArrowLeft" />
-        </el-icon>
-      </button>
-
-      <div :class="['brand-block', { 'brand-block-collapsed': isMenuCollapsed }]">
         <div class="brand-mark">AT</div>
-        <div v-if="!isMenuCollapsed">
+        <div class="brand-copy">
           <div class="brand-title">Auto Test Hub</div>
           <div class="brand-subtitle">全功能自动化测试平台</div>
         </div>
-      </div>
+        <ChevronLeft :class="['brand-collapse-icon', { 'is-collapsed': isMenuCollapsed }]" />
+      </button>
 
-      <el-menu
-        :default-active="activeMenu"
-        class="app-menu"
-        :collapse="isMenuCollapsed"
-        :collapse-transition="false"
-        @select="handleMenuSelect"
-      >
-        <el-menu-item
+      <nav class="app-menu" aria-label="主导航">
+        <template
           v-for="item in navigationItems"
           :key="item.path"
-          :index="item.path"
         >
-          <el-icon><component :is="iconMap[item.icon]" /></el-icon>
-          <template #title>
-            <span>{{ item.label }}</span>
-          </template>
-        </el-menu-item>
-      </el-menu>
+          <div v-if="item.path === '/settings'" class="app-menu-separator" />
+          <div class="app-menu-item-wrap">
+            <button
+              type="button"
+              :class="['app-menu-item', { 'is-active': activeMenu === item.path }]"
+              @click="handleMenuSelect(item.path)"
+            >
+              <component :is="iconMap[item.icon]" class="app-menu-icon" />
+              <span class="app-menu-label">{{ item.label }}</span>
+            </button>
+            <div v-if="isMenuCollapsed" class="app-menu-tooltip">
+              {{ item.label }}
+              <span class="app-menu-tooltip-arrow" />
+            </div>
+          </div>
+        </template>
+      </nav>
 
       <div class="aside-footer">
-        <div :class="['footer-card', { 'footer-card-collapsed': isMenuCollapsed }]">
-          <template v-if="!isMenuCollapsed">
-            <div class="footer-user-row">
-              <div class="footer-user-avatar">{{ currentUserInitials }}</div>
-              <div class="footer-user-copy">
-                <div class="footer-user-name">{{ currentUserName }}</div>
-                <div class="footer-user-role">{{ currentUserRole }}</div>
-              </div>
+        <div class="footer-card">
+          <div class="footer-user-row">
+            <div class="footer-user-avatar">{{ currentUserInitials }}</div>
+            <div class="footer-user-copy">
+              <div class="footer-user-name">{{ currentUserName }}</div>
+              <div class="footer-user-role">{{ currentUserRole }}</div>
             </div>
-          </template>
-          <div v-else class="footer-user-avatar footer-user-avatar-collapsed">{{ currentUserInitials }}</div>
+          </div>
+          <div v-if="isMenuCollapsed" class="footer-tooltip">
+            {{ currentUserName }}
+            <span class="app-menu-tooltip-arrow" />
+          </div>
         </div>
       </div>
     </el-aside>
@@ -292,10 +286,10 @@ onMounted(loadWorkspaces)
         </div>
       </el-header>
 
-      <el-main v-if="workspaceReady" class="app-main">
+      <el-main v-if="workspaceReady" :class="mainClass">
         <router-view />
       </el-main>
-      <el-main v-else class="app-main" />
+      <el-main v-else :class="mainClass" />
     </el-container>
   </el-container>
 </template>

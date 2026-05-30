@@ -1,6 +1,6 @@
 ﻿<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import type { Directive } from 'vue'
+import type { Component, Directive } from 'vue'
 import {
   ArrowLeft,
   ArrowRight,
@@ -20,6 +20,21 @@ import {
   RefreshRight,
   Search,
 } from '@element-plus/icons-vue'
+import {
+  Check,
+  FileJson,
+  FileText,
+  Folder as LucideFolder,
+  FolderOpen as LucideFolderOpen,
+  Link,
+  MoreHorizontal,
+  Play,
+  Plus as LucidePlus,
+  Save,
+  Search as LucideSearch,
+  Upload,
+  X,
+} from '@lucide/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
 import { useTableSettings, type TableSettingsColumn } from '../composables/useTableSettings'
@@ -89,6 +104,8 @@ type ScenarioStepDrawerMode = 'create' | 'edit'
 type ScenarioScriptDrawerTab = 'script' | 'assertions'
 type ScenarioScriptInputMode = 'manual' | 'common'
 type ScenarioScriptResultTab = 'console' | 'assertions'
+type DefinitionImportFormat = 'swagger' | 'postman' | 'har'
+type DefinitionImportMode = 'url' | 'file'
 type RequestConfigHost = {
   requestConfig: ApiRequestConfig
 }
@@ -195,6 +212,43 @@ const scenarioAssertionTypeOptions: Array<{ label: string; value: ApiScenarioAss
   { label: '执行步骤数等于', value: 'STEP_COUNT_EQUALS' },
 ]
 const CASE_LIST_PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50] as const
+const REQUEST_RESPONSE_SPLIT_STORAGE_KEY = 'api-definition-request-response-ratio'
+const DEFAULT_REQUEST_RESPONSE_RATIO = 50
+const MIN_REQUEST_RESPONSE_RATIO = 28
+const MAX_REQUEST_RESPONSE_RATIO = 72
+const definitionImportFormats: Array<{
+  value: DefinitionImportFormat
+  label: string
+  description: string
+  icon: Component
+  tone: string
+  accept: string
+}> = [
+  {
+    value: 'swagger',
+    label: 'Swagger / OpenAPI',
+    description: '支持 Swagger 2.0 / OpenAPI 3.x',
+    icon: Link,
+    tone: 'green',
+    accept: '.json,.yaml,.yml',
+  },
+  {
+    value: 'postman',
+    label: 'Postman Collection',
+    description: '支持 Postman v2.0 / v2.1 格式',
+    icon: FileJson,
+    tone: 'orange',
+    accept: '.json',
+  },
+  {
+    value: 'har',
+    label: 'HAR 文件',
+    description: '浏览器导出的 HTTP 存档文件',
+    icon: FileText,
+    tone: 'purple',
+    accept: '.har',
+  },
+]
 
 type DefinitionDirectoryTreeNode = {
   key: string
@@ -394,6 +448,16 @@ const definitionFilters = reactive({
   keyword: '',
   directory: '',
 })
+const definitionImportDialogVisible = ref(false)
+const definitionImportFormat = ref<DefinitionImportFormat>('swagger')
+const definitionImportMode = ref<DefinitionImportMode>('url')
+const definitionImportUrl = ref('')
+const definitionImportFileName = ref('')
+const definitionEditorShellRef = ref<HTMLElement | null>(null)
+const requestResponseRatio = ref(DEFAULT_REQUEST_RESPONSE_RATIO)
+const requestResponseDragging = ref(false)
+let requestResponseDragStartY = 0
+let requestResponseDragStartRatio = DEFAULT_REQUEST_RESPONSE_RATIO
 
 const definitionSaveForm = reactive({
   workspaceCode: '',
@@ -1204,6 +1268,10 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
     children: workspaceTrees,
   }]
 })
+
+const visibleDefinitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() =>
+  definitionDirectoryTree.value[0]?.children ?? [],
+)
 
 function flattenDefinitionTreeNodes(nodes: DefinitionDirectoryTreeNode[]): DefinitionDirectoryTreeNode[] {
   const result: DefinitionDirectoryTreeNode[] = []
@@ -2276,6 +2344,7 @@ watch(definitionDirectoryTree, (tree) => {
 }, { immediate: true })
 
 onMounted(() => {
+  loadRequestResponseRatio()
   openNewRequestTab()
   caseListSettings.load()
   document.addEventListener('mousedown', handleScenarioStepNameOutsidePointerDown, true)
@@ -2306,6 +2375,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  stopRequestResponseResize()
   document.removeEventListener('mousedown', handleScenarioStepNameOutsidePointerDown, true)
   tabStripCleanupFns.forEach(cleanup => cleanup())
   resizeObservers.forEach(observer => observer.disconnect())
@@ -5975,6 +6045,83 @@ function duplicateDefinition() {
   openNewRequestTab(duplicated)
 }
 
+const selectedDefinitionImportFormat = computed(() =>
+  definitionImportFormats.find(item => item.value === definitionImportFormat.value) ?? definitionImportFormats[0],
+)
+
+const definitionEditorGridStyle = computed(() => {
+  if (!shouldShowResponsePanel.value) {
+    return {}
+  }
+  return {
+    gridTemplateRows: `minmax(300px, ${requestResponseRatio.value}fr) 6px minmax(260px, ${100 - requestResponseRatio.value}fr)`,
+  }
+})
+
+function clampRequestResponseRatio(value: number) {
+  return Math.min(MAX_REQUEST_RESPONSE_RATIO, Math.max(MIN_REQUEST_RESPONSE_RATIO, Math.round(value)))
+}
+
+function loadRequestResponseRatio() {
+  const storedValue = Number(localStorage.getItem(REQUEST_RESPONSE_SPLIT_STORAGE_KEY))
+  if (Number.isFinite(storedValue)) {
+    requestResponseRatio.value = clampRequestResponseRatio(storedValue)
+  }
+}
+
+function persistRequestResponseRatio() {
+  localStorage.setItem(REQUEST_RESPONSE_SPLIT_STORAGE_KEY, String(requestResponseRatio.value))
+}
+
+function startRequestResponseResize(event: MouseEvent) {
+  if (!shouldShowResponsePanel.value || !definitionEditorShellRef.value) {
+    return
+  }
+  requestResponseDragging.value = true
+  requestResponseDragStartY = event.clientY
+  requestResponseDragStartRatio = requestResponseRatio.value
+  document.body.classList.add('is-api-response-resizing')
+  window.addEventListener('mousemove', handleRequestResponseResize)
+  window.addEventListener('mouseup', stopRequestResponseResize)
+}
+
+function handleRequestResponseResize(event: MouseEvent) {
+  if (!requestResponseDragging.value || !definitionEditorShellRef.value) {
+    return
+  }
+  const shellHeight = definitionEditorShellRef.value.clientHeight
+  if (shellHeight <= 0) {
+    return
+  }
+  const deltaRatio = ((event.clientY - requestResponseDragStartY) / shellHeight) * 100
+  requestResponseRatio.value = clampRequestResponseRatio(requestResponseDragStartRatio + deltaRatio)
+}
+
+function stopRequestResponseResize() {
+  if (!requestResponseDragging.value) {
+    return
+  }
+  requestResponseDragging.value = false
+  document.body.classList.remove('is-api-response-resizing')
+  window.removeEventListener('mousemove', handleRequestResponseResize)
+  window.removeEventListener('mouseup', stopRequestResponseResize)
+  persistRequestResponseRatio()
+}
+
+function openDefinitionImportDialog() {
+  definitionImportDialogVisible.value = true
+}
+
+function handleDefinitionImportFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  definitionImportFileName.value = input.files?.[0]?.name ?? ''
+}
+
+function submitDefinitionImportPreview() {
+  ElMessage.info('导入能力待接入')
+  definitionImportDialogVisible.value = false
+}
+
 function promptImportCurl() {
   ElMessage.info('下一步可以继续接入 Curl 导入，这一版先把工作台主体落稳')
 }
@@ -6024,14 +6171,44 @@ function formatTimeLabel(value?: string | null) {
       <el-tab-pane label="接口" name="definitions">
         <div class="ms-like-layout shell-card">
           <aside class="ms-like-sidebar">
-            <div class="ms-like-sidebar-tools">
-              <el-input v-model="definitionFilters.keyword" placeholder="请输入模块或请求名称" clearable />
-              <el-button v-if="canCreateInCurrentScope" type="primary" @click="openNewRequestTab()">新建请求</el-button>
+            <div class="ms-like-sidebar-actions">
+              <button
+                v-if="canCreateInCurrentScope"
+                type="button"
+                class="ms-like-sidebar-primary"
+                @click="openNewRequestTab()"
+              >
+                <LucidePlus class="ms-like-button-icon" />
+                新建请求
+              </button>
+              <button type="button" class="ms-like-sidebar-secondary" @click="openDefinitionImportDialog">
+                <Upload class="ms-like-button-icon" />
+                导入
+              </button>
+            </div>
+            <div class="ms-like-sidebar-search">
+              <LucideSearch class="ms-like-search-icon" />
+              <el-input v-model="definitionFilters.keyword" placeholder="搜索模块或请求" clearable />
+            </div>
+            <div class="ms-like-directory-title-row">
+              <div class="ms-like-directory-title-main">
+                <span>请求目录</span>
+                <span>{{ filteredDefinitions.length }}</span>
+              </div>
+              <button
+                type="button"
+                class="ms-like-directory-collapse"
+                title="收起全部子模块"
+                aria-label="收起全部子模块"
+                @click="collapseAllDefinitionTreeChildren"
+              >
+                <el-icon class="tree-collapse-icon"><Fold /></el-icon>
+              </button>
             </div>
             <div class="ms-like-directory-shell">
               <el-tree
                 :key="definitionTreeRenderKey"
-                :data="definitionDirectoryTree"
+                :data="visibleDefinitionDirectoryTree"
                 node-key="key"
                 :default-expanded-keys="expandedDefinitionTreeKeys"
                 highlight-current
@@ -6051,10 +6228,8 @@ function formatTimeLabel(value?: string | null) {
                         :class="['tree-node-folder-svg', { 'is-open': isDefinitionTreeExpanded(data.key) }]"
                         aria-hidden="true"
                       >
-                        <el-icon class="tree-node-folder-icon">
-                          <FolderOpened v-if="isDefinitionTreeExpanded(data.key)" />
-                          <Folder v-else />
-                        </el-icon>
+                        <LucideFolderOpen v-if="isDefinitionTreeExpanded(data.key)" class="tree-node-folder-icon" />
+                        <LucideFolder v-else class="tree-node-folder-icon" />
                       </span>
                       <template v-if="data.type === 'request'">
                         <span :class="['ms-like-method', `method-${(data.method || 'GET').toLowerCase()}`]">{{ data.method }}</span>
@@ -6081,7 +6256,7 @@ function formatTimeLabel(value?: string | null) {
                         class="tree-icon-button"
                         @click.stop="createDefinitionModule(data)"
                       >
-                        <el-icon><Plus /></el-icon>
+                          <LucidePlus class="tree-lucide-action-icon" />
                       </el-button>
                       <el-dropdown
                         v-if="data.type === 'module' && canWriteWorkspace(data.workspaceCode)"
@@ -6096,7 +6271,7 @@ function formatTimeLabel(value?: string | null) {
                           aria-label="更多操作"
                           @click.stop
                         >
-                          <el-icon><MoreFilled /></el-icon>
+                          <MoreHorizontal class="tree-lucide-action-icon" />
                         </el-button>
                         <template #dropdown>
                           <el-dropdown-menu>
@@ -6122,7 +6297,7 @@ function formatTimeLabel(value?: string | null) {
                           aria-label="更多操作"
                           @click.stop
                         >
-                          <el-icon><MoreFilled /></el-icon>
+                          <MoreHorizontal class="tree-lucide-action-icon" />
                         </el-button>
                         <template #dropdown>
                           <el-dropdown-menu>
@@ -6183,7 +6358,9 @@ function formatTimeLabel(value?: string | null) {
                 >
                   <el-icon><ArrowRight /></el-icon>
                 </button>
-                <button type="button" class="ms-like-tab-add" @click="openNewRequestTab()">+</button>
+                <button type="button" class="ms-like-tab-add" @click="openNewRequestTab()">
+                  <LucidePlus class="ms-like-tab-action-icon" />
+                </button>
                 <el-dropdown
                   v-if="showRequestEditorMoreAction"
                   trigger="click"
@@ -6191,7 +6368,7 @@ function formatTimeLabel(value?: string | null) {
                   @command="closeOtherRequestEditorTabs"
                 >
                   <button type="button" class="scenario-editor-more-button" aria-label="更多标签操作" @click.stop>
-                    <el-icon><MoreFilled /></el-icon>
+                    <MoreHorizontal class="ms-like-tab-action-icon" />
                   </button>
                   <template #dropdown>
                     <el-dropdown-menu>
@@ -6202,43 +6379,70 @@ function formatTimeLabel(value?: string | null) {
               </div>
             </div>
 
-            <div class="ms-like-editor-shell">
+            <div
+              ref="definitionEditorShellRef"
+              :class="['ms-like-editor-shell', { 'is-resizing': requestResponseDragging, 'without-response': !shouldShowResponsePanel }]"
+              :style="definitionEditorGridStyle"
+            >
               <div class="ms-like-request-shell">
                 <div v-if="isAllScope && !definitionForm.workspaceCode" class="scope-hint">
                   &#24403;&#21069;&#22788;&#20110; ALL &#35270;&#35282;&#65292;&#35831;&#20808;&#22312;&#39030;&#37096;&#36873;&#25321;&#30446;&#26631;&#31354;&#38388;&#21518;&#20877;&#20445;&#23384;&#25110;&#35843;&#35797;&#12290;
                 </div>
 
                 <div class="ms-like-request-row">
-                <el-select
-                  v-model="definitionForm.requestConfig.method"
-                  :class="['request-method-select', requestMethodClass(definitionForm.requestConfig.method)]"
-                  popper-class="request-method-popper"
-                >
-                  <el-option
-                    v-for="method in requestMethodOptions"
-                    :key="method"
-                    :label="method"
-                    :value="method"
+                  <div class="ms-like-url-compose">
+                    <el-select
+                      v-model="definitionForm.requestConfig.method"
+                      :class="['request-method-select', requestMethodClass(definitionForm.requestConfig.method)]"
+                      popper-class="request-method-popper"
+                    >
+                      <el-option
+                        v-for="method in requestMethodOptions"
+                        :key="method"
+                        :label="method"
+                        :value="method"
+                      >
+                        <span :class="['request-method-option', requestMethodClass(method)]">{{ method }}</span>
+                      </el-option>
+                    </el-select>
+                    <el-input
+                      v-model="definitionForm.requestConfig.path"
+                      class="request-url-input"
+                      placeholder="请输入包含 http/https 的完整 URL 或接口路径"
+                      data-testid="definition-url-input"
+                    />
+                    <button type="button" class="ms-like-curl-button" @click="promptImportCurl">Curl</button>
+                  </div>
+                  <button
+                    type="button"
+                    class="ms-like-send-button"
+                    :disabled="!canDebugDefinition || saving"
+                    @click="debugActiveEditor"
                   >
-                    <span :class="['request-method-option', requestMethodClass(method)]">{{ method }}</span>
-                  </el-option>
-                </el-select>
-                <el-input v-model="definitionForm.requestConfig.path" class="request-url-input" placeholder="&#35831;&#36755;&#20837;&#21253;&#21547; http/https &#30340;&#23436;&#25972; URL &#25110;&#25509;&#21475;&#36335;&#24452;" data-testid="definition-url-input" />
-                <el-button @click="promptImportCurl">Curl</el-button>
-                <el-button type="primary" :disabled="!canDebugDefinition" :loading="saving" @click="debugActiveEditor">
-                  &#21457;&#36865;
-                </el-button>
-                <el-dropdown split-button :disabled="!canSaveActiveEditor" :loading="saving" data-testid="definition-save-button" @click="saveActiveEditor">
-                  &#20445;&#23384;
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item v-if="activeRequestEditorTab?.resourceType === 'definition' && !!definitionForm.id" @click="saveDefinitionAsCase">保存为用例</el-dropdown-item>
-                      <el-dropdown-item v-if="activeRequestEditorTab?.resourceType === 'definition'" @click="duplicateDefinition">&#22797;&#21046;&#25509;&#21475;</el-dropdown-item>
-                      <el-dropdown-item @click="removeActiveEditor">{{ activeRequestEditorTab?.resourceType === 'case' ? '删除用例' : '删除接口' }}</el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
-              </div>
+                    <Play class="ms-like-button-icon" />
+                    发送
+                  </button>
+                  <el-dropdown
+                    split-button
+                    class="ms-like-save-dropdown"
+                    :disabled="!canSaveActiveEditor"
+                    :loading="saving"
+                    data-testid="definition-save-button"
+                    @click="saveActiveEditor"
+                  >
+                    <span class="ms-like-save-label">
+                      <Save class="ms-like-button-icon" />
+                      保存
+                    </span>
+                    <template #dropdown>
+                      <el-dropdown-menu>
+                        <el-dropdown-item v-if="activeRequestEditorTab?.resourceType === 'definition' && !!definitionForm.id" @click="saveDefinitionAsCase">保存为用例</el-dropdown-item>
+                        <el-dropdown-item v-if="activeRequestEditorTab?.resourceType === 'definition'" @click="duplicateDefinition">复制接口</el-dropdown-item>
+                        <el-dropdown-item @click="removeActiveEditor">{{ activeRequestEditorTab?.resourceType === 'case' ? '删除用例' : '删除接口' }}</el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </div>
 
                 <div class="ms-like-request-content-panel">
                   <div class="ms-like-top-tabs">
@@ -6734,6 +6938,16 @@ function formatTimeLabel(value?: string | null) {
                   </div>
                 </div>
               </div>
+
+              <button
+                v-if="shouldShowResponsePanel"
+                type="button"
+                class="ms-like-response-resizer"
+                aria-label="调整请求和响应区域高度"
+                @mousedown.prevent="startRequestResponseResize"
+              >
+                <span></span>
+              </button>
 
               <div v-if="shouldShowResponsePanel" class="ms-like-response-shell">
               <div class="ms-like-response-header">
@@ -9430,6 +9644,93 @@ function formatTimeLabel(value?: string | null) {
       </div>
     </el-drawer>
 
+    <el-dialog
+      v-model="definitionImportDialogVisible"
+      width="520px"
+      class="definition-import-dialog"
+      destroy-on-close
+      :show-close="false"
+    >
+      <div class="definition-import-modal">
+        <div class="definition-import-header">
+          <div class="definition-import-title">
+            <Upload class="definition-import-title-icon" />
+            <span>导入接口</span>
+          </div>
+          <button type="button" class="definition-import-close" @click="definitionImportDialogVisible = false">
+            <X />
+          </button>
+        </div>
+
+        <div class="definition-import-body">
+          <section class="definition-import-section">
+            <div class="definition-import-section-title">选择导入格式</div>
+            <div class="definition-import-format-list">
+              <button
+                v-for="format in definitionImportFormats"
+                :key="format.value"
+                type="button"
+                :class="['definition-import-format', `is-${format.tone}`, { active: definitionImportFormat === format.value }]"
+                @click="definitionImportFormat = format.value"
+              >
+                <span class="definition-import-format-icon">
+                  <component :is="format.icon" />
+                </span>
+                <span class="definition-import-format-copy">
+                  <span>{{ format.label }}</span>
+                  <small>{{ format.description }}</small>
+                </span>
+                <span class="definition-import-check">
+                  <Check v-if="definitionImportFormat === format.value" />
+                </span>
+              </button>
+            </div>
+          </section>
+
+          <section class="definition-import-section">
+            <div class="definition-import-section-title">导入方式</div>
+            <div class="definition-import-mode-switch">
+              <button
+                type="button"
+                :class="{ active: definitionImportMode === 'url' }"
+                @click="definitionImportMode = 'url'"
+              >
+                URL 导入
+              </button>
+              <button
+                type="button"
+                :class="{ active: definitionImportMode === 'file' }"
+                @click="definitionImportMode = 'file'"
+              >
+                文件上传
+              </button>
+            </div>
+            <el-input
+              v-if="definitionImportMode === 'url'"
+              v-model="definitionImportUrl"
+              class="definition-import-url"
+              :placeholder="definitionImportFormat === 'swagger' ? 'https://api.example.com/v3/api-docs' : '输入文件远程地址'"
+            />
+            <label v-else class="definition-import-upload">
+              <Upload class="definition-import-upload-icon" />
+              <span>{{ definitionImportFileName || '点击或拖拽文件到此处' }}</span>
+              <small>支持 {{ selectedDefinitionImportFormat.accept }}</small>
+              <input
+                type="file"
+                :accept="selectedDefinitionImportFormat.accept"
+                @change="handleDefinitionImportFileChange"
+              >
+            </label>
+          </section>
+        </div>
+
+        <div class="definition-import-footer">
+          <button type="button" class="definition-import-cancel" @click="definitionImportDialogVisible = false">取消</button>
+          <button type="button" class="definition-import-submit" @click="submitDefinitionImportPreview">开始导入</button>
+        </div>
+      </div>
+    </el-dialog>
+
     <TableSettingsDrawer
       v-model="caseListSettings.settingsVisible.value"
       :columns="caseListSettings.settingsColumns.value.map(column => ({
@@ -9458,8 +9759,12 @@ function formatTimeLabel(value?: string | null) {
   display: flex;
   flex-direction: column;
   min-height: 760px;
-  height: calc(100vh - 118px);
-  gap: 16px;
+  height: calc(100vh - 104px);
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
 }
 
 .api-tabs {
@@ -9469,22 +9774,75 @@ function formatTimeLabel(value?: string | null) {
   flex-direction: column;
 }
 
-.api-tabs :deep(.el-tabs__content) {
-  flex: 1 1 auto;
-  min-height: 0;
+.api-tabs > :deep(.el-tabs__header) {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 48px;
+  margin: 0;
+  padding: 6px 24px;
+  border-bottom: 1px solid #e5e7eb;
+  border-radius: 12px 12px 0 0;
+  background: #ffffff;
+}
+
+.api-tabs > :deep(.el-tabs__header .el-tabs__nav-wrap) {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  flex: 0 0 auto;
+  height: 36px;
+  border-radius: 10px;
+  background: #f3f4f6;
+  padding: 3px;
+}
+
+.api-tabs > :deep(.el-tabs__header .el-tabs__nav-wrap::after),
+.api-tabs > :deep(.el-tabs__header .el-tabs__active-bar) {
+  display: none;
+}
+
+.api-tabs > :deep(.el-tabs__header .el-tabs__nav-scroll),
+.api-tabs > :deep(.el-tabs__header .el-tabs__nav) {
+  display: inline-flex;
+  width: auto;
+  flex: 0 0 auto;
   height: 100%;
 }
 
-.api-tabs :deep(.el-tab-pane) {
+.api-tabs > :deep(.el-tabs__header .el-tabs__item) {
+  height: 30px;
+  padding: 0 18px;
+  border-radius: var(--ath-radius-md);
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-medium);
+  line-height: 30px;
+}
+
+.api-tabs > :deep(.el-tabs__header .el-tabs__item.is-active) {
+  background: #ffffff;
+  color: var(--ath-text-strong);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+.api-tabs > :deep(.el-tabs__content) {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  background: #ffffff;
+}
+
+.api-tabs > :deep(.el-tabs__content > .el-tab-pane) {
   min-height: 0;
   height: 100%;
 }
 
 .shell-card {
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 10px;
-  background: var(--el-bg-color);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+  border: 0;
+  border-radius: 0;
+  background: #ffffff;
+  box-shadow: none;
 }
 
 .page-header,
@@ -9562,9 +9920,11 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-layout {
   display: grid;
-  grid-template-columns: clamp(280px, 17vw, 332px) minmax(0, 1fr);
+  grid-template-columns: 320px minmax(0, 1fr);
   min-height: 0;
   height: 100%;
+  background: #ffffff;
+  overflow: hidden;
 }
 
 .scenario-workbench {
@@ -10994,11 +11354,162 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-sidebar {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
   min-height: 0;
-  border-right: 1px solid var(--el-border-color-light);
+  border-right: 1px solid #e5e7eb;
   background: #fff;
-  padding: 12px;
+  padding: 0;
+}
+
+.ms-like-sidebar-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.ms-like-sidebar-primary,
+.ms-like-sidebar-secondary,
+.ms-like-send-button,
+.ms-like-curl-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 34px;
+  border-radius: var(--ath-radius-md);
+  border: 1px solid transparent;
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-medium);
+  line-height: var(--ath-line-sm);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.ms-like-sidebar-primary,
+.ms-like-send-button {
+  border-color: var(--ath-primary);
+  background: var(--ath-primary);
+  color: #fff;
+}
+
+.ms-like-sidebar-primary:hover,
+.ms-like-send-button:hover:not(:disabled) {
+  border-color: var(--ath-primary-hover);
+  background: var(--ath-primary-hover);
+}
+
+.ms-like-sidebar-secondary,
+.ms-like-curl-button {
+  border-color: var(--ath-input-border);
+  background: #fff;
+  color: var(--ath-text-main);
+}
+
+.ms-like-sidebar-secondary:hover,
+.ms-like-curl-button:hover {
+  background: #f9fafb;
+}
+
+.ms-like-send-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.ms-like-button-icon,
+.ms-like-tab-action-icon,
+.tree-lucide-action-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.ms-like-sidebar-search {
+  position: relative;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.ms-like-sidebar-search .el-input {
+  width: 100%;
+}
+
+.ms-like-sidebar-search :deep(.el-input__wrapper) {
+  min-height: 34px;
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-page);
+  box-shadow: inset 0 0 0 1px var(--ath-input-border);
+  padding-left: 34px;
+}
+
+.ms-like-sidebar-search :deep(.el-input__wrapper:hover) {
+  box-shadow: inset 0 0 0 1px #9ca3af;
+}
+
+.ms-like-sidebar-search :deep(.el-input.is-focus .el-input__wrapper) {
+  box-shadow: inset 0 0 0 1px var(--ath-blue), 0 0 0 2px rgba(59, 130, 246, 0.16);
+}
+
+.ms-like-search-icon {
+  position: absolute;
+  left: 28px;
+  top: 50%;
+  z-index: 2;
+  width: 16px;
+  height: 16px;
+  transform: translateY(-50%);
+  color: #9ca3af;
+  pointer-events: none;
+}
+
+.ms-like-directory-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-semibold);
+  line-height: var(--ath-line-sm);
+  min-height: 40px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--ath-border);
+  background: #ffffff;
+}
+
+.ms-like-directory-title-main {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.ms-like-directory-title-main span:last-child {
+  color: var(--ath-text-subtle);
+  font-size: var(--ath-font-xs);
+  font-weight: var(--ath-weight-medium);
+  line-height: var(--ath-line-xs);
+}
+
+.ms-like-directory-collapse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ath-text-muted);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.ms-like-directory-collapse:hover {
+  background: var(--ath-bg-muted);
+  color: var(--ath-primary);
 }
 
 .ms-like-sidebar-tools,
@@ -11044,15 +11555,21 @@ function formatTimeLabel(value?: string | null) {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
-  padding: 8px;
+  border: 0;
+  border-radius: 0;
+  padding: 8px 8px 12px;
   background: #fff;
 }
 
 .ms-like-directory-tree :deep(.el-tree-node__content) {
-  height: 32px;
-  border-radius: 6px;
+  min-height: 32px;
+  height: auto;
+  border-radius: var(--ath-radius-md);
+  transition: background-color 0.15s ease;
+}
+
+.ms-like-directory-tree :deep(.el-tree-node__content:hover) {
+  background: var(--ath-bg-muted);
 }
 
 .ms-like-directory-tree :deep(.el-tree-node__expand-icon.is-leaf) {
@@ -11065,7 +11582,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-directory-tree :deep(.el-tree-node.is-current > .el-tree-node__content) {
-  background: #f3e8ff;
+  background: var(--ath-blue-soft);
 }
 
 .ms-like-directory-node {
@@ -11080,7 +11597,7 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-directory-main {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
 }
 
@@ -11094,12 +11611,13 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .tree-node-folder-icon {
-  font-size: 16px;
-  color: #d7a12b;
+  width: 16px;
+  height: 16px;
+  color: #60a5fa;
 }
 
 .tree-node-folder-svg.is-open .tree-node-folder-icon {
-  color: #c98312;
+  color: #3b82f6;
 }
 
 .ms-like-directory-actions {
@@ -11119,27 +11637,30 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-directory-label,
 .ms-like-directory-count {
-  font-size: 13px;
+  font-size: var(--ath-font-sm);
+  line-height: var(--ath-line-sm);
 }
 
 .ms-like-directory-label {
-  color: var(--el-text-color-primary);
+  color: var(--ath-text-main);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .ms-like-directory-node.is-root .ms-like-directory-label {
-  font-weight: 700;
-  color: #101828;
+  font-weight: var(--ath-weight-medium);
+  color: var(--ath-text-strong);
 }
 
 .ms-like-directory-count {
-  color: var(--el-text-color-secondary);
+  color: var(--ath-text-subtle);
+  font-size: var(--ath-font-xs);
+  line-height: var(--ath-line-xs);
 }
 
 .ms-like-directory-node.is-root .ms-like-directory-count {
-  color: var(--text-subtle, #667085);
+  color: var(--ath-text-subtle);
 }
 
 .tree-icon-button {
@@ -11150,13 +11671,13 @@ function formatTimeLabel(value?: string | null) {
 
 .definition-tree-more-button {
   border-radius: 4px;
-  color: #667085;
+  color: var(--ath-text-muted);
 }
 
 .definition-tree-more-button:hover,
 .definition-tree-more-button:focus-visible {
-  background: #f4effc;
-  color: #7c3aed;
+  background: var(--ath-blue-soft);
+  color: var(--ath-primary);
 }
 
 :global(.definition-tree-action-menu) {
@@ -11185,7 +11706,7 @@ function formatTimeLabel(value?: string | null) {
 
 .tree-collapse-icon {
   font-size: 14px;
-  color: var(--text-subtle, #667085);
+  color: var(--ath-text-muted);
 }
 
 .request-list {
@@ -11211,17 +11732,20 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-tree-item.active {
-  background: #f3e8ff;
+  background: #eff6ff;
 }
 
 .ms-like-tree-item-name {
   overflow: hidden;
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+  line-height: var(--ath-line-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .ms-like-method {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
 }
 
@@ -11298,9 +11822,9 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .request-method-select {
-  width: 112px;
-  min-width: 112px;
-  flex: 0 0 112px;
+  width: 104px;
+  min-width: 104px;
+  flex: 0 0 104px;
 }
 
 .request-method-option {
@@ -11335,10 +11859,39 @@ function formatTimeLabel(value?: string | null) {
 
 .request-method-select :deep(.el-select__wrapper) {
   min-height: 36px;
+  padding: 0 10px;
+  border-radius: 7px;
 }
 
 .request-method-select :deep(.el-select__selected-item) {
+  justify-content: center;
   font-weight: 600;
+}
+
+.request-method-select.request-method-get :deep(.el-select__wrapper) {
+  background: #f0fdf4;
+}
+
+.request-method-select.request-method-post :deep(.el-select__wrapper) {
+  background: #fff7ed;
+}
+
+.request-method-select.request-method-put :deep(.el-select__wrapper),
+.request-method-select.request-method-options :deep(.el-select__wrapper),
+.request-method-select.request-method-head :deep(.el-select__wrapper) {
+  background: #eff6ff;
+}
+
+.request-method-select.request-method-delete :deep(.el-select__wrapper) {
+  background: #fef2f2;
+}
+
+.request-method-select.request-method-patch :deep(.el-select__wrapper) {
+  background: #fdf2f8;
+}
+
+.request-method-select.request-method-trace :deep(.el-select__wrapper) {
+  background: #f5f3ff;
 }
 
 .request-method-select.request-method-get :deep(.el-select__selected-item) {
@@ -11428,7 +11981,7 @@ function formatTimeLabel(value?: string | null) {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: #fff;
+  background: #ffffff;
 }
 
 .ms-like-main > * {
@@ -11525,15 +12078,20 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-tab-strip {
   display: flex;
   align-items: center;
-  gap: 8px;
-  border-bottom: 1px solid var(--el-border-color-light);
-  padding: 10px 16px 0;
+  gap: 0;
+  border: 0;
+  border-bottom: 1px solid #e5e7eb;
+  border-radius: 0;
+  padding: 0;
+  min-height: 38px;
+  background: #ffffff;
+  overflow: hidden;
 }
 
 .ms-like-tab-strip-main {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0;
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -11542,8 +12100,8 @@ function formatTimeLabel(value?: string | null) {
   flex: 0 1 auto;
   min-width: 0;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  align-items: stretch;
+  gap: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -11594,25 +12152,38 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-editor-tab {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
-  border: 1px solid #e9d5ff;
-  border-bottom: 0;
-  border-radius: 8px 8px 0 0;
-  background: #ffffff;
-  color: #4b5563;
-  padding: 10px 14px;
-  font-size: 13px;
+  min-height: 38px;
+  border: 0;
+  border-right: 1px solid #e5e7eb;
+  border-radius: 0;
+  background: #f9fafb;
+  color: var(--ath-text-muted);
+  padding: 0 16px;
+  font-size: var(--ath-font-sm);
   line-height: 1;
   cursor: pointer;
 }
 
 .ms-like-editor-tab.active,
 .ms-like-editor-tab:hover {
-  background: #f3e8ff;
-  color: #7c3aed;
+  background: #ffffff;
+  color: var(--ath-text-strong);
+}
+
+.ms-like-editor-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 0;
+  background: var(--ath-blue);
 }
 
 .ms-like-editor-tab.active .ms-like-editor-tab-close {
@@ -11651,7 +12222,7 @@ function formatTimeLabel(value?: string | null) {
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: #7c3aed;
+  background: #3b82f6;
   flex: 0 0 auto;
 }
 
@@ -11670,8 +12241,8 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-editor-tab-close:hover {
-  background: rgba(124, 58, 237, 0.14);
-  color: #7c3aed;
+  background: #f3f4f6;
+  color: #111827;
   opacity: 1;
 }
 
@@ -11684,13 +12255,13 @@ function formatTimeLabel(value?: string | null) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 38px;
   border: 0;
-  border-radius: 6px;
+  border-left: 1px solid #e5e7eb;
+  border-radius: 0;
   background: transparent;
   color: var(--el-text-color-secondary);
-  font-size: 22px;
   line-height: 1;
   cursor: pointer;
   flex: 0 0 auto;
@@ -11698,8 +12269,20 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-tab-add:hover {
-  background: #f5f7fa;
+  background: #f9fafb;
   color: #344054;
+}
+
+.ms-like-tab-strip .scenario-editor-more-button {
+  width: 36px;
+  height: 38px;
+  border-left: 1px solid #e5e7eb;
+  border-radius: 0;
+  background: #ffffff;
+}
+
+.ms-like-tab-strip .scenario-editor-more-button:hover {
+  background: #f9fafb;
 }
 
 .scenario-header-environment-select {
@@ -11717,11 +12300,19 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-editor-shell {
   display: grid;
   flex: 1 1 auto;
-  grid-template-rows: minmax(360px, 46%) minmax(320px, 1fr);
+  grid-template-rows: minmax(360px, 1fr) 6px minmax(300px, 1fr);
   min-height: 0;
-  gap: 14px;
-  padding: 14px 18px 18px;
-  background: #f5f7fb;
+  gap: 0;
+  padding: 0;
+  background: #ffffff;
+  border: 0;
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.ms-like-editor-shell.without-response {
+  display: flex;
+  flex-direction: column;
 }
 
 .ms-like-request-shell {
@@ -11729,21 +12320,111 @@ function formatTimeLabel(value?: string | null) {
   min-height: 0;
   min-width: 0;
   flex-direction: column;
-  gap: 14px;
+  gap: 0;
   padding: 0;
-  border: 1px solid #e5ebf3;
-  border-radius: 12px;
+  border: 0;
+  border-radius: 0;
   background: #fff;
   overflow: hidden;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-shadow: none;
 }
 
 .ms-like-request-row {
   display: grid;
-  grid-template-columns: 112px minmax(0, 1fr) 72px auto auto;
+  grid-template-columns: minmax(320px, 1fr) 96px auto;
   align-items: center;
-  gap: 12px;
-  padding: 14px 16px 0;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.ms-like-url-compose {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) 68px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--ath-input-border);
+  border-radius: var(--ath-radius-md);
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.ms-like-url-compose .request-method-select,
+.ms-like-url-compose .request-url-input {
+  min-width: 0;
+}
+
+.ms-like-url-compose .request-method-select :deep(.el-select__wrapper),
+.ms-like-url-compose .request-url-input :deep(.el-input__wrapper) {
+  border-radius: 0;
+  box-shadow: none;
+  min-height: 36px;
+}
+
+.ms-like-url-compose .request-method-select :deep(.el-select__wrapper) {
+  border-right: 1px solid var(--ath-border);
+  background: #f8fafc;
+}
+
+.ms-like-url-compose .request-url-input :deep(.el-input__wrapper) {
+  padding-inline: 14px;
+}
+
+.ms-like-curl-button {
+  height: 36px;
+  border-width: 0 0 0 1px;
+  border-color: #e5e7eb;
+  border-radius: 0;
+  color: var(--ath-primary);
+  background: #ffffff;
+  font-size: var(--ath-font-xs);
+  font-weight: var(--ath-weight-medium);
+}
+
+.ms-like-send-button {
+  flex: 0 0 96px;
+  width: 96px;
+  min-width: 96px;
+  height: 38px;
+  border-radius: var(--ath-radius-md);
+  padding: 0 16px;
+  white-space: nowrap;
+}
+
+.ms-like-save-dropdown :deep(.el-button-group) {
+  display: inline-flex;
+}
+
+.ms-like-save-dropdown :deep(.el-button) {
+  height: 36px;
+  border-color: #d1d5db;
+  background: #ffffff;
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-medium);
+}
+
+.ms-like-save-dropdown :deep(.el-button:first-child) {
+  border-radius: 8px 0 0 8px;
+  padding-inline: 14px;
+}
+
+.ms-like-save-dropdown :deep(.el-button:last-child) {
+  border-radius: 0 8px 8px 0;
+  padding-inline: 9px;
+}
+
+.ms-like-save-dropdown :deep(.el-button:hover:not(.is-disabled)) {
+  border-color: #9ca3af;
+  background: #f9fafb;
+  color: #111827;
+}
+
+.ms-like-save-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .ms-like-request-content-panel {
@@ -11752,9 +12433,9 @@ function formatTimeLabel(value?: string | null) {
   min-height: 0;
   min-width: 0;
   flex-direction: column;
-  margin: 0 16px 16px;
-  border: 1px solid #e7edf5;
-  border-radius: 10px;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
   background: #fff;
   overflow: hidden;
 }
@@ -11763,9 +12444,11 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-response-tabs {
   display: flex;
   align-items: center;
-  gap: 22px;
+  gap: 4px;
   overflow: visible;
-  border-bottom: 1px solid var(--el-border-color-light);
+  border-bottom: 1px solid #e5e7eb;
+  padding: 0 16px;
+  background: #ffffff;
 }
 
 .ms-like-top-tab {
@@ -11775,15 +12458,15 @@ function formatTimeLabel(value?: string | null) {
   gap: 6px;
   border: 0;
   background: transparent;
-  color: var(--el-text-color-regular);
-  font-size: 14px;
-  padding: 10px 0 12px;
+  color: #4b5563;
+  font-size: 13px;
+  padding: 10px 8px;
   cursor: pointer;
   white-space: nowrap;
 }
 
 .ms-like-top-tab.active {
-  color: #165dff;
+  color: #2563eb;
 }
 
 .ms-like-top-tab.active::after {
@@ -11793,7 +12476,7 @@ function formatTimeLabel(value?: string | null) {
   right: 0;
   bottom: -1px;
   height: 2px;
-  background: #165dff;
+  background: #2563eb;
 }
 
 .ms-like-tab-badge {
@@ -11822,23 +12505,28 @@ function formatTimeLabel(value?: string | null) {
   min-height: 0;
   overflow: auto;
   background: #fff;
-  padding: 12px 14px 14px;
+  padding: 14px 16px;
 }
 
 .ms-like-body-type-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 0;
-  margin-bottom: 4px;
+  gap: 4px;
+  width: fit-content;
+  margin-bottom: 10px;
+  border: 0;
+  border-radius: 0;
+  background: #ffffff;
+  overflow: visible;
 }
 
 .ms-like-body-mode-shell {
   display: flex;
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 300px;
   flex-direction: column;
-  border: 1px solid #e8edf5;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
   background: #fff;
   overflow: hidden;
@@ -11850,7 +12538,7 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-body-mode-shell > .ms-like-empty-body {
   width: 100%;
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 300px;
 }
 
 .ms-like-body-mode-shell > .ms-like-table-surface,
@@ -11859,30 +12547,40 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-body-chip {
-  border: 1px solid #e5e7eb;
-  border-right-width: 0;
-  background: #f5f3ff;
+  min-height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: #ffffff;
   color: #6b7280;
   font-size: 12px;
+  font-weight: 500;
   line-height: 1;
-  padding: 7px 12px;
+  padding: 0 12px;
   cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .ms-like-body-chip:first-child {
-  border-top-left-radius: 6px;
-  border-bottom-left-radius: 6px;
+  border-radius: 6px;
 }
 
 .ms-like-body-chip:last-child {
-  border-right-width: 1px;
-  border-top-right-radius: 6px;
-  border-bottom-right-radius: 6px;
+  border-radius: 6px;
 }
 
 .ms-like-body-chip.active {
-  background: #ffffff;
-  color: #7c3aed;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.ms-like-body-chip:hover {
+  background: #f9fafb;
+  color: #374151;
+}
+
+.ms-like-body-chip.active:hover {
+  background: #2563eb;
+  color: #ffffff;
 }
 
 .ms-like-body-chip.ghost {
@@ -11895,17 +12593,18 @@ function formatTimeLabel(value?: string | null) {
   align-items: center;
   justify-content: center;
   min-height: 300px;
-  border-radius: 8px;
-  background: #faf8ff;
+  border-radius: 10px;
+  background: #f9fafb;
   color: var(--el-text-color-secondary);
   font-size: 14px;
 }
 
 .ms-like-table-surface {
   gap: 0;
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
   background: #fff;
+  overflow: hidden;
 }
 
 .request-section.ms-like-table-surface,
@@ -11934,9 +12633,10 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-table-header {
-  min-height: 30px;
-  border-bottom: 1px solid #ebeef5;
-  color: #606266;
+  min-height: 38px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+  color: #6b7280;
   font-size: 12px;
   padding-right: 10px;
 }
@@ -11994,8 +12694,8 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-param-table .ms-like-header-input-title,
 .ms-like-param-table .ms-like-table-header > span {
-  color: #7d7d7f;
-  font-size: 14px;
+  color: #6b7280;
+  font-size: 12px;
   font-weight: 500;
   line-height: 22px;
 }
@@ -12005,9 +12705,9 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-table-row {
-  min-height: 28px;
-  border-bottom: 1px solid #f2f3f5;
-  padding: 1px 10px 1px 0;
+  min-height: 38px;
+  border-bottom: 1px solid #f3f4f6;
+  padding: 4px 10px 4px 0;
   transition: background-color 0.15s ease;
 }
 
@@ -12016,7 +12716,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-table-row:hover {
-  background: #fafbfc;
+  background: #f9fafb;
 }
 
 .ms-like-table-row.is-dragging {
@@ -12024,7 +12724,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-table-row.is-drag-over {
-  background: #f5f3ff;
+  background: #eff6ff;
 }
 
 .ms-like-drag-cell {
@@ -12141,7 +12841,7 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-table-row :deep(.el-input.is-focus .el-input__wrapper),
 .ms-like-table-row :deep(.el-select.is-focus .el-select__wrapper),
 .ms-like-table-row :deep(.el-select__wrapper.is-focused) {
-  box-shadow: inset 0 0 0 1px #7c3aed;
+  box-shadow: inset 0 0 0 1px #3b82f6;
   background: #fff;
 }
 
@@ -12164,7 +12864,7 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-add-row {
   border: 0;
   background: transparent;
-  color: #7c3aed;
+  color: #2563eb;
   cursor: pointer;
   font-size: 12px;
   padding: 0;
@@ -12188,9 +12888,10 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-form-panel {
   gap: 0;
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
   background: #fff;
+  overflow: hidden;
 }
 
 .ms-like-form-row {
@@ -12254,15 +12955,45 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-response-shell {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
   min-height: 0;
   min-width: 0;
-  border: 1px solid #e5ebf3;
-  border-radius: 12px;
+  border: 0;
+  border-top: 0;
+  border-radius: 0;
   background: #fff;
-  padding: 12px 16px 16px;
+  padding: 0;
   overflow: hidden;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-shadow: none;
+}
+
+.ms-like-response-resizer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 6px;
+  border: 0;
+  background: #f9fafb;
+  cursor: row-resize;
+}
+
+.ms-like-response-resizer span {
+  width: 42px;
+  height: 2px;
+  border-radius: 999px;
+  background: #d1d5db;
+  transition: background-color 0.15s ease, width 0.15s ease;
+}
+
+.ms-like-response-resizer:hover span,
+.ms-like-editor-shell.is-resizing .ms-like-response-resizer span {
+  width: 58px;
+  background: #3b82f6;
+}
+
+:global(body.is-api-response-resizing) {
+  cursor: row-resize;
+  user-select: none;
 }
 
 .ms-like-response-content-panel {
@@ -12271,8 +13002,8 @@ function formatTimeLabel(value?: string | null) {
   min-height: 0;
   min-width: 0;
   flex-direction: column;
-  border: 1px solid #e7edf5;
-  border-radius: 10px;
+  border: 0;
+  border-radius: 0;
   background: #fff;
   overflow: hidden;
 }
@@ -12300,7 +13031,7 @@ function formatTimeLabel(value?: string | null) {
   min-height: 0;
   overflow: hidden;
   flex-direction: column;
-  padding: 12px 14px 14px;
+  padding: 12px;
 }
 
 .ms-like-response-empty {
@@ -12439,6 +13170,310 @@ function formatTimeLabel(value?: string | null) {
 
 .case-drawer-history-result.is-failed {
   color: #dc2626;
+}
+
+:global(.definition-import-dialog .el-dialog) {
+  padding: 0;
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+:global(.definition-import-dialog .el-dialog__header),
+:global(.definition-import-dialog .el-dialog__body) {
+  margin: 0;
+  padding: 0;
+}
+
+.definition-import-modal {
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.definition-import-header,
+.definition-import-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.definition-import-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.definition-import-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.definition-import-title-icon {
+  width: 20px;
+  height: 20px;
+  color: #3b82f6;
+}
+
+.definition-import-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+}
+
+.definition-import-close:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.definition-import-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.definition-import-body {
+  display: grid;
+  gap: 20px;
+  padding: 24px;
+}
+
+.definition-import-section {
+  display: grid;
+  gap: 12px;
+}
+
+.definition-import-section-title {
+  color: #374151;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.definition-import-format-list {
+  display: grid;
+  gap: 8px;
+}
+
+.definition-import-format {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border: 2px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.definition-import-format:hover {
+  border-color: #d1d5db;
+  background: #f9fafb;
+}
+
+.definition-import-format.active.is-green {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.definition-import-format.active.is-orange {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.definition-import-format.active.is-purple {
+  border-color: #e9d5ff;
+  background: #faf5ff;
+}
+
+.definition-import-format-icon,
+.definition-import-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+}
+
+.definition-import-format-icon {
+  width: 36px;
+  height: 36px;
+  background: #f3f4f6;
+  color: #9ca3af;
+}
+
+.definition-import-format.active.is-green .definition-import-format-icon {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.definition-import-format.active.is-orange .definition-import-format-icon {
+  background: #ffedd5;
+  color: #ea580c;
+}
+
+.definition-import-format.active.is-purple .definition-import-format-icon {
+  background: #f3e8ff;
+  color: #9333ea;
+}
+
+.definition-import-format-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.definition-import-format-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.definition-import-format-copy span {
+  color: #111827;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.definition-import-format-copy small {
+  overflow: hidden;
+  color: #6b7280;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.definition-import-check {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #d1d5db;
+  color: #2563eb;
+}
+
+.definition-import-check svg {
+  width: 12px;
+  height: 12px;
+}
+
+.definition-import-mode-switch {
+  display: inline-flex;
+  width: fit-content;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 10px;
+  background: #f3f4f6;
+}
+
+.definition-import-mode-switch button {
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #4b5563;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 0 14px;
+  cursor: pointer;
+}
+
+.definition-import-mode-switch button.active {
+  background: #ffffff;
+  color: #2563eb;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+.definition-import-url :deep(.el-input__wrapper) {
+  min-height: 42px;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px #d1d5db;
+}
+
+.definition-import-url :deep(.el-input.is-focus .el-input__wrapper),
+.definition-import-url :deep(.el-input__wrapper.is-focus) {
+  box-shadow: inset 0 0 0 1px #3b82f6, 0 0 0 2px rgba(59, 130, 246, 0.16);
+}
+
+.definition-import-upload {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 112px;
+  border: 2px dashed #d1d5db;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #4b5563;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.definition-import-upload:hover {
+  border-color: #60a5fa;
+  background: #eff6ff;
+}
+
+.definition-import-upload input {
+  display: none;
+}
+
+.definition-import-upload-icon {
+  width: 24px;
+  height: 24px;
+  color: #9ca3af;
+}
+
+.definition-import-upload small {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.definition-import-footer {
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 24px;
+  border-top: 1px solid #f3f4f6;
+  background: #f9fafb;
+}
+
+.definition-import-cancel,
+.definition-import-submit {
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0 16px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.definition-import-cancel {
+  border-color: #d1d5db;
+  background: #ffffff;
+  color: #374151;
+}
+
+.definition-import-cancel:hover {
+  background: #f3f4f6;
+}
+
+.definition-import-submit {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.definition-import-submit:hover {
+  border-color: #1d4ed8;
+  background: #1d4ed8;
 }
 
 .ms-like-result-pill {
@@ -13091,7 +14126,7 @@ pre {
   }
 
   .ms-like-editor-shell {
-    grid-template-rows: minmax(340px, 48%) minmax(300px, 1fr);
+    grid-template-rows: minmax(340px, 48%) 6px minmax(300px, 1fr);
   }
 
   .ms-like-param-table-grid--query {
@@ -13135,7 +14170,7 @@ pre {
   .ms-like-editor-shell {
     display: flex;
     flex-direction: column;
-    padding: 12px;
+    padding: 0;
   }
 
   .ms-like-request-shell,
@@ -13145,7 +14180,7 @@ pre {
   }
 
   .ms-like-request-content-panel {
-    margin: 0 12px 12px;
+    margin: 0;
   }
 
   .ms-like-request-row,

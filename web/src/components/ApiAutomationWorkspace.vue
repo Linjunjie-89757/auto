@@ -58,6 +58,7 @@ import type {
   ApiDefinitionCaseRunHistoryItem,
   ApiDefinitionDetail,
   ApiDefinitionItem,
+  ApiDefinitionModuleItem,
   DbConnectionItem,
   ApiEnvironmentItem,
   ApiExtractorConfig,
@@ -258,6 +259,7 @@ type DefinitionDirectoryTreeNode = {
   fullPath: string | null
   count: number
   definitionId: number | null
+  moduleId: number | null
   method: string | null
   children: DefinitionDirectoryTreeNode[]
 }
@@ -402,6 +404,7 @@ const activePostProcessorId = ref<string | null>(null)
 const activeAssertionId = ref<string | null>(null)
 
 const definitions = ref<ApiDefinitionItem[]>([])
+const definitionModules = ref<ApiDefinitionModuleItem[]>([])
 const apiCases = ref<ApiDefinitionCaseItem[]>([])
 const scenarios = ref<ApiScenarioItem[]>([])
 const scenarioModules = ref<ApiScenarioModuleItem[]>([])
@@ -994,12 +997,6 @@ const caseOptions = computed(() => apiCases.value.map(item => ({
   label: `${item.name} (${item.method} ${item.path})`,
   value: item.id,
 })))
-const draftDefinitionDirectories = computed(() => requestEditorTabs.value
-  .map(item => ({
-    workspaceCode: item.draft.workspaceCode,
-    directoryName: (item.draft.directoryName || '').trim(),
-  }))
-  .filter(item => !!item.workspaceCode && !!item.directoryName))
 const definitionKeywordFilteredItems = computed(() => definitions.value.filter((item) => {
   const keyword = definitionFilters.keyword.trim().toLowerCase()
   if (!keyword) {
@@ -1092,20 +1089,12 @@ const filteredDefinitions = computed(() => definitionKeywordFilteredItems.value.
 
 const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
   type MutableNode = DefinitionDirectoryTreeNode & { childMap?: Map<string, MutableNode> }
-  const directoryItems = [
-    ...definitionKeywordFilteredItems.value.map(item => ({
-      workspaceCode: item.workspaceCode,
-      directoryName: (item.directoryName || '').trim(),
-      countWeight: 1,
-    })),
-    ...draftDefinitionDirectories.value.map(item => ({
-      workspaceCode: item.workspaceCode,
-      directoryName: item.directoryName,
-      countWeight: 0,
-    })),
-  ]
   const workspaceCodes = isAllScope.value
-    ? workspaces.value.map(item => item.code)
+    ? Array.from(new Set([
+      ...workspaces.value.map(item => item.code),
+      ...definitionModules.value.map(item => item.workspaceCode),
+      ...definitions.value.map(item => item.workspaceCode),
+    ])).filter(Boolean)
     : [workspaceCode.value]
   const workspaceNodes = workspaceCodes.map((code) => {
     const workspaceName = workspaces.value.find(item => item.code === code)?.name ?? code
@@ -1117,6 +1106,7 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
       fullPath: null,
       count: 0,
       definitionId: null,
+      moduleId: null,
       method: null,
       children: [],
       childMap: new Map<string, MutableNode>(),
@@ -1130,6 +1120,7 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
     workspaceCode: string,
     label: string,
     fullPath: string,
+    moduleId: number | null,
   ) => {
     let node = parentMap.get(fullPath)
     if (!node) {
@@ -1141,6 +1132,7 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
         fullPath,
         count: 0,
         definitionId: null,
+        moduleId,
         method: null,
         children: [],
         childMap: new Map(),
@@ -1148,31 +1140,53 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
       parentMap.set(fullPath, node)
       parentChildren.push(node)
     }
+    if (moduleId != null) {
+      node.moduleId = moduleId
+    }
     return node
   }
-  for (const item of directoryItems) {
-    const workspaceNode = workspaceMap.get(item.workspaceCode)
+
+  const addModuleNode = (module: ApiDefinitionModuleItem) => {
+    const workspaceNode = workspaceMap.get(module.workspaceCode)
     if (!workspaceNode) {
-      continue
+      return
     }
-    const path = (item.directoryName || '').trim()
+    const path = (module.fullPath || module.name || '').trim()
     if (!path) {
-      workspaceNode.count += item.countWeight
-      continue
+      return
     }
-    workspaceNode.count += item.countWeight
     const segments = path.split('/').map(part => part.trim()).filter(Boolean)
     let currentChildren = workspaceNode.children as MutableNode[]
     let currentMap = workspaceNode.childMap ?? new Map<string, MutableNode>()
     let assembled = ''
-    for (const segment of segments) {
+    segments.forEach((segment, index) => {
       assembled = assembled ? `${assembled}/${segment}` : segment
-      const node = ensureNode(currentChildren, currentMap, item.workspaceCode, segment, assembled)
-      node.count += item.countWeight
+      const node = ensureNode(
+        currentChildren,
+        currentMap,
+        module.workspaceCode,
+        segment,
+        assembled,
+        index === segments.length - 1 ? module.id : null,
+      )
       currentChildren = node.children as MutableNode[]
       currentMap = node.childMap ?? new Map<string, MutableNode>()
-    }
+    })
   }
+
+  const flattenModules = (items: ApiDefinitionModuleItem[]) => {
+    const result: ApiDefinitionModuleItem[] = []
+    const walk = (modules: ApiDefinitionModuleItem[]) => {
+      for (const module of modules) {
+        result.push(module)
+        walk(module.children || [])
+      }
+    }
+    walk(items)
+    return result
+  }
+  flattenModules(definitionModules.value).forEach(addModuleNode)
+
   for (const item of definitionKeywordFilteredItems.value) {
     const workspaceNode = workspaceMap.get(item.workspaceCode)
     if (!workspaceNode) {
@@ -1187,6 +1201,7 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
       fullPath: path || null,
       count: 0,
       definitionId: item.id,
+      moduleId: null,
       method: item.method,
       children: [],
     }
@@ -1202,10 +1217,12 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
     let assembled = ''
     for (const segment of segments) {
       assembled = assembled ? `${assembled}/${segment}` : segment
-      const node = ensureNode(parentChildren, parentMap, item.workspaceCode, segment, assembled)
+      const node = ensureNode(parentChildren, parentMap, item.workspaceCode, segment, assembled, null)
+      node.count += 1
       parentChildren = node.children as MutableNode[]
       parentMap = node.childMap ?? new Map<string, MutableNode>()
     }
+    workspaceNode.count += 1
     parentChildren.push(requestNode)
   }
   const stripChildMap = (nodes: MutableNode[]): DefinitionDirectoryTreeNode[] => nodes
@@ -1225,6 +1242,7 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
       fullPath: node.fullPath,
       count: node.count,
       definitionId: node.definitionId,
+      moduleId: node.moduleId,
       method: node.method,
       children: stripChildMap(node.children as MutableNode[]),
     }))
@@ -1240,6 +1258,7 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
         fullPath: null,
         count: unassignedRequests.length,
         definitionId: null,
+        moduleId: null,
         method: null,
         children: stripChildMap(unassignedRequests),
       })
@@ -1252,6 +1271,7 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
       fullPath: null,
       count: workspaceNode.count,
       definitionId: null,
+      moduleId: null,
       method: null,
       children,
     }
@@ -1264,6 +1284,7 @@ const definitionDirectoryTree = computed<DefinitionDirectoryTreeNode[]>(() => {
     fullPath: null,
     count: definitionKeywordFilteredItems.value.length,
     definitionId: null,
+    moduleId: null,
     method: null,
     children: workspaceTrees,
   }]
@@ -2707,6 +2728,38 @@ function fingerprintDefinitionDetail(detail: ApiRequestEditorDetail) {
   return JSON.stringify(detail)
 }
 
+function isBlankRequestBody(body: ApiRequestConfig['body']) {
+  return !body.rawText?.trim()
+    && !body.jsonText?.trim()
+    && !body.xmlText?.trim()
+    && !body.plainText?.trim()
+    && !body.binaryBase64
+    && !(body.formItems || []).some(item => !isKeyValueRowEmpty(item))
+}
+
+function isEmptyNewRequestBodyOnlyChange(current: RequestEditorTab, snapshot: ApiRequestEditorDetail) {
+  if (current.resourceType !== 'definition' || current.resourceId !== null || snapshot.id) {
+    return false
+  }
+  if (!isBlankRequestBody(snapshot.requestConfig.body)) {
+    return false
+  }
+  let savedDetail: ApiRequestEditorDetail
+  try {
+    savedDetail = JSON.parse(current.savedFingerprint) as ApiRequestEditorDetail
+  }
+  catch {
+    return false
+  }
+  const normalizedSnapshot = cloneEditorDetail(snapshot)
+  const normalizedSaved = cloneEditorDetail(savedDetail)
+  normalizedSnapshot.requestConfig.body.type = 'NONE'
+  normalizedSnapshot.requestConfig.body.contentType = ''
+  normalizedSaved.requestConfig.body.type = 'NONE'
+  normalizedSaved.requestConfig.body.contentType = ''
+  return fingerprintDefinitionDetail(normalizedSnapshot) === fingerprintDefinitionDetail(normalizedSaved)
+}
+
 function hasEnabledKeyValueRows(rows: ApiKeyValue[]) {
   return rows.some(item => !isKeyValueRowEmpty(item) && item.enabled !== false)
 }
@@ -2807,7 +2860,9 @@ function syncActiveRequestEditorTab() {
   current.title = definitionForm.name || (definitionForm.resourceType === 'case' ? '新建用例' : '\u65b0\u5efa\u8bf7\u6c42')
   current.method = definitionForm.requestConfig.method || definitionForm.method || 'GET'
   current.activeTab = activeRequestTab.value
-  current.isDirty = current.savedFingerprint !== fingerprintDefinitionDetail(snapshot)
+  const nextFingerprint = fingerprintDefinitionDetail(snapshot)
+  current.isDirty = current.savedFingerprint !== nextFingerprint
+    && !isEmptyNewRequestBodyOnlyChange(current, snapshot)
 }
 
 function syncCaseDrawerEditorTab() {
@@ -3372,31 +3427,6 @@ function syncDefinitionTreeSelection(detail: Pick<ApiDefinitionDetail, 'id' | 'w
     expandDefinitionTreeToKey(`definition-module:${detail.workspaceCode}:${directoryName}`)
   }
   selectedDefinitionTreeKey.value = `definition-request:${detail.id}`
-}
-
-function openOrReuseDraftRequest(detail: ApiRequestEditorDetail) {
-  const current = activeRequestEditorTab.value
-  if (current && current.resourceType === 'definition' && current.resourceId == null && !current.isDirty) {
-    const draft = cloneEditorDetail(detail)
-    hydrateDefinitionKeyValueRows(draft)
-    current.draft = draft
-    current.resourceType = draft.resourceType
-    current.resourceId = draft.id || null
-    current.definitionId = draft.resourceType === 'case'
-      ? (draft.definitionId || null)
-      : (draft.id || null)
-    current.title = draft.name || (draft.resourceType === 'case' ? '新建用例' : '\u65b0\u5efa\u8bf7\u6c42')
-    current.method = draft.requestConfig.method || draft.method || 'GET'
-    current.activeTab = resolveDefaultRequestTab(draft)
-    current.savedFingerprint = fingerprintDefinitionDetail(draft)
-    current.isDirty = false
-    current.debugReportId = null
-    current.debugFailureSummary = ''
-    current.debugStepResults = []
-    activateRequestEditorTab(current.key)
-    return
-  }
-  openNewRequestTab(detail)
 }
 
 async function closeRequestEditorTab(key: string, options?: { activateFallback?: boolean }) {
@@ -4551,6 +4581,7 @@ async function bootstrap() {
   try {
     const [
       definitionPage,
+      definitionModuleList,
       casePage,
       scenarioPage,
       scenarioModuleList,
@@ -4563,6 +4594,7 @@ async function bootstrap() {
       workspaceList,
     ] = await Promise.all([
       platformApi.getApiDefinitions(workspaceCode.value),
+      platformApi.getApiDefinitionModules(workspaceCode.value),
       platformApi.getApiDefinitionCases(workspaceCode.value),
       platformApi.getApiScenarios(workspaceCode.value),
       platformApi.getApiScenarioModules(workspaceCode.value),
@@ -4575,6 +4607,7 @@ async function bootstrap() {
       platformApi.getSwitchableWorkspaces(),
     ])
     definitions.value = definitionPage.items
+    definitionModules.value = definitionModuleList
     apiCases.value = casePage.items
     scenarios.value = scenarioPage.items
     scenarioModules.value = scenarioModuleList
@@ -4945,16 +4978,16 @@ async function createDefinitionModule(node: DefinitionDirectoryTreeNode) {
       inputErrorMessage: '子模块名称不能为空',
     })
     const moduleName = value.trim()
-    const parentPath = node.type === 'module' ? (node.fullPath ?? '') : ''
-    const fullPath = parentPath ? `${parentPath}/${moduleName}` : moduleName
-    const nodeKey = `definition-module:${targetWorkspaceCode}:${fullPath}`
+    const created = await platformApi.createApiDefinitionModule(workspaceCode.value, {
+      workspaceCode: targetWorkspaceCode,
+      parentId: node.type === 'module' ? node.moduleId : null,
+      name: moduleName,
+    })
+    await refreshData()
+    const fullPath = created.fullPath || moduleName
+    const nodeKey = `definition-module:${created.workspaceCode}:${fullPath}`
     selectedDefinitionTreeKey.value = nodeKey
     expandDefinitionTreeToKey(nodeKey)
-    openOrReuseDraftRequest({
-      ...buildEmptyDefinitionDetail(),
-      workspaceCode: targetWorkspaceCode,
-      directoryName: fullPath,
-    })
     ElMessage.success(`已创建子模块：${fullPath}`)
   }
   catch (error) {
@@ -4962,20 +4995,6 @@ async function createDefinitionModule(node: DefinitionDirectoryTreeNode) {
       ElMessage.error((error as Error).message)
     }
   }
-}
-
-function getDefinitionsInDefinitionModule(node: DefinitionDirectoryTreeNode) {
-  const modulePath = (node.fullPath || '').trim()
-  if (node.type !== 'module' || !modulePath) {
-    return []
-  }
-  return definitions.value.filter((item) => {
-    if (item.workspaceCode !== node.workspaceCode) {
-      return false
-    }
-    const directoryName = (item.directoryName || '').trim()
-    return directoryName === modulePath || directoryName.startsWith(`${modulePath}/`)
-  })
 }
 
 function replaceDefinitionModulePath(currentPath: string, sourcePath: string, targetPath: string) {
@@ -4986,69 +5005,24 @@ function replaceDefinitionModulePath(currentPath: string, sourcePath: string, ta
   return targetPath ? `${targetPath}/${suffix}` : ''
 }
 
-function syncOpenDefinitionDirectoryDetails(details: ApiDefinitionDetail[]) {
-  const detailMap = new Map(details.map(item => [item.id, toEditorDetailFromDefinition(item)]))
+function syncOpenDraftDefinitionModulePath(sourcePath: string, targetPath: string) {
   for (const tab of requestEditorTabs.value) {
-    if (tab.resourceType !== 'definition' || !tab.resourceId) {
+    if (tab.resourceType !== 'definition' || tab.resourceId) {
       continue
     }
-    const updated = detailMap.get(tab.resourceId)
-    if (!updated) {
+    const currentPath = (tab.draft.directoryName || '').trim()
+    if (!(currentPath === sourcePath || currentPath.startsWith(`${sourcePath}/`))) {
       continue
     }
-    if (tab.isDirty) {
-      tab.draft.directoryName = updated.directoryName
-      if (tab.key === activeRequestEditorKey.value) {
-        definitionForm.directoryName = updated.directoryName
-      }
-      continue
-    }
-    tab.draft = cloneEditorDetail(updated)
-    tab.savedFingerprint = fingerprintDefinitionDetail(updated)
-    tab.isDirty = false
-    tab.title = updated.name || '\u65b0\u5efa\u8bf7\u6c42'
-    tab.method = updated.requestConfig.method || updated.method || 'GET'
+    tab.draft.directoryName = replaceDefinitionModulePath(currentPath, sourcePath, targetPath)
     if (tab.key === activeRequestEditorKey.value) {
-      applyEditorDetailToForm(updated, { markSaved: true })
+      definitionForm.directoryName = tab.draft.directoryName
     }
-  }
-}
-
-async function updateDefinitionModuleDirectories(
-  node: DefinitionDirectoryTreeNode,
-  resolveNextPath: (currentPath: string) => string,
-) {
-  const targets = getDefinitionsInDefinitionModule(node)
-  if (!targets.length) {
-    ElMessage.warning('当前目录下没有可更新的请求')
-    return []
-  }
-
-  saving.value = true
-  try {
-    const updatedDetails: ApiDefinitionDetail[] = []
-    for (const item of targets) {
-      const detail = await platformApi.getApiDefinitionDetail(workspaceCode.value, item.id)
-      const editorDetail = toEditorDetailFromDefinition(detail)
-      editorDetail.directoryName = resolveNextPath((detail.directoryName || '').trim())
-      const updated = await platformApi.updateApiDefinition(
-        workspaceCode.value,
-        detail.id,
-        buildDefinitionMutationPayloadFor(editorDetail),
-      )
-      updatedDetails.push(updated)
-    }
-    await refreshData()
-    syncOpenDefinitionDirectoryDetails(updatedDetails)
-    return updatedDetails
-  }
-  finally {
-    saving.value = false
   }
 }
 
 async function renameDefinitionModule(node: DefinitionDirectoryTreeNode) {
-  if (node.type !== 'module' || !node.fullPath || !canWriteWorkspace(node.workspaceCode)) {
+  if (node.type !== 'module' || !node.moduleId || !node.fullPath || !canWriteWorkspace(node.workspaceCode)) {
     return
   }
   try {
@@ -5068,18 +5042,11 @@ async function renameDefinitionModule(node: DefinitionDirectoryTreeNode) {
       return
     }
     const sourcePath = node.fullPath
-    const parts = sourcePath.split('/')
-    parts[parts.length - 1] = nextName
-    const nextPath = parts.join('/')
-    const nextKey = `definition-module:${node.workspaceCode}:${nextPath}`
-    if (findDefinitionTreeNode(nextKey)) {
-      ElMessage.error('同级目录已存在')
-      return
-    }
-    await updateDefinitionModuleDirectories(
-      node,
-      currentPath => replaceDefinitionModulePath(currentPath, sourcePath, nextPath),
-    )
+    const updated = await platformApi.updateApiDefinitionModule(workspaceCode.value, node.moduleId, { name: nextName })
+    await refreshData()
+    const nextPath = updated.fullPath || sourcePath
+    const nextKey = `definition-module:${updated.workspaceCode}:${nextPath}`
+    syncOpenDraftDefinitionModulePath(sourcePath, nextPath)
     selectedDefinitionTreeKey.value = nextKey
     expandDefinitionTreeToKey(nextKey)
     ElMessage.success('目录已重命名')
@@ -5092,7 +5059,7 @@ async function renameDefinitionModule(node: DefinitionDirectoryTreeNode) {
 }
 
 async function deleteDefinitionModule(node: DefinitionDirectoryTreeNode) {
-  if (node.type !== 'module' || !node.fullPath || !canWriteWorkspace(node.workspaceCode)) {
+  if (node.type !== 'module' || !node.moduleId || !node.fullPath || !canWriteWorkspace(node.workspaceCode)) {
     return
   }
   try {
@@ -5101,7 +5068,9 @@ async function deleteDefinitionModule(node: DefinitionDirectoryTreeNode) {
       '删除目录',
       { type: 'warning' },
     )
-    await updateDefinitionModuleDirectories(node, () => '')
+    await platformApi.deleteApiDefinitionModule(workspaceCode.value, node.moduleId)
+    await refreshData()
+    syncOpenDraftDefinitionModulePath(node.fullPath, '')
     selectedDefinitionTreeKey.value = `definition-workspace:${node.workspaceCode}`
     ElMessage.success('目录已删除')
   }
@@ -6054,7 +6023,7 @@ const definitionEditorGridStyle = computed(() => {
     return {}
   }
   return {
-    gridTemplateRows: `minmax(300px, ${requestResponseRatio.value}fr) 6px minmax(260px, ${100 - requestResponseRatio.value}fr)`,
+    gridTemplateRows: `minmax(0, ${requestResponseRatio.value}fr) 6px minmax(0, ${100 - requestResponseRatio.value}fr)`,
   }
 })
 
@@ -6687,7 +6656,7 @@ function formatTimeLabel(value?: string | null) {
                 </template>
 
                 <template v-else-if="activeRequestTab === 'body'">
-                  <div class="request-section">
+                  <div class="request-section ms-like-body-section">
                     <div class="ms-like-body-type-row">
                       <button :class="['ms-like-body-chip', { active: isBodyMode('NONE') }]" @click="setBodyMode('NONE')">none</button>
                       <button :class="['ms-like-body-chip', { active: isBodyMode('FORM_DATA') }]" @click="setBodyMode('FORM_DATA')">form-data</button>
@@ -9765,6 +9734,7 @@ function formatTimeLabel(value?: string | null) {
   border: 1px solid #e5e7eb;
   border-radius: 12px;
   background: #ffffff;
+  font-family: Inter, "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
 }
 
 .api-tabs {
@@ -11759,29 +11729,32 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-method.method-get {
-  color: #16a34a;
+  color: #15803d;
 }
 
 .ms-like-method.method-post {
-  color: #f97316;
+  color: #ea580c;
 }
 
-.ms-like-method.method-put,
-.ms-like-method.method-options,
+.ms-like-method.method-put {
+  color: #2563eb;
+}
+
+.ms-like-method.method-patch,
+.ms-like-method.method-options {
+  color: #7c3aed;
+}
+
+.ms-like-method.method-trace {
+  color: #6b7280;
+}
+
 .ms-like-method.method-head {
-  color: #3b82f6;
-}
-
-.ms-like-method.method-patch {
-  color: #ec4899;
+  color: #15803d;
 }
 
 .ms-like-method.method-delete {
   color: #dc2626;
-}
-
-.ms-like-method.method-trace {
-  color: #8b5cf6;
 }
 
 .case-drawer-readonly-section :deep(.processor-toolbar),
@@ -11843,29 +11816,32 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .request-method-get {
-  color: #16a34a;
+  color: #15803d;
 }
 
 .request-method-post {
-  color: #f97316;
+  color: #ea580c;
 }
 
-.request-method-put,
-.request-method-options,
+.request-method-put {
+  color: #2563eb;
+}
+
+.request-method-patch,
+.request-method-options {
+  color: #7c3aed;
+}
+
+.request-method-trace {
+  color: #6b7280;
+}
+
 .request-method-head {
-  color: #3b82f6;
-}
-
-.request-method-patch {
-  color: #ec4899;
+  color: #15803d;
 }
 
 .request-method-delete {
   color: #dc2626;
-}
-
-.request-method-trace {
-  color: #8b5cf6;
 }
 
 .request-method-select :deep(.el-select__wrapper) {
@@ -11882,55 +11858,68 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .request-method-select.request-method-get :deep(.el-select__wrapper) {
-  background: #f0fdf4;
+  border-color: #86efac;
+  background: #dcfce7;
 }
 
 .request-method-select.request-method-post :deep(.el-select__wrapper) {
-  background: #fff7ed;
+  border-color: #fdba74;
+  background: #ffedd5;
 }
 
-.request-method-select.request-method-put :deep(.el-select__wrapper),
-.request-method-select.request-method-options :deep(.el-select__wrapper),
-.request-method-select.request-method-head :deep(.el-select__wrapper) {
-  background: #eff6ff;
+.request-method-select.request-method-put :deep(.el-select__wrapper) {
+  border-color: #93c5fd;
+  background: #dbeafe;
 }
 
-.request-method-select.request-method-delete :deep(.el-select__wrapper) {
-  background: #fef2f2;
-}
-
-.request-method-select.request-method-patch :deep(.el-select__wrapper) {
-  background: #fdf2f8;
+.request-method-select.request-method-patch :deep(.el-select__wrapper),
+.request-method-select.request-method-options :deep(.el-select__wrapper) {
+  border-color: #c4b5fd;
+  background: #ede9fe;
 }
 
 .request-method-select.request-method-trace :deep(.el-select__wrapper) {
-  background: #f5f3ff;
+  border-color: #d1d5db;
+  background: #f3f4f6;
+}
+
+.request-method-select.request-method-head :deep(.el-select__wrapper) {
+  border-color: #86efac;
+  background: #dcfce7;
+}
+
+.request-method-select.request-method-delete :deep(.el-select__wrapper) {
+  border-color: #fca5a5;
+  background: #fee2e2;
 }
 
 .request-method-select.request-method-get :deep(.el-select__selected-item) {
-  color: #16a34a;
+  color: #15803d;
 }
 
 .request-method-select.request-method-post :deep(.el-select__selected-item) {
-  color: #f97316;
+  color: #ea580c;
 }
 
-.request-method-select.request-method-put :deep(.el-select__selected-item),
-.request-method-select.request-method-options :deep(.el-select__selected-item),
+.request-method-select.request-method-put :deep(.el-select__selected-item) {
+  color: #2563eb;
+}
+
+.request-method-select.request-method-patch :deep(.el-select__selected-item),
+.request-method-select.request-method-options :deep(.el-select__selected-item) {
+  color: #7c3aed;
+}
+
+.request-method-select.request-method-trace :deep(.el-select__selected-item) {
+  color: #6b7280;
+}
+
 .request-method-select.request-method-head :deep(.el-select__selected-item) {
-  color: #3b82f6;
+  color: #15803d;
 }
 
 .request-method-select.request-method-delete :deep(.el-select__selected-item) {
   color: #dc2626;
-}
-
-.request-method-select.request-method-patch :deep(.el-select__selected-item) {
-  color: #ec4899;
-}
-
-.request-method-select.request-method-trace :deep(.el-select__selected-item) {
-  color: #8b5cf6;
 }
 
 :deep(.request-method-popper .el-select-dropdown__item) {
@@ -11938,55 +11927,61 @@ function formatTimeLabel(value?: string | null) {
 }
 
 :deep(.request-method-popper .request-method-get) {
-  color: #16a34a;
+  color: #15803d;
 }
 
 :deep(.request-method-popper .request-method-post) {
-  color: #f97316;
+  color: #ea580c;
 }
 
-:deep(.request-method-popper .request-method-put),
-:deep(.request-method-popper .request-method-options),
+:deep(.request-method-popper .request-method-put) {
+  color: #2563eb;
+}
+
+:deep(.request-method-popper .request-method-patch),
+:deep(.request-method-popper .request-method-options) {
+  color: #7c3aed;
+}
+
+:deep(.request-method-popper .request-method-trace) {
+  color: #6b7280;
+}
+
 :deep(.request-method-popper .request-method-head) {
-  color: #3b82f6;
+  color: #15803d;
 }
 
 :deep(.request-method-popper .request-method-delete) {
   color: #dc2626;
 }
 
-:deep(.request-method-popper .request-method-patch) {
-  color: #ec4899;
-}
-
-:deep(.request-method-popper .request-method-trace) {
-  color: #8b5cf6;
-}
-
 .case-drawer-method-tag.request-method-get {
-  color: #16a34a;
+  color: #15803d;
 }
 
 .case-drawer-method-tag.request-method-post {
-  color: #f97316;
+  color: #ea580c;
 }
 
-.case-drawer-method-tag.request-method-put,
-.case-drawer-method-tag.request-method-options,
+.case-drawer-method-tag.request-method-put {
+  color: #2563eb;
+}
+
+.case-drawer-method-tag.request-method-patch,
+.case-drawer-method-tag.request-method-options {
+  color: #7c3aed;
+}
+
+.case-drawer-method-tag.request-method-trace {
+  color: #6b7280;
+}
+
 .case-drawer-method-tag.request-method-head {
-  color: #3b82f6;
+  color: #15803d;
 }
 
 .case-drawer-method-tag.request-method-delete {
   color: #dc2626;
-}
-
-.case-drawer-method-tag.request-method-patch {
-  color: #ec4899;
-}
-
-.case-drawer-method-tag.request-method-trace {
-  color: #8b5cf6;
 }
 
 .ms-like-main {
@@ -12092,11 +12087,13 @@ function formatTimeLabel(value?: string | null) {
   display: flex;
   align-items: center;
   gap: 0;
+  box-sizing: border-box;
+  height: 40px;
+  min-height: 40px;
   border: 0;
   border-bottom: 1px solid #e5e7eb;
   border-radius: 0;
   padding: 0;
-  min-height: 40px;
   background: #ffffff;
   overflow: hidden;
 }
@@ -12105,6 +12102,7 @@ function formatTimeLabel(value?: string | null) {
   display: flex;
   align-items: center;
   gap: 0;
+  height: 100%;
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -12112,6 +12110,7 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-tab-nav {
   flex: 0 1 auto;
   min-width: 0;
+  height: 100%;
   display: flex;
   align-items: stretch;
   gap: 0;
@@ -12170,9 +12169,12 @@ function formatTimeLabel(value?: string | null) {
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
+  box-sizing: border-box;
+  height: 40px;
   min-height: 40px;
   border: 0;
   border-right: 1px solid #e5e7eb;
+  border-bottom: 3px solid transparent;
   border-radius: 0;
   background: #f9fafb;
   color: var(--ath-text-muted);
@@ -12188,15 +12190,8 @@ function formatTimeLabel(value?: string | null) {
   color: var(--ath-text-strong);
 }
 
-.ms-like-editor-tab.active::after {
-  content: '';
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 0;
-  height: 2px;
-  border-radius: 0;
-  background: var(--ath-blue);
+.ms-like-editor-tab.active {
+  border-bottom-color: var(--ath-blue);
 }
 
 .ms-like-editor-tab.active .ms-like-editor-tab-close {
@@ -12271,7 +12266,6 @@ function formatTimeLabel(value?: string | null) {
   width: 36px;
   height: 40px;
   border: 0;
-  border-left: 1px solid #e5e7eb;
   border-radius: 0;
   background: transparent;
   color: var(--el-text-color-secondary);
@@ -12289,7 +12283,7 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-tab-strip .scenario-editor-more-button {
   width: 36px;
   height: 40px;
-  border-left: 1px solid #e5e7eb;
+  border-left: 0;
   border-radius: 0;
   background: #ffffff;
 }
@@ -12313,7 +12307,7 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-editor-shell {
   display: grid;
   flex: 1 1 auto;
-  grid-template-rows: minmax(360px, 1fr) 6px minmax(300px, 1fr);
+  grid-template-rows: minmax(0, 1fr) 6px minmax(0, 1fr);
   min-height: 0;
   gap: 0;
   padding: 0;
@@ -12526,23 +12520,33 @@ function formatTimeLabel(value?: string | null) {
   padding: 14px 16px;
 }
 
+.ms-like-body-section {
+  display: grid;
+  grid-template-rows: 32px minmax(0, 1fr);
+  gap: 8px;
+  overflow: hidden;
+}
+
 .ms-like-body-type-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 4px;
   width: fit-content;
-  margin-bottom: 10px;
+  min-height: 32px;
+  margin-bottom: 0;
   border: 0;
   border-radius: 0;
   background: #ffffff;
   overflow: visible;
+  flex: 0 0 auto;
 }
 
 .ms-like-body-mode-shell {
   display: flex;
   flex: 1 1 auto;
-  min-height: 300px;
+  min-height: 0;
+  height: 100%;
   flex-direction: column;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
@@ -12556,16 +12560,46 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-body-mode-shell > .ms-like-empty-body {
   width: 100%;
   flex: 1 1 auto;
-  min-height: 300px;
+  min-height: 0;
+}
+
+.ms-like-body-mode-shell > .ms-monaco-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.ms-like-body-mode-shell > .ms-monaco-editor :deep(.ms-monaco-editor__toolbar) {
+  align-items: center;
+  box-sizing: border-box;
+  height: 40px;
+  padding: 0 12px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.ms-like-body-mode-shell > .ms-monaco-editor :deep(.ms-monaco-editor__body) {
+  flex: 1 1 auto;
+  height: auto !important;
+  min-height: 0;
 }
 
 .ms-like-body-mode-shell > .ms-like-table-surface,
 .ms-like-body-mode-shell > .ms-like-form-panel {
-  min-height: 300px;
+  min-height: 0;
+}
+
+.ms-like-body-mode-shell > .ms-like-table-surface {
+  height: 100%;
+  border: 0;
+  border-radius: 0;
 }
 
 .ms-like-body-chip {
-  min-height: 24px;
+  height: 24px;
   border: 0;
   border-radius: var(--ath-radius-sm);
   background: #ffffff;
@@ -12610,7 +12644,7 @@ function formatTimeLabel(value?: string | null) {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 300px;
+  min-height: 0;
   border-radius: 10px;
   background: #f9fafb;
   color: var(--el-text-color-secondary);
@@ -12651,7 +12685,9 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-table-header {
-  min-height: 38px;
+  box-sizing: border-box;
+  height: 40px;
+  min-height: 40px;
   border-bottom: 1px solid #e5e7eb;
   background: #f9fafb;
   color: #6b7280;
@@ -14145,7 +14181,7 @@ pre {
   }
 
   .ms-like-editor-shell {
-    grid-template-rows: minmax(340px, 48%) 6px minmax(300px, 1fr);
+    grid-template-rows: minmax(0, 48fr) 6px minmax(0, 52fr);
   }
 
   .ms-like-param-table-grid--query {

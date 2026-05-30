@@ -155,6 +155,48 @@ public class ApiAutomationController {
         return ApiResponse.ok(null, "API case deleted");
     }
 
+    @GetMapping("/definition-modules")
+    public ApiResponse<List<ApiDefinitionModuleItem>> listDefinitionModules(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(apiAutomationService.listDefinitionModules(workspaceCode));
+    }
+
+    @PostMapping("/definition-modules")
+    public ApiResponse<ApiDefinitionModuleItem> createDefinitionModule(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody ApiDefinitionModuleRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.createDefinitionModule(workspaceCode, request), "Definition module created");
+    }
+
+    @PutMapping("/definition-modules/{id}")
+    public ApiResponse<ApiDefinitionModuleItem> updateDefinitionModule(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody ApiDefinitionModuleRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.updateDefinitionModule(id, workspaceCode, request), "Definition module updated");
+    }
+
+    @PutMapping("/definition-modules/{id}/move")
+    public ApiResponse<ApiDefinitionModuleItem> moveDefinitionModule(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestBody MoveApiDefinitionModuleRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.moveDefinitionModule(id, workspaceCode, request), "Definition module moved");
+    }
+
+    @DeleteMapping("/definition-modules/{id}")
+    public ApiResponse<Void> deleteDefinitionModule(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        apiAutomationService.deleteDefinitionModule(id, workspaceCode);
+        return ApiResponse.ok(null, "Definition module deleted");
+    }
+
     @PostMapping("/cases/{id}/run")
     public ApiResponse<ApiRunResponse> runCase(
             @PathVariable Long id,

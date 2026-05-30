@@ -210,6 +210,32 @@ public final class ApiAutomationModels {
     ) {
     }
 
+    public record ApiDefinitionModuleRequest(
+            String workspaceCode,
+            Long parentId,
+            @NotBlank(message = "Module name cannot be blank") String name
+    ) {
+    }
+
+    public record MoveApiDefinitionModuleRequest(
+            Long parentId,
+            Integer sortOrder
+    ) {
+    }
+
+    public record ApiDefinitionModuleItem(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            Long parentId,
+            String name,
+            String fullPath,
+            Integer sortOrder,
+            Long definitionCount,
+            List<ApiDefinitionModuleItem> children
+    ) {
+    }
+
     public record SaveApiDefinitionCaseRequest(
             String workspaceCode,
             @NotNull(message = "Definition id cannot be blank") Long definitionId,

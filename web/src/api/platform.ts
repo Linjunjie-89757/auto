@@ -9,6 +9,7 @@ import type {
   ApiResponse,
   ApiDefinitionDetail,
   ApiDefinitionItem,
+  ApiDefinitionModuleItem,
   ApiEnvironmentItem,
   ApiRunPayload,
   ApiRunResponse,
@@ -689,6 +690,29 @@ export const platformApi = {
   },
   deleteApiDefinition(workspaceCode: string, id: number) {
     return request<void>(`/automation/api/definitions/${id}`, {
+      method: 'DELETE',
+      workspaceCode,
+    })
+  },
+  getApiDefinitionModules(workspaceCode: string) {
+    return request<ApiDefinitionModuleItem[]>('/automation/api/definition-modules', { workspaceCode })
+  },
+  createApiDefinitionModule(workspaceCode: string, payload: { workspaceCode?: string; parentId?: number | null; name: string }) {
+    return request<ApiDefinitionModuleItem>('/automation/api/definition-modules', {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  updateApiDefinitionModule(workspaceCode: string, id: number, payload: { workspaceCode?: string; parentId?: number | null; name: string }) {
+    return request<ApiDefinitionModuleItem>(`/automation/api/definition-modules/${id}`, {
+      method: 'PUT',
+      workspaceCode,
+      body: JSON.stringify(payload),
+    })
+  },
+  deleteApiDefinitionModule(workspaceCode: string, id: number) {
+    return request<void>(`/automation/api/definition-modules/${id}`, {
       method: 'DELETE',
       workspaceCode,
     })

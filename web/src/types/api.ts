@@ -764,6 +764,18 @@ export interface ApiDefinitionDetail extends ApiDefinitionItem {
   createdAt: string | null
 }
 
+export interface ApiDefinitionModuleItem {
+  id: number
+  workspaceCode: string
+  workspaceName: string
+  parentId: number | null
+  name: string
+  fullPath: string
+  sortOrder: number | null
+  definitionCount: number
+  children: ApiDefinitionModuleItem[]
+}
+
 export interface ApiDefinitionCaseItem {
   id: number
   workspaceCode: string

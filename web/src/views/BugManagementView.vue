@@ -116,7 +116,7 @@ const bugColumnSettings: BugColumnSetting[] = [
   { key: 'title', label: '缺陷名称', width: 'minmax(260px, 1fr)', required: true },
   { key: 'status', label: '状态', width: '112px', required: true },
   { key: 'priority', label: '优先级', width: '88px' },
-  { key: 'severity', label: '严重程度', width: '96px' },
+  { key: 'severity', label: '严重程度', width: '112px' },
   { key: 'assigneeName', label: '处理人', width: '120px' },
   { key: 'workspaceName', label: '所属空间', width: '132px', allOnly: true },
   { key: 'tags', label: '标签', width: '190px' },
@@ -191,27 +191,6 @@ const statCards = computed(() => [
   { label: '处理中', value: statusCounts.value.IN_PROGRESS ?? 0, status: 'IN_PROGRESS', description: '正在处理中' },
   { label: '待验证', value: statusCounts.value.PENDING_VERIFY ?? 0, status: 'PENDING_VERIFY', description: '等待验证结果' },
 ])
-
-const currentWorkspaceName = computed(() => {
-  if (isAllScope.value) {
-    return '全部空间'
-  }
-  const matched = workspaces.value.find(item => item.code === workspaceCode.value)
-  return matched?.name ?? workspaceCode.value
-})
-
-const pageSubtitle = computed(() => `当前范围：${currentWorkspaceName.value}，支持按状态、优先级、严重程度和处理人快速定位缺陷。`)
-
-const activeFilterCount = computed(() => {
-  let count = 0
-  if (bugFilters.keyword.trim()) count += 1
-  if (bugFilters.status) count += 1
-  if (bugFilters.priority) count += 1
-  if (bugFilters.severity) count += 1
-  if (bugFilters.assigneeId !== null) count += 1
-  if (isAllScope.value && bugFilters.workspaceCode) count += 1
-  return count
-})
 
 function selectStatCard(status: string) {
   bugFilters.status = status
@@ -381,9 +360,9 @@ function priorityTone(priority: string | null | undefined) {
     case 'P0':
       return 'critical'
     case 'P1':
-      return 'high'
+      return 'p1'
     case 'P2':
-      return 'medium'
+      return 'p2'
     case 'P3':
       return 'low'
     default:
@@ -848,13 +827,6 @@ onMounted(() => {
 
 <template>
   <section class="page-shell bug-page-shell">
-    <div class="page-header bug-page-header">
-      <div class="bug-page-heading">
-        <div class="page-title">缺陷管理</div>
-        <p class="bug-page-subtitle">{{ pageSubtitle }}</p>
-      </div>
-    </div>
-
     <div class="stats-grid bug-stats-grid">
       <article
         v-for="item in statCards"
@@ -871,69 +843,55 @@ onMounted(() => {
         @keydown.enter.prevent="selectStatCard(item.status)"
         @keydown.space.prevent="selectStatCard(item.status)"
       >
-        <div class="metric-label">{{ item.label }}</div>
+        <div class="bug-stat-head">
+          <div class="metric-label">{{ item.label }}</div>
+          <span :class="['bug-stat-dot', `bug-stat-dot-${statusTone(item.status)}`]" />
+        </div>
         <div class="metric-value">{{ item.value }}</div>
         <div class="metric-trend">{{ item.description }}</div>
-        <div class="bug-stat-caption">
-          {{ item.status ? '点击筛选该状态' : '查看全部缺陷' }}
-        </div>
       </article>
     </div>
 
     <article class="panel-card bug-list-panel">
-      <div class="bug-list-header">
-        <div class="bug-list-heading">
-          <div class="bug-list-title">缺陷列表</div>
-          <div class="bug-list-subtitle">
-            当前共 {{ total }} 条记录
-            <span class="bug-list-divider">·</span>
-            {{ activeFilterCount }} 个筛选条件生效
-          </div>
+      <div class="bug-toolbar-row">
+        <div class="bug-toolbar-left">
+          <el-input
+            v-model="bugFilters.keyword"
+            placeholder="搜索缺陷编号、说明..."
+            :prefix-icon="Search"
+            clearable
+            class="bug-filter-search"
+          />
+          <el-select v-model="bugFilters.status" clearable :value-on-clear="''" placeholder="状态" class="bug-filter-select">
+            <el-option v-for="item in bugStatusOptions" :key="item.value" :label="item.label" :value="item.value" />
+          </el-select>
+          <el-select v-model="bugFilters.priority" clearable placeholder="优先级" class="bug-filter-select">
+            <el-option v-for="item in priorityOptions" :key="item" :label="item" :value="item" />
+          </el-select>
+          <el-select v-model="bugFilters.severity" clearable placeholder="严重程度" class="bug-filter-select">
+            <el-option v-for="item in severityOptions" :key="item" :label="formatSeverity(item)" :value="item" />
+          </el-select>
+          <el-select v-model="bugFilters.assigneeId" clearable placeholder="处理人" class="bug-filter-select">
+            <el-option v-for="item in users" :key="item.id" :label="item.displayName" :value="item.id" />
+          </el-select>
+          <el-select
+            v-if="isAllScope"
+            v-model="bugFilters.workspaceCode"
+            clearable
+            placeholder="所属空间"
+            class="bug-filter-select"
+          >
+            <el-option v-for="item in workspaces" :key="item.code" :label="item.name" :value="item.code" />
+          </el-select>
+          <el-button class="bug-filter-reset" @click="resetFilters">
+            <el-icon><RefreshRight /></el-icon>
+            重置
+          </el-button>
         </div>
-        <div class="bug-list-actions">
+        <div class="bug-toolbar-right">
           <el-button type="primary" class="bug-create-button" @click="openCreateDialog">
             <el-icon><Plus /></el-icon>
             新建缺陷
-          </el-button>
-        </div>
-      </div>
-
-      <div class="bug-filter-toolbar">
-        <el-input
-          v-model="bugFilters.keyword"
-          placeholder="搜索缺陷编号或标题"
-          clearable
-          class="bug-filter-search"
-        />
-        <el-select v-model="bugFilters.status" clearable :value-on-clear="''" placeholder="状态" class="bug-filter-select">
-          <el-option v-for="item in bugStatusOptions" :key="item.value" :label="item.label" :value="item.value" />
-        </el-select>
-        <el-select v-model="bugFilters.priority" clearable placeholder="优先级" class="bug-filter-select">
-          <el-option v-for="item in priorityOptions" :key="item" :label="item" :value="item" />
-        </el-select>
-        <el-select v-model="bugFilters.severity" clearable placeholder="严重程度" class="bug-filter-select">
-          <el-option v-for="item in severityOptions" :key="item" :label="formatSeverity(item)" :value="item" />
-        </el-select>
-        <el-select v-model="bugFilters.assigneeId" clearable placeholder="处理人" class="bug-filter-select">
-          <el-option v-for="item in users" :key="item.id" :label="item.displayName" :value="item.id" />
-        </el-select>
-        <el-select
-          v-if="isAllScope"
-          v-model="bugFilters.workspaceCode"
-          clearable
-          placeholder="所属空间"
-          class="bug-filter-select"
-        >
-          <el-option v-for="item in workspaces" :key="item.code" :label="item.name" :value="item.code" />
-        </el-select>
-        <div class="bug-filter-actions">
-          <el-button @click="pageNo = 1">
-            <el-icon><Search /></el-icon>
-            查询
-          </el-button>
-          <el-button @click="resetFilters">
-            <el-icon><RefreshRight /></el-icon>
-            重置
           </el-button>
         </div>
       </div>
@@ -1045,7 +1003,7 @@ onMounted(() => {
 
       <div class="table-pagination">
         <div class="table-pagination-summary">
-          当前页 {{ pagedBugs.length }} 条，共 {{ total }} 条
+          共 {{ total }} 条 / {{ totalPages }} 页
         </div>
         <div class="table-pagination-right">
           <el-pagination
@@ -1156,32 +1114,15 @@ onMounted(() => {
 
 <style scoped>
 .bug-page-shell {
-  gap: 20px;
-}
-
-.bug-page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.bug-page-heading {
-  min-width: 0;
-}
-
-.bug-page-subtitle {
-  margin: 8px 0 0;
-  color: var(--text-subtle);
-  font-size: 14px;
-  line-height: 1.6;
+  gap: 32px;
 }
 
 .bug-create-button {
   height: 36px;
   padding: 0 16px;
-  border-radius: 10px;
-  box-shadow: 0 10px 24px rgba(64, 158, 255, 0.18);
+  border-radius: 8px;
+  border: 0;
+  box-shadow: none;
 }
 
 .detail-body :deep(img) {
@@ -1196,179 +1137,126 @@ onMounted(() => {
 
 .bug-stats-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  gap: 24px;
 }
 
 .bug-stat-card {
-  position: relative;
-  min-width: 0;
   cursor: pointer;
-  outline: none;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.94));
-  transition:
-    transform 0.18s ease,
-    border-color 0.18s ease,
-    box-shadow 0.18s ease,
-    background 0.18s ease;
-}
-
-.bug-stat-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 18px;
-  right: 18px;
-  height: 3px;
-  border-radius: 999px;
-  opacity: 0.78;
+  min-width: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: none;
+  transition: all 150ms ease;
 }
 
 .bug-stat-card:hover,
 .bug-stat-card:focus-visible {
-  transform: translateY(-2px);
-  border-color: rgba(148, 163, 184, 0.36);
-  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
 }
 
 .bug-stat-card-active {
-  border-color: rgba(64, 158, 255, 0.32);
-  box-shadow: 0 18px 40px rgba(64, 158, 255, 0.12);
+  border-color: #d1d5db;
 }
 
-.bug-stat-card-neutral::before {
-  background: linear-gradient(90deg, #94a3b8, #cbd5e1);
-}
-
-.bug-stat-card-assigned::before {
-  background: linear-gradient(90deg, #60a5fa, #3b82f6);
-}
-
-.bug-stat-card-processing::before {
-  background: linear-gradient(90deg, #818cf8, #6366f1);
-}
-
-.bug-stat-card-verify::before {
-  background: linear-gradient(90deg, #2dd4bf, #14b8a6);
-}
-
-.bug-stat-card-success::before {
-  background: linear-gradient(90deg, #34d399, #10b981);
-}
-
-.bug-stat-card-muted::before {
-  background: linear-gradient(90deg, #cbd5e1, #94a3b8);
-}
-
-.bug-stat-caption {
-  margin-top: 10px;
-  color: var(--text-subtle);
-  font-size: 12px;
-}
-
-.bug-list-panel {
-  padding: 16px 16px 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.05);
-}
-
-.bug-list-header {
+.bug-stat-head {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 12px;
-}
-
-.bug-list-heading {
-  min-width: 0;
-}
-
-.bug-list-actions {
-  display: inline-flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.bug-stat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
   flex: 0 0 auto;
 }
 
-.bug-list-title {
-  color: #111827;
-  font-size: 16px;
-  font-weight: 600;
-  line-height: 1.4;
+.bug-stat-dot-neutral {
+  background: #3b82f6;
 }
 
-.bug-list-subtitle {
-  margin-top: 4px;
-  color: var(--text-subtle);
-  font-size: 12px;
-  line-height: 1.5;
+.bug-stat-dot-assigned {
+  background: #a855f7;
 }
 
-.bug-list-divider {
-  margin: 0 6px;
-  color: #cbd5e1;
+.bug-stat-dot-processing {
+  background: #22c55e;
 }
 
-.bug-table-settings-trigger {
-  width: 22px;
-  height: 22px;
-  min-width: 22px;
+.bug-stat-dot-verify {
+  background: #f97316;
+}
+
+.bug-stat-dot-success {
+  background: #22c55e;
+}
+
+.bug-stat-dot-muted {
+  background: #94a3b8;
+}
+
+.bug-list-panel {
   padding: 0;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: #64748b;
+  overflow: hidden;
+  margin-bottom: 24px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
   box-shadow: none;
-  transition: background-color 0.16s ease, color 0.16s ease;
 }
 
-.bug-table-settings-trigger:hover,
-.bug-table-settings-trigger:focus-visible {
-  background: rgba(148, 163, 184, 0.14);
-  color: #334155;
-}
-
-.bug-table-settings-trigger:deep(.el-icon) {
-  font-size: 13px;
-}
-
-.bug-filter-toolbar {
+.bug-toolbar-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 24px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.bug-toolbar-left,
+.bug-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.bug-toolbar-left {
+  min-width: 0;
+  flex: 1 1 auto;
   flex-wrap: wrap;
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 10px;
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.96));
+}
+
+.bug-toolbar-right {
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .bug-filter-search {
-  width: min(280px, 100%);
+  width: 224px;
 }
 
 .bug-filter-select {
   width: 136px;
 }
 
-.bug-filter-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
+.bug-filter-reset {
+  height: 36px;
+  padding: 0 14px;
+  border-color: #d1d5db;
+  border-radius: 8px;
+  color: #374151;
 }
 
 .bug-table-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 160px;
+  grid-template-columns: minmax(0, 1fr) 150px;
   width: 100%;
   min-height: 0;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 10px;
-  overflow: hidden;
+  border-top: 0;
   background: #fff;
 }
 
@@ -1381,7 +1269,6 @@ onMounted(() => {
   height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
-  background: #fff;
 }
 
 .bug-grid {
@@ -1390,29 +1277,36 @@ onMounted(() => {
 
 .bug-grid-header {
   min-height: 44px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-  color: #64748b;
+  border-bottom: 1px solid #e5e7eb;
+  color: #6b7280;
   font-size: 12px;
-  font-weight: 600;
-  background: #f8fafc;
+  font-weight: 500;
+  background: #f9fafb;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.bug-grid-header .bug-cell {
+  padding: 12px 24px;
 }
 
 .bug-grid-row {
-  min-height: 56px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
-  font-size: 12px;
+  height: 74px;
+  min-height: 74px;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 14px;
   background: #fff;
   transition: background 0.16s ease;
 }
 
 .bug-grid-row:hover {
-  background: rgba(248, 250, 252, 0.72);
+  background: #f9fafb;
 }
 
 .bug-cell {
   display: flex;
   align-items: center;
-  padding: 10px 10px;
+  padding: 16px 24px;
   min-width: 0;
 }
 
@@ -1422,14 +1316,14 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #334155;
+  color: #374151;
 }
 
 .bug-no-trigger {
   padding: 0;
   min-width: 0;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .bug-title-cell {
@@ -1445,10 +1339,11 @@ onMounted(() => {
 .bug-title-text {
   display: block;
   width: 100%;
+  max-width: 320px;
   overflow: hidden;
-  color: #0f172a;
-  font-weight: 500;
-  font-size: 12px;
+  color: #111827;
+  font-weight: 400;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1469,12 +1364,52 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   min-width: 0;
-  height: 24px;
-  padding: 0 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
   white-space: nowrap;
+}
+
+.bug-status-pill {
+  min-height: 22px;
+  border-radius: 9999px;
+  padding: 2px 10px;
+}
+
+.bug-badge {
+  min-height: 20px;
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+.bug-status-pill-assigned {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.bug-status-pill-processing {
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.bug-status-pill-verify {
+  border: 1px solid #fed7aa;
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.bug-status-pill-success {
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #047857;
+}
+
+.bug-status-pill-muted {
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #64748b;
 }
 
 .bug-status-pill-neutral,
@@ -1483,49 +1418,34 @@ onMounted(() => {
   color: #64748b;
 }
 
-.bug-status-pill-assigned {
-  background: rgba(59, 130, 246, 0.12);
-  color: #2563eb;
-}
-
-.bug-status-pill-processing {
-  background: rgba(99, 102, 241, 0.12);
-  color: #4f46e5;
-}
-
-.bug-status-pill-verify {
-  background: rgba(20, 184, 166, 0.12);
-  color: #0f766e;
-}
-
-.bug-status-pill-success {
-  background: rgba(16, 185, 129, 0.12);
-  color: #047857;
-}
-
-.bug-status-pill-muted {
-  background: rgba(148, 163, 184, 0.16);
-  color: #64748b;
-}
-
 .bug-badge-critical {
-  background: rgba(239, 68, 68, 0.12);
-  color: #dc2626;
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.bug-badge-p1 {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.bug-badge-p2 {
+  background: #fef9c3;
+  color: #a16207;
 }
 
 .bug-badge-high {
-  background: rgba(249, 115, 22, 0.12);
-  color: #ea580c;
+  background: #fef9c3;
+  color: #a16207;
 }
 
 .bug-badge-medium {
-  background: rgba(59, 130, 246, 0.12);
-  color: #2563eb;
+  background: #f3f4f6;
+  color: #374151;
 }
 
 .bug-badge-low {
-  background: rgba(34, 197, 94, 0.12);
-  color: #15803d;
+  background: #f3f4f6;
+  color: #374151;
 }
 
 .bug-table-empty {
@@ -1540,10 +1460,12 @@ onMounted(() => {
 .bug-table-actions {
   display: flex;
   flex-direction: column;
-  width: 160px;
-  min-width: 160px;
-  border-left: 1px solid rgba(148, 163, 184, 0.16);
-  background: #fcfdff;
+  position: sticky;
+  right: 0;
+  width: 150px;
+  min-width: 150px;
+  border-left: 1px solid #e5e7eb;
+  background: #fff;
 }
 
 .bug-actions-header {
@@ -1553,12 +1475,37 @@ onMounted(() => {
   gap: 4px;
   min-height: 44px;
   padding: 0 8px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-  color: #64748b;
+  border-bottom: 1px solid #e5e7eb;
+  color: #6b7280;
   font-size: 12px;
   font-weight: 600;
-  background: #f8fafc;
+  background: #f9fafb;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   white-space: nowrap;
+}
+
+.bug-table-settings-trigger {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #94a3b8;
+  box-shadow: none;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.bug-table-settings-trigger:hover,
+.bug-table-settings-trigger:focus-visible {
+  background: rgba(148, 163, 184, 0.14);
+  color: #475569;
+}
+
+.bug-table-settings-trigger:deep(.el-icon) {
+  font-size: 12px;
 }
 
 .bug-actions-row,
@@ -1566,9 +1513,10 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 56px;
+  height: 74px;
+  min-height: 74px;
   padding: 0 6px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  border-bottom: 1px solid #e5e7eb;
 }
 
 .bug-actions-empty {
@@ -1578,12 +1526,13 @@ onMounted(() => {
 .row-actions {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 12px;
   white-space: nowrap;
 }
 
 .row-actions :deep(.el-button) {
-  font-size: 12px;
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .table-pagination {
@@ -1591,13 +1540,14 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 12px;
+  padding: 16px 24px;
+  border-top: 1px solid #e5e7eb;
 }
 
 .table-pagination-summary {
-  color: var(--text-subtle);
-  font-size: 12px;
-  line-height: 32px;
+  color: #374151;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .table-pagination-right {
@@ -1607,7 +1557,7 @@ onMounted(() => {
 }
 
 .bug-table-scroll::-webkit-scrollbar {
-  height: 10px;
+  height: 8px;
 }
 
 .bug-table-scroll::-webkit-scrollbar-track {
@@ -1630,14 +1580,25 @@ onMounted(() => {
 
 :deep(.bug-filter-search .el-input__wrapper),
 :deep(.bug-filter-select .el-select__wrapper) {
-  min-height: 34px;
-  border-radius: 9px;
+  min-height: 36px;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px #d1d5db inset;
 }
 
-:deep(.bug-filter-actions .el-button) {
-  height: 34px;
-  padding: 0 12px;
-  border-radius: 9px;
+:deep(.bug-filter-search .el-input__wrapper) {
+  padding-left: 12px;
+}
+
+:deep(.bug-filter-search .el-input__prefix) {
+  color: #9ca3af;
+}
+
+:deep(.bug-create-button.el-button) {
+  background: #2563eb;
+}
+
+:deep(.bug-create-button.el-button:hover) {
+  background: #1d4ed8;
 }
 
 @media (max-width: 1280px) {
@@ -1645,25 +1606,25 @@ onMounted(() => {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .bug-filter-actions {
-    margin-left: 0;
+  .bug-toolbar-left {
+    width: 100%;
   }
 }
 
 @media (max-width: 960px) {
-  .bug-page-header,
-  .bug-list-header,
   .table-pagination {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .bug-list-actions,
+  .bug-toolbar-row,
   .table-pagination-right {
-    justify-content: flex-start;
+    flex-direction: column;
+    align-items: stretch;
   }
 
-  .bug-filter-search {
+  .bug-toolbar-left,
+  .bug-toolbar-right {
     width: 100%;
   }
 }
@@ -1671,6 +1632,16 @@ onMounted(() => {
 @media (max-width: 720px) {
   .bug-stats-grid {
     grid-template-columns: 1fr;
+  }
+
+  .bug-toolbar-row {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .table-pagination {
+    padding-left: 14px;
+    padding-right: 14px;
   }
 
   .bug-table-shell {
@@ -1682,16 +1653,10 @@ onMounted(() => {
   }
 
   .bug-filter-select,
-  .bug-filter-actions {
+  .bug-filter-search,
+  .bug-toolbar-right :deep(.el-button),
+  .bug-filter-reset {
     width: 100%;
-  }
-
-  .bug-filter-actions {
-    display: flex;
-  }
-
-  .bug-filter-actions :deep(.el-button) {
-    flex: 1;
   }
 }
 </style>

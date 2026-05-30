@@ -2,18 +2,18 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Bell,
+  ArrowLeft,
+  ArrowRight,
   ChatDotRound,
   Connection,
   DataBoard,
   DocumentChecked,
-  Expand,
-  Fold,
   FolderChecked,
   Monitor,
   Setting,
   SwitchButton,
 } from '@element-plus/icons-vue'
+import { Bell, ChevronDown, Layers } from '@lucide/vue'
 import { ElMessage } from 'element-plus'
 import { platformApi } from './api/platform'
 import { navigationItems } from './data/platform'
@@ -46,7 +46,7 @@ const activeMenu = computed(() => {
 })
 
 const isPublicRoute = computed(() => route.meta.public === true)
-const asideWidth = computed(() => (isMenuCollapsed.value ? '72px' : '248px'))
+const asideWidth = computed(() => (isMenuCollapsed.value ? '80px' : '256px'))
 
 function resolveWorkspaceFallback() {
   return workspaceOptions.value.find(item => item.code === 'ALL')?.code
@@ -81,12 +81,30 @@ const currentWorkspace = computed(() => {
   }
   return resolveWorkspaceFallback()
 })
+const currentWorkspaceLabel = computed(() =>
+  workspaceOptions.value.find(item => item.code === currentWorkspace.value)?.name ?? '全部',
+)
 
 const currentUserName = computed(() => authStore.currentUser?.displayName ?? '')
 const currentUserRole = computed(() => authStore.currentUser?.roleCode ?? '')
 const currentUserInitials = computed(() =>
   (authStore.currentUser?.displayName ?? 'U').slice(0, 1).toUpperCase(),
 )
+const currentPageTitle = computed(() => {
+  const path = route.path
+  if (path.startsWith('/cases/manage/execute')) return '用例执行'
+  if (path.startsWith('/cases/manage')) return '用例管理'
+  if (path.startsWith('/cases/ai-generate')) return 'AI 用例生成'
+  if (path.startsWith('/cases/ai-config')) return 'AI 配置'
+  if (path.startsWith('/cases/ai-records')) return 'AI 生成记录'
+  if (path.startsWith('/bugs')) return '缺陷管理'
+  if (path.startsWith('/automation/api')) return '接口自动化'
+  if (path.startsWith('/automation/web')) return 'Web UI 自动化'
+  if (path.startsWith('/automation/app')) return 'APP 自动化'
+  if (path.startsWith('/settings')) return '系统设置'
+  if (path.startsWith('/dashboard')) return '工作台'
+  return navigationItems.find(item => item.path === activeMenu.value)?.label ?? 'Auto Test Hub'
+})
 
 function toggleMenuCollapse() {
   isMenuCollapsed.value = !isMenuCollapsed.value
@@ -166,11 +184,21 @@ onMounted(loadWorkspaces)
 
   <el-container v-else class="app-shell">
     <el-aside class="app-aside" :width="asideWidth">
+      <button
+        class="aside-collapse-handle"
+        :title="isMenuCollapsed ? '展开菜单' : '收起菜单'"
+        @click="toggleMenuCollapse"
+      >
+        <el-icon>
+          <component :is="isMenuCollapsed ? ArrowRight : ArrowLeft" />
+        </el-icon>
+      </button>
+
       <div :class="['brand-block', { 'brand-block-collapsed': isMenuCollapsed }]">
         <div class="brand-mark">AT</div>
         <div v-if="!isMenuCollapsed">
           <div class="brand-title">Auto Test Hub</div>
-          <div class="brand-subtitle">公司内部自动化测试平台</div>
+          <div class="brand-subtitle">全功能自动化测试平台</div>
         </div>
       </div>
 
@@ -196,19 +224,15 @@ onMounted(loadWorkspaces)
       <div class="aside-footer">
         <div :class="['footer-card', { 'footer-card-collapsed': isMenuCollapsed }]">
           <template v-if="!isMenuCollapsed">
-            <div class="footer-label">当前建设重点</div>
-            <div class="footer-value">登录、空间权限、真实业务数据</div>
+            <div class="footer-user-row">
+              <div class="footer-user-avatar">{{ currentUserInitials }}</div>
+              <div class="footer-user-copy">
+                <div class="footer-user-name">{{ currentUserName }}</div>
+                <div class="footer-user-role">{{ currentUserRole }}</div>
+              </div>
+            </div>
           </template>
-          <el-button
-            class="menu-collapse-button"
-            circle
-            :title="isMenuCollapsed ? '展开菜单' : '收起菜单'"
-            @click="toggleMenuCollapse"
-          >
-            <el-icon>
-              <component :is="isMenuCollapsed ? Expand : Fold" />
-            </el-icon>
-          </el-button>
+          <div v-else class="footer-user-avatar footer-user-avatar-collapsed">{{ currentUserInitials }}</div>
         </div>
       </div>
     </el-aside>
@@ -216,30 +240,44 @@ onMounted(loadWorkspaces)
     <el-container>
       <el-header class="app-header">
         <div class="header-left">
-          <el-select
-            :model-value="currentWorkspace"
-            class="workspace-switcher"
-            placeholder="选择工作空间"
-            @change="handleWorkspaceChange"
+          <div class="header-page-title">{{ currentPageTitle }}</div>
+          <span class="header-divider" />
+          <el-dropdown
+            trigger="click"
+            popper-class="workspace-dropdown-menu"
+            @command="handleWorkspaceChange"
           >
-            <el-option
-              v-for="item in workspaceOptions"
-              :key="item.code"
-              :label="item.name"
-              :value="item.code"
-            />
-          </el-select>
+            <button class="workspace-switcher-button" type="button">
+              <Layers class="workspace-switcher-icon" />
+              <span class="workspace-switcher-label">{{ currentWorkspaceLabel }}</span>
+              <ChevronDown class="workspace-switcher-caret" />
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item
+                  v-for="item in workspaceOptions"
+                  :key="item.code"
+                  :command="item.code"
+                >
+                  {{ item.name }}
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
 
         <div class="header-right">
-          <el-button circle>
-            <el-icon><Bell /></el-icon>
-          </el-button>
+          <button class="header-icon-button" type="button">
+            <Bell class="header-bell-icon" />
+            <span class="header-icon-dot" />
+          </button>
+          <span class="header-divider header-divider-right" />
 
           <el-dropdown>
             <span class="user-pill">
               <span class="user-avatar">{{ currentUserInitials }}</span>
-              <span>{{ currentUserName }}</span>
+              <span class="user-pill-name">{{ currentUserName }}</span>
+              <ChevronDown class="user-pill-arrow" />
             </span>
             <template #dropdown>
               <el-dropdown-menu>

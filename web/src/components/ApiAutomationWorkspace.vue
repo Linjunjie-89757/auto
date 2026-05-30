@@ -11378,7 +11378,7 @@ function formatTimeLabel(value?: string | null) {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  height: 34px;
+  height: 36px;
   border-radius: var(--ath-radius-md);
   border: 1px solid transparent;
   font-size: var(--ath-font-sm);
@@ -11438,7 +11438,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-sidebar-search :deep(.el-input__wrapper) {
-  min-height: 34px;
+  min-height: 38px;
   border-radius: var(--ath-radius-md);
   background: var(--ath-bg-page);
   box-shadow: inset 0 0 0 1px var(--ath-input-border);
@@ -11535,11 +11535,19 @@ function formatTimeLabel(value?: string | null) {
   justify-content: space-between;
 }
 
+.ms-like-response-header {
+  min-height: 40px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--ath-border);
+  background: #ffffff;
+}
+
 .ms-like-tree-title,
 .ms-like-response-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-medium);
+  line-height: var(--ath-line-sm);
 }
 
 .ms-like-tree {
@@ -11745,8 +11753,9 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-method {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--ath-font-xs);
+  font-weight: var(--ath-weight-semibold);
+  line-height: var(--ath-line-xs);
 }
 
 .ms-like-method.method-get {
@@ -11828,7 +11837,9 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .request-method-option {
-  font-weight: 600;
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-semibold);
+  line-height: var(--ath-line-sm);
 }
 
 .request-method-get {
@@ -11858,14 +11869,16 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .request-method-select :deep(.el-select__wrapper) {
-  min-height: 36px;
+  min-height: 38px;
   padding: 0 10px;
-  border-radius: 7px;
+  border-radius: var(--ath-radius-md);
 }
 
 .request-method-select :deep(.el-select__selected-item) {
   justify-content: center;
-  font-weight: 600;
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-semibold);
+  line-height: var(--ath-line-sm);
 }
 
 .request-method-select.request-method-get :deep(.el-select__wrapper) {
@@ -12083,7 +12096,7 @@ function formatTimeLabel(value?: string | null) {
   border-bottom: 1px solid #e5e7eb;
   border-radius: 0;
   padding: 0;
-  min-height: 38px;
+  min-height: 40px;
   background: #ffffff;
   overflow: hidden;
 }
@@ -12157,7 +12170,7 @@ function formatTimeLabel(value?: string | null) {
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
-  min-height: 38px;
+  min-height: 40px;
   border: 0;
   border-right: 1px solid #e5e7eb;
   border-radius: 0;
@@ -12165,7 +12178,7 @@ function formatTimeLabel(value?: string | null) {
   color: var(--ath-text-muted);
   padding: 0 16px;
   font-size: var(--ath-font-sm);
-  line-height: 1;
+  line-height: var(--ath-line-sm);
   cursor: pointer;
 }
 
@@ -12202,8 +12215,8 @@ function formatTimeLabel(value?: string | null) {
   display: inline-flex;
   align-items: center;
   min-width: 0;
-  height: 18px;
-  line-height: 1;
+  height: 20px;
+  line-height: var(--ath-line-sm);
   max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -12214,7 +12227,7 @@ function formatTimeLabel(value?: string | null) {
   display: inline-flex;
   align-items: center;
   height: 18px;
-  line-height: 1;
+  line-height: 18px;
   flex: 0 0 auto;
 }
 
@@ -12256,7 +12269,7 @@ function formatTimeLabel(value?: string | null) {
   align-items: center;
   justify-content: center;
   width: 36px;
-  height: 38px;
+  height: 40px;
   border: 0;
   border-left: 1px solid #e5e7eb;
   border-radius: 0;
@@ -12275,7 +12288,7 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-tab-strip .scenario-editor-more-button {
   width: 36px;
-  height: 38px;
+  height: 40px;
   border-left: 1px solid #e5e7eb;
   border-radius: 0;
   background: #ffffff;
@@ -12359,7 +12372,9 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-url-compose .request-url-input :deep(.el-input__wrapper) {
   border-radius: 0;
   box-shadow: none;
-  min-height: 36px;
+  min-height: 38px;
+  font-size: var(--ath-font-sm);
+  line-height: var(--ath-line-sm);
 }
 
 .ms-like-url-compose .request-method-select :deep(.el-select__wrapper) {
@@ -12372,7 +12387,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-curl-button {
-  height: 36px;
+  height: 38px;
   border-width: 0 0 0 1px;
   border-color: #e5e7eb;
   border-radius: 0;
@@ -12397,7 +12412,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-save-dropdown :deep(.el-button) {
-  height: 36px;
+  height: 38px;
   border-color: #d1d5db;
   background: #ffffff;
   color: var(--ath-text-main);
@@ -12458,15 +12473,18 @@ function formatTimeLabel(value?: string | null) {
   gap: 6px;
   border: 0;
   background: transparent;
-  color: #4b5563;
-  font-size: 13px;
-  padding: 10px 8px;
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-normal);
+  line-height: var(--ath-line-sm);
+  padding: 10px 12px;
   cursor: pointer;
   white-space: nowrap;
 }
 
 .ms-like-top-tab.active {
-  color: #2563eb;
+  color: var(--ath-primary);
+  font-weight: var(--ath-weight-medium);
 }
 
 .ms-like-top-tab.active::after {
@@ -12476,7 +12494,7 @@ function formatTimeLabel(value?: string | null) {
   right: 0;
   bottom: -1px;
   height: 2px;
-  background: #2563eb;
+  background: var(--ath-primary);
 }
 
 .ms-like-tab-badge {
@@ -12547,39 +12565,39 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-body-chip {
-  min-height: 26px;
+  min-height: 24px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--ath-radius-sm);
   background: #ffffff;
-  color: #6b7280;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1;
-  padding: 0 12px;
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
+  font-weight: var(--ath-weight-medium);
+  line-height: var(--ath-line-xs);
+  padding: 4px 12px;
   cursor: pointer;
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .ms-like-body-chip:first-child {
-  border-radius: 6px;
+  border-radius: var(--ath-radius-sm);
 }
 
 .ms-like-body-chip:last-child {
-  border-radius: 6px;
+  border-radius: var(--ath-radius-sm);
 }
 
 .ms-like-body-chip.active {
-  background: #2563eb;
+  background: var(--ath-primary);
   color: #ffffff;
 }
 
 .ms-like-body-chip:hover {
-  background: #f9fafb;
-  color: #374151;
+  background: var(--ath-bg-muted);
+  color: var(--ath-text-main);
 }
 
 .ms-like-body-chip.active:hover {
-  background: #2563eb;
+  background: var(--ath-primary);
   color: #ffffff;
 }
 
@@ -13009,8 +13027,9 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-response-metrics {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
+  color: var(--ath-text-subtle);
+  font-size: var(--ath-font-xs);
+  line-height: var(--ath-line-xs);
 }
 
 .ms-like-response-metric.is-success {

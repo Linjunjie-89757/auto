@@ -822,29 +822,43 @@ export const platformApi = {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
+    const consumeStreamText = (chunk: string) => {
+      const blocks = chunk.split(/\r?\n\r?\n/)
+      buffer = blocks.pop() ?? ''
+      for (const block of blocks) {
+        const dataLines = block
+          .split(/\r?\n/)
+          .filter(line => line.startsWith('data:'))
+          .map(line => line.slice(5).trim())
+        if (!dataLines.length) {
+          continue
+        }
+        try {
+          handlers.onEvent(JSON.parse(dataLines.join('\n')) as ApiAiCaseGenerationEvent)
+        }
+        catch {
+          // Ignore malformed SSE fragments and keep consuming later events.
+        }
+      }
+    }
     while (true) {
       const { done, value } = await reader.read()
       if (done) {
         break
       }
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split(/\r?\n/)
-      buffer = lines.pop() ?? ''
-      for (const line of lines) {
-        if (line.trim()) {
-          try {
-            handlers.onEvent(JSON.parse(line) as ApiAiCaseGenerationEvent)
-          }
-          catch {
-            // Ignore malformed stream fragments and keep consuming later events.
-          }
-        }
-      }
+      consumeStreamText(buffer + decoder.decode(value, { stream: true }))
     }
-    buffer += decoder.decode()
+    consumeStreamText(buffer + decoder.decode())
     if (buffer.trim()) {
       try {
-        handlers.onEvent(JSON.parse(buffer) as ApiAiCaseGenerationEvent)
+        const data = buffer
+          .split(/\r?\n/)
+          .filter(line => line.startsWith('data:'))
+          .map(line => line.slice(5).trim())
+          .join('\n')
+        if (data) {
+          handlers.onEvent(JSON.parse(data) as ApiAiCaseGenerationEvent)
+        }
       }
       catch {
         // Ignore malformed trailing stream content.

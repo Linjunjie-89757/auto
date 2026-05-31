@@ -67,17 +67,26 @@ public class ApiAiCaseGenerationService {
             List<ApiAiCaseGenerationSlot> slots = buildSlots(options, targetCount);
             writeEvent(writer, new ApiAiCaseGenerationEvent("started", null, null, null, slots.size(), null, null));
             int completed = 0;
-            for (int index = 0; index < slots.size(); index++) {
-                if (Thread.currentThread().isInterrupted()) {
-                    throw new BadRequestException("AI 生成已中断");
-                }
-                ApiAiCaseGenerationSlot slot = slots.get(index);
+            for (ApiAiCaseGenerationSlot slot : slots) {
                 writeEvent(writer, new ApiAiCaseGenerationEvent("item_generating", slot.id(), slot.group(), slot.type(), slots.size(), null, null));
-                try {
-                    ApiAiGeneratedCaseDraft draft = generateOneCase(workspace, provider, request, slot, index + 1, slots.size());
+            }
+            try {
+                List<ApiAiGeneratedCaseDraft> drafts = generateBatchCases(workspace, provider, request, slots);
+                for (int index = 0; index < slots.size(); index++) {
+                    if (Thread.currentThread().isInterrupted()) {
+                        throw new BadRequestException("AI 生成已中断");
+                    }
+                    ApiAiCaseGenerationSlot slot = slots.get(index);
+                    ApiAiGeneratedCaseDraft draft = index < drafts.size() ? drafts.get(index) : null;
+                    if (draft == null) {
+                        writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, "AI 未返回该用例"));
+                        continue;
+                    }
                     completed += 1;
                     writeEvent(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slots.size(), draft, null));
-                } catch (Exception exception) {
+                }
+            } catch (Exception exception) {
+                for (ApiAiCaseGenerationSlot slot : slots) {
                     writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, exception.getMessage()));
                 }
             }
@@ -86,6 +95,27 @@ public class ApiAiCaseGenerationService {
         } catch (Exception exception) {
             writeEvent(writer, new ApiAiCaseGenerationEvent("failed", null, null, null, null, null, exception.getMessage()));
         }
+    }
+
+    private List<ApiAiGeneratedCaseDraft> generateBatchCases(
+            WorkspaceEntity workspace,
+            ResolvedAiProvider provider,
+            ApiAiCaseGenerationRequest request,
+            List<ApiAiCaseGenerationSlot> slots
+    ) {
+        String prompt = buildBatchPrompt(workspace, request, slots);
+        String content = aiProviderClient.requestStructuredContent(provider.profile(), provider.apiKey(), prompt);
+        List<ApiAiGeneratedCaseDraft> drafts = parseDrafts(content);
+        List<ApiAiGeneratedCaseDraft> normalized = new ArrayList<>();
+        for (int index = 0; index < slots.size(); index++) {
+            ApiAiGeneratedCaseDraft draft = index < drafts.size() ? drafts.get(index) : null;
+            if (draft == null) {
+                normalized.add(null);
+                continue;
+            }
+            normalized.add(normalizeDraft(draft, request, slots.get(index), index + 1));
+        }
+        return normalized;
     }
 
     private ApiAiGeneratedCaseDraft generateOneCase(
@@ -99,6 +129,27 @@ public class ApiAiCaseGenerationService {
         String prompt = buildPrompt(workspace, request, slot, index, total);
         String content = aiProviderClient.requestStructuredContent(provider.profile(), provider.apiKey(), prompt);
         return normalizeDraft(parseDraft(content), request, slot, index);
+    }
+
+    private List<ApiAiGeneratedCaseDraft> parseDrafts(String content) {
+        try {
+            JsonNode parsed = objectMapper.readTree(content);
+            JsonNode casesNode = parsed.isArray() ? parsed : parsed.path("cases");
+            if (!casesNode.isArray()) {
+                throw new BadRequestException("AI 返回内容无法解析为接口用例列表 JSON");
+            }
+            List<ApiAiGeneratedCaseDraft> drafts = new ArrayList<>();
+            for (JsonNode itemNode : casesNode) {
+                try {
+                    drafts.add(objectMapper.treeToValue(itemNode, ApiAiGeneratedCaseDraft.class));
+                } catch (IOException exception) {
+                    drafts.add(null);
+                }
+            }
+            return drafts;
+        } catch (IOException exception) {
+            throw new BadRequestException("AI 返回内容无法解析为接口用例列表 JSON");
+        }
     }
 
     private ApiAiGeneratedCaseDraft parseDraft(String content) {
@@ -152,15 +203,16 @@ public class ApiAiCaseGenerationService {
         if (assertions.isEmpty()) {
             assertions = List.of(new ApiAssertionInput("STATUS_CODE", "STATUS_CODE", "LT", slot.groupKey().equals("positive") ? "400" : "500"));
         }
+        String expected = firstNonBlank(draft.expected(), defaultExpected(slot));
         return new ApiAiGeneratedCaseDraft(
-                firstNonBlank(draft.name(), slot.type() + " - " + method + " " + path),
+                normalizeCaseName(draft.name(), slot, method, path, expected),
                 blankToNull(draft.description()) == null ? defaultDescription(slot) : draft.description().trim(),
                 normalizeTags(draft.tags(), slot),
                 slot.group(),
                 slot.groupKey(),
                 slot.type(),
                 slot.typeKey(),
-                firstNonBlank(draft.expected(), defaultExpected(slot)),
+                expected,
                 requestConfig,
                 assertions,
                 defaultList(draft.preProcessors(), request.preProcessors()),
@@ -225,7 +277,87 @@ public class ApiAiCaseGenerationService {
                 2. 根据字段 required、paramType、minLength、maxLength 生成合理参数。
                 3. 不要生成与 existingCases 明显重复的用例。
                 4. assertions 使用系统已有字段，至少包含一个状态码断言。
-                5. 只返回单个 JSON 对象。
+                5. name 必须使用“类型 – 场景描述 – 期望结果”格式，例如“仅传必要字段 – 使用真实有效的必填字段 – 期望返回200成功”。
+                6. name 不要包含分组，不要使用“【正向】”“【反向】”“【边界】”“【安全性】”这类前缀。
+                7. expected 是给人看的预期/断言说明，assertions 是真正可执行断言配置。
+                8. 只返回单个 JSON 对象。
+
+                输入：
+                %s
+                """.formatted(toJson(payload));
+    }
+
+    private String buildBatchPrompt(
+            WorkspaceEntity workspace,
+            ApiAiCaseGenerationRequest request,
+            List<ApiAiCaseGenerationSlot> slots
+    ) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("workspaceName", workspace.getWorkspaceName());
+        payload.put("definition", Map.of(
+                "id", request.definitionId(),
+                "name", firstNonBlank(request.definitionName(), request.name(), "未命名接口"),
+                "method", firstNonBlank(request.method(), request.requestConfig() == null ? null : request.requestConfig().method(), "GET"),
+                "path", firstNonBlank(request.path(), request.requestConfig() == null ? null : request.requestConfig().path(), "/"),
+                "description", Optional.ofNullable(request.description()).orElse("")
+        ));
+        payload.put("sourceRequestConfig", request.requestConfig());
+        payload.put("sourceAssertions", defaultList(request.assertions(), List.of()));
+        payload.put("sourcePreProcessors", defaultList(request.preProcessors(), List.of()));
+        payload.put("sourcePostProcessors", defaultList(request.postProcessors(), List.of()));
+        payload.put("existingCases", defaultList(request.existingCases(), List.of()));
+        List<Map<String, Object>> targets = new ArrayList<>();
+        for (int index = 0; index < slots.size(); index++) {
+            ApiAiCaseGenerationSlot slot = slots.get(index);
+            targets.add(Map.of(
+                    "index", index + 1,
+                    "id", slot.id(),
+                    "group", slot.group(),
+                    "groupKey", slot.groupKey(),
+                    "type", slot.type(),
+                    "typeKey", slot.typeKey(),
+                    "noDuplicate", Boolean.TRUE.equals(request.noDuplicate()),
+                    "extraRequirement", Optional.ofNullable(request.prompt()).orElse("")
+            ));
+        }
+        payload.put("targets", targets);
+        return """
+                你是接口自动化测试专家。请基于下面的接口定义，一次性生成 targets 中要求的所有接口自动化用例。
+                必须只返回 JSON，不要 Markdown，不要解释。
+                返回结构必须是：
+                {
+                  "cases": [
+                    {
+                      "name": "类型 – 场景描述 – 期望结果",
+                      "description": "用例说明",
+                      "tags": ["标签"],
+                      "expected": "预期结果",
+                      "requestConfig": {
+                        "method": "GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS/TRACE",
+                        "path": "接口路径",
+                        "timeoutMs": 10000,
+                        "queryParams": [{"key":"","value":"","description":"","enabled":true,"paramType":"STRING","required":false,"encode":true,"minLength":null,"maxLength":null}],
+                        "headers": [{"key":"","value":"","description":"","enabled":true,"paramType":"STRING","required":false,"encode":true,"minLength":null,"maxLength":null}],
+                        "cookies": [],
+                        "body": {"type":"NONE|FORM_DATA|X_WWW_FORM_URLENCODED|RAW_JSON|RAW_XML|RAW_TEXT|BINARY","rawText":"","formItems":[],"contentType":"","fileName":"","binaryBase64":""},
+                        "authConfig": {"authType":"NONE|BASIC|DIGEST","basicAuth":{"userName":"","password":""},"digestAuth":{"userName":"","password":""}}
+                      },
+                      "assertions": [{"type":"STATUS_CODE","subject":"STATUS_CODE","operator":"LT","expectedValue":"400","enabled":true}],
+                      "preProcessors": [],
+                      "postProcessors": []
+                    }
+                  ]
+                }
+                规则：
+                1. cases 数量必须等于 targets 数量，并且顺序必须和 targets 完全一致。
+                2. 每个 case 必须围绕对应 target.type 生成。
+                3. 保持接口 method/path 不变，除非生成项明确需要改参数或请求体。
+                4. 根据字段 required、paramType、minLength、maxLength 生成合理参数。
+                5. 不要生成与 existingCases 或同批 cases 明显重复的用例。
+                6. name 必须使用“类型 – 场景描述 – 期望结果”格式，例如“仅传必要字段 – 使用真实有效的必填字段 – 期望返回200成功”。
+                7. name 不要包含分组，不要使用“【正向】”“【反向】”“【边界】”“【安全性】”这类前缀。
+                8. expected 是给人看的预期/断言说明，assertions 是真正可执行断言配置。
+                9. 只返回单个 JSON 对象。
 
                 输入：
                 %s
@@ -280,6 +412,7 @@ public class ApiAiCaseGenerationService {
                 continue;
             }
             normalized.add(new ApiAiCaseGenerationOption(
+                    blankToNull(option.id()),
                     option.key().trim(),
                     firstNonBlank(option.group(), "other"),
                     option.label().trim(),
@@ -308,7 +441,7 @@ public class ApiAiCaseGenerationService {
         for (int i = 0; i < targetCount; i++) {
             ApiAiCaseGenerationOption option = options.get(i % options.size());
             slots.add(new ApiAiCaseGenerationSlot(
-                    "ai-case-" + System.nanoTime() + "-" + i,
+                    firstNonBlank(option.id(), "ai-case-" + System.nanoTime() + "-" + i),
                     option.groupLabel(),
                     option.group(),
                     option.label(),
@@ -319,8 +452,12 @@ public class ApiAiCaseGenerationService {
     }
 
     private void writeEvent(Writer writer, ApiAiCaseGenerationEvent event) throws IOException {
-        writer.write(objectMapper.writeValueAsString(event));
+        writer.write("event: ");
+        writer.write(event.event());
         writer.write("\n");
+        writer.write("data: ");
+        writer.write(objectMapper.writeValueAsString(event));
+        writer.write("\n\n");
         writer.flush();
     }
 
@@ -374,6 +511,19 @@ public class ApiAiCaseGenerationService {
 
     private String defaultExpected(ApiAiCaseGenerationSlot slot) {
         return "positive".equals(slot.groupKey()) ? "预期接口返回成功响应" : "预期接口返回合理错误或被规则拦截";
+    }
+
+    private String normalizeCaseName(String rawName, ApiAiCaseGenerationSlot slot, String method, String path, String expected) {
+        String name = firstNonBlank(rawName, slot.type() + " – " + method + " " + path + " – " + expected);
+        name = name
+                .replaceFirst("^【[^】]+】\\s*", "")
+                .replaceFirst("^\\[[^\\]]+]\\s*", "")
+                .replaceFirst("^(正向|反向|负向|边界|安全性|安全)\\s*[-–—:：]\\s*", "")
+                .trim();
+        if (!name.startsWith(slot.type() + " – ") && !name.startsWith(slot.type() + " - ")) {
+            name = slot.type() + " – " + name;
+        }
+        return name;
     }
 
     private String toJson(Object value) {
@@ -432,6 +582,7 @@ public class ApiAiCaseGenerationService {
     }
 
     public record ApiAiCaseGenerationOption(
+            String id,
             String key,
             String group,
             String label,

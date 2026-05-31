@@ -4,6 +4,7 @@ import com.company.autoplatform.common.ApiResponse;
 import com.company.autoplatform.common.PageResponse;
 import com.company.autoplatform.workspace.WorkspaceScope;
 import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -221,7 +222,7 @@ public class ApiAutomationController {
         return ApiResponse.ok(apiAutomationService.debugRunCaseDraft(workspaceCode, request));
     }
 
-    @PostMapping(value = "/ai-case-generation/stream", produces = "application/x-ndjson")
+    @PostMapping(value = "/ai-case-generation/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public StreamingResponseBody streamGenerateApiCases(
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
             @RequestBody ApiAiCaseGenerationService.ApiAiCaseGenerationRequest request

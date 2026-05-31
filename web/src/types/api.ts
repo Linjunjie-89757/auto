@@ -1056,6 +1056,7 @@ export interface SaveApiDefinitionCasePayload {
 }
 
 export interface ApiAiCaseGenerationOptionPayload {
+  id?: string
   key: string
   group: string
   label: string

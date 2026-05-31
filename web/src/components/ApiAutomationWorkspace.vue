@@ -119,6 +119,7 @@ type DefinitionImportFormat = 'swagger' | 'postman' | 'har'
 type DefinitionImportMode = 'url' | 'file'
 type AiCaseGenerateGroup = 'positive' | 'negative' | 'boundary' | 'security'
 type AiCaseGenerateResultStatus = 'generating' | 'pending' | 'failed' | 'accepted' | 'discarded'
+type AiCaseGenerationStatusFilter = 'pending' | 'accepted' | 'discarded'
 type AiCaseGenerateOption = {
   key: string
   group: AiCaseGenerateGroup
@@ -528,6 +529,9 @@ const aiCaseGenerateNoDuplicate = ref(true)
 const aiCaseGenerateLoading = ref(false)
 const aiCaseGenerateResults = ref<AiCaseGenerateResult[]>([])
 const aiCaseGenerateAbortController = ref<AbortController | null>(null)
+const aiCaseGenerationFinishedIcon = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTQiIGhlaWdodD0iMTQiIHZpZXdCb3g9IjAgMCAxNCAxNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMu b3JnLzIwMDAvc3ZnIj4KICA8ZyBjbGlwLXBhdGg9InVybCgjY2xpcDBfMTA2NV8yMTk5MDQpIj4KICAgIDxwYXRoCiAgICAgIGQ9Ik01LjI0MTIxIDMuMDYxNTJDNS40MjgyOCAyLjE0NjI4IDYuNzM1NzggMi4xNDYyOCA2LjkyMjg1IDMuMDYxNTJDNy4zMzYxIDUuMDgyODEgOC45MTYxNyA2LjY2MzAzIDEwLjkzNzUgNy4wNzYxN0MxMS44NTI3IDcuMjYzMjcgMTEuODUyNyA4LjU3MDc1IDEwLjkzNzUgOC43NTc4MUM4LjkxNjI0IDkuMTcxMDMgNy4zMzYwNiAxMC43NTAyIDYuOTIyODUgMTIuNzcxNUM2LjczNTY4IDEzLjY4NjUgNS40MjgzOCAxMy42ODY1IDUuMjQxMjEgMTIuNzcxNUM0LjgyNzk4IDEwLjc1MDQgMy4yNDg2MiA5LjE3MTEgMS4yMjc1NCA4Ljc1NzgxQzAuMzEyMzA1IDguNTcwNzUgMC4zMTIzMzQgNy4yNjMyNyAxLjIyNzU0IDcuMDc2MTdDMy4yNDg2OSA2LjY2Mjk1IDQuODI3OTQgNS4wODI2NSA1LjI0MTIxIDMuMDYxNTJaTTEwLjY2MTEgMS4yMzkyNkMxMC43MzAxIDAuOTAyMDYxIDExLjIxMjMgMC45MDIwNjEgMTEuMjgxMiAxLjIzOTI2QzExLjQzMzYgMS45ODM3MSAxMi4wMTUzIDIuNTY1NDcgMTIuNzU5OCAyLjcxNzc3QzEzLjA5NyAyLjc4NjY5IDEzLjA5NyAzLjI2ODk3IDEyLjc1OTggMy4zMzc4OUMxMi4wMTUzIDMuNDkwMjQgMTEuNDMzNSA0LjA3MTg0IDExLjI4MTIgNC44MTY0MUMxMS4yMTIzIDUuMTUzNiAxMC43MzAxIDUuMTUzNiAxMC42NjExIDQuODE2NDFDMTAuNTA4OSA0LjA3MTggOS45MjcyMSAzLjQ5MDE2IDkuMTgyNjIgMy4zMzc4OUM4Ljg0NTU0IDMuMjY4OTEgOC44NDU1NCAyLjc4Njc1IDkuMTgyNjIgMi43MTc3N0M5LjkyNzE1IDIuNTY1NTQgMTAuNTA4OCAxLjk4Mzc1IDEwLjY2MTEgMS4yMzkyNloiCiAgICAgIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl8xMDY1XzIxOTkwNCkiIC8+CiAgPC9nPgogIDxkZWZzPgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJwYWludDBfbGluZWFyXzEwNjVfMjE5OTA0IiB4MT0iMC41NDEwMTYiIHkxPSIzLjUzMTQ2IiB4Mj0iMTMuMTEwNSIgeTI9IjMuNzAxNzUiCiAgICAgIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj4KICAgICAgPHN0b3Agc3RvcC1jb2xvcj0iI0U5NTZFOSIgLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIwLjcyIiBzdG9wLWNvbG9yPSIjRkY1ODVFIiAvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNGRkEzMDAiIC8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogICAgPGNsaXBQYXRoIGlkPSJjbGlwMF8xMDY1XzIxOTkwNCI+CiAgICAgIDxyZWN0IHdpZHRoPSIxNCIgaGVpZ2h0PSIxNCIgZmlsbD0id2hpdGUiIC8+CiAgICA8L2NsaXBQYXRoPgogIDwvZGVmcz4KPC9zdmc+Cg=='.replace(/\s/g, '')
+const aiGenerationStatusFilter = ref<AiCaseGenerationStatusFilter>('pending')
+const selectedAiCaseGenerateResultIds = ref<string[]>([])
 const aiGenerationDetailKeyword = ref('')
 const aiGenerationDetailGroupFilter = ref<AiCaseGenerateGroup | ''>('')
 const aiGenerationDetailTypeFilter = ref('')
@@ -969,6 +973,15 @@ const aiGenerationDetailTypeOptions = computed(() => aiCaseGenerateOptions
 const filteredAiCaseGenerationResults = computed(() => {
   const keyword = aiGenerationDetailKeyword.value.trim().toLowerCase()
   return activeAiCaseGenerationResults.value.filter((item) => {
+    if (aiGenerationStatusFilter.value === 'accepted' && item.status !== 'accepted') {
+      return false
+    }
+    if (aiGenerationStatusFilter.value === 'discarded' && item.status !== 'discarded') {
+      return false
+    }
+    if (aiGenerationStatusFilter.value === 'pending' && (item.status === 'accepted' || item.status === 'discarded')) {
+      return false
+    }
     const groupKey = aiCaseGenerateGroups.find(group => group.label === item.group)?.key ?? ''
     if (aiGenerationDetailGroupFilter.value && groupKey !== aiGenerationDetailGroupFilter.value) {
       return false
@@ -982,8 +995,21 @@ const filteredAiCaseGenerationResults = computed(() => {
     return [item.name, item.type, item.group].some(value => value.toLowerCase().includes(keyword))
   })
 })
-const filteredAiCaseGenerationSelectedCount = computed(() =>
-  filteredAiCaseGenerationResults.value.filter(item => item.status !== 'discarded' && item.status !== 'accepted').length)
+const aiCaseGenerationPendingCount = computed(() =>
+  activeAiCaseGenerationResults.value.filter(item => item.status !== 'accepted' && item.status !== 'discarded').length)
+const aiCaseGenerationAcceptedCount = computed(() =>
+  activeAiCaseGenerationResults.value.filter(item => item.status === 'accepted').length)
+const aiCaseGenerationDiscardedCount = computed(() =>
+  activeAiCaseGenerationResults.value.filter(item => item.status === 'discarded').length)
+const selectableAiCaseGenerationResults = computed(() =>
+  filteredAiCaseGenerationResults.value.filter(item => item.status !== 'generating' && item.status !== 'failed'))
+const selectedAiCaseGenerationResults = computed(() =>
+  selectableAiCaseGenerationResults.value.filter(item => selectedAiCaseGenerateResultIds.value.includes(item.id)))
+const isAiCaseGenerationAllSelected = computed(() =>
+  selectableAiCaseGenerationResults.value.length > 0
+  && selectableAiCaseGenerationResults.value.every(item => selectedAiCaseGenerateResultIds.value.includes(item.id)))
+const isAiCaseGenerationSelectionIndeterminate = computed(() =>
+  selectedAiCaseGenerationResults.value.length > 0 && !isAiCaseGenerationAllSelected.value)
 const aiCaseGenerateModelOptions = computed(() =>
   aiCaseGenerateProviderConnections.value
     .filter(item => item.status !== 0 && !!item.modelName?.trim())
@@ -2500,6 +2526,11 @@ watch(aiGenerationDetailGroupFilter, () => {
   }
 })
 
+watch([filteredAiCaseGenerationResults, aiGenerationStatusFilter], () => {
+  const visibleIds = new Set(filteredAiCaseGenerationResults.value.map(item => item.id))
+  selectedAiCaseGenerateResultIds.value = selectedAiCaseGenerateResultIds.value.filter(id => visibleIds.has(id))
+})
+
 watch(scenarioForm, () => {
   syncActiveScenarioEditorTab()
 }, { deep: true })
@@ -3702,6 +3733,13 @@ async function closeRequestEditorTab(key: string, options?: { activateFallback?:
   if (!closing) {
     return
   }
+  if (closing.resourceType === 'ai-case-generation' && hasUnacceptedAiGeneratedCases(closing)) {
+    await ElMessageBox.confirm('关闭后未采纳的 AI 生成用例将会废弃', '关闭窗口？', {
+      type: 'warning',
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+    })
+  }
   closing.aiGeneration?.abortController?.abort()
   if (closing.isDirty) {
     await ElMessageBox.confirm('\u5f53\u524d\u8bf7\u6c42\u6709\u672a\u4fdd\u5b58\u4fee\u6539\uff0c\u786e\u8ba4\u5173\u95ed\u8fd9\u4e2a\u8bf7\u6c42\u9875\u7b7e\u5417\uff1f', '\u5173\u95ed\u8bf7\u6c42', { type: 'warning' })
@@ -3790,8 +3828,8 @@ async function closeCaseDrawer() {
 function createAiCaseGenerationPlaceholder(option: AiCaseGenerateOption, index: number): AiCaseGenerateResult {
   const group = aiCaseGenerateGroups.find(groupItem => groupItem.key === option.group)?.label ?? '其他'
   return {
-    id: `ai-case-loading-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
-    name: `${option.label} - 生成中`,
+    id: createAiCaseGenerationItemId(index),
+    name: option.label,
     directoryName: definitionForm.directoryName || '',
     tags: [group, option.label],
     description: 'AI 正在生成接口用例',
@@ -3806,6 +3844,32 @@ function createAiCaseGenerationPlaceholder(option: AiCaseGenerateOption, index: 
     preProcessors: [],
     postProcessors: [],
   }
+}
+
+function createAiCaseGenerationItemId(index: number) {
+  return `ai-case-${Date.now()}-${index}`
+}
+
+function buildAiCaseGenerationPlaceholders(): AiCaseGenerateResult[] {
+  const selected = aiCaseGenerateOptions.filter(item => aiCaseGenerateSelectedOptions.value.includes(item.key))
+  const targetCount = resolveAiCaseGenerateTargetCount(selected.length)
+  return Array.from({ length: targetCount }, (_, index) =>
+    createAiCaseGenerationPlaceholder(selected[index % selected.length], index))
+}
+
+function resolveAiCaseGenerateTargetCount(selectedCount: number) {
+  if (aiCaseGenerateCount.value === 'AUTO') {
+    return Math.min(Math.max(selectedCount, 1), 12)
+  }
+  return Math.max(1, Math.min(80, Number(aiCaseGenerateCount.value)))
+}
+
+function hasUnacceptedAiGeneratedCases(tab: RequestEditorTab) {
+  return (tab.aiGeneration?.results || []).some(item =>
+    item.status !== 'generating'
+    && item.status !== 'failed'
+    && item.status !== 'accepted'
+    && item.status !== 'discarded')
 }
 
 function createAiCaseGenerationPlaceholderFromEvent(event: ApiAiCaseGenerationEvent, index: number): AiCaseGenerateResult {
@@ -3986,8 +4050,9 @@ async function submitAiCaseGeneratePreview() {
     return
   }
   aiCaseGenerateAbortController.value?.abort()
-  aiCaseGenerateResults.value = []
-  const state = openAiCaseGenerationResultTab([])
+  const placeholders = buildAiCaseGenerationPlaceholders()
+  aiCaseGenerateResults.value = placeholders
+  const state = openAiCaseGenerationResultTab(placeholders)
   if (!state) {
     return
   }
@@ -3996,7 +4061,7 @@ async function submitAiCaseGeneratePreview() {
   state.abortController = abortController
   aiCaseGenerateLoading.value = true
   try {
-    await platformApi.streamGenerateApiDefinitionCases(workspaceCode.value, buildAiCaseGenerationPayload(model), {
+    await platformApi.streamGenerateApiDefinitionCases(workspaceCode.value, buildAiCaseGenerationPayload(model, placeholders), {
       signal: abortController.signal,
       onEvent: event => handleAiCaseGenerationEvent(state, event),
     })
@@ -4029,7 +4094,7 @@ function parseAiCaseGenerateModelSelection() {
   return { connectionId, modelName: modelName.trim() }
 }
 
-function buildAiCaseGenerationPayload(model: { connectionId: number, modelName: string }): ApiAiCaseGenerationPayload {
+function buildAiCaseGenerationPayload(model: { connectionId: number, modelName: string }, placeholders: AiCaseGenerateResult[]): ApiAiCaseGenerationPayload {
   const selectedOptions = aiCaseGenerateOptions.filter(item => aiCaseGenerateSelectedOptions.value.includes(item.key))
   return {
     workspaceCode: definitionForm.workspaceCode || workspaceCode.value,
@@ -4044,11 +4109,12 @@ function buildAiCaseGenerationPayload(model: { connectionId: number, modelName: 
     caseCount: String(aiCaseGenerateCount.value),
     noDuplicate: aiCaseGenerateNoDuplicate.value,
     prompt: aiCaseGeneratePrompt.value,
-    options: selectedOptions.map(item => ({
-      key: item.key,
-      group: item.group,
-      label: item.label,
-      groupLabel: aiCaseGenerateGroups.find(group => group.key === item.group)?.label ?? item.group,
+    options: placeholders.map((item, index) => ({
+      id: item.id,
+      key: selectedOptions[index % selectedOptions.length]?.key || item.type,
+      group: aiCaseGenerateGroups.find(group => group.label === item.group)?.key || 'positive',
+      label: item.type,
+      groupLabel: item.group,
     })),
     requestConfig: cloneScenarioRequestConfig(definitionForm.requestConfig),
     assertions: JSON.parse(JSON.stringify(definitionForm.assertions || [])) as ApiAssertionConfig[],
@@ -4086,7 +4152,6 @@ function handleAiCaseGenerationEvent(state: AiCaseGenerateTabState, event: ApiAi
     if (target) {
       target.status = 'failed'
       target.errorMessage = event.message || '生成失败'
-      target.name = `${event.type || target.type} - 生成失败`
       target.group = event.group || target.group
       target.type = event.type || target.type
       refreshResults()
@@ -4119,7 +4184,7 @@ function findOrCreateAiCaseGenerationPlaceholder(state: AiCaseGenerateTabState, 
   }
   if (event.type) {
     placeholder.type = event.type
-    placeholder.name = `${event.type} - 生成中`
+    placeholder.name = event.type
   }
   state.results = [...state.results, placeholder]
   return placeholder
@@ -4136,7 +4201,7 @@ function findFirstAiCaseGenerationPlaceholder(state: AiCaseGenerateTabState, ite
 }
 
 function applyAiGeneratedDraftToResult(target: AiCaseGenerateResult, draft: ApiAiGeneratedCaseDraft) {
-  target.name = draft.name || target.name.replace(' - 生成中', '')
+  target.name = normalizeAiGeneratedCaseName(draft.name || target.name, draft.type || target.type, draft.expected || target.expected)
   target.description = draft.description || target.description
   target.tags = Array.isArray(draft.tags) ? [...draft.tags] : target.tags
   target.group = draft.group || target.group
@@ -4150,13 +4215,28 @@ function applyAiGeneratedDraftToResult(target: AiCaseGenerateResult, draft: ApiA
   target.errorMessage = ''
 }
 
+function normalizeAiGeneratedCaseName(name: string, type: string, expected?: string | null) {
+  const cleanName = (name || type || 'AI 生成用例')
+    .replace(/^【[^】]+】\s*/, '')
+    .replace(/^\[[^\]]+]\s*/, '')
+    .replace(/^(正向|反向|负向|边界|安全性|安全)\s*[-–—:：]\s*/, '')
+    .trim()
+  const cleanType = (type || '').trim()
+  if (!cleanType || cleanName.startsWith(`${cleanType} – `) || cleanName.startsWith(`${cleanType} - `)) {
+    return cleanName
+  }
+  const cleanExpected = (expected || '').trim()
+  return cleanExpected
+    ? `${cleanType} – ${cleanName} – ${cleanExpected}`
+    : `${cleanType} – ${cleanName}`
+}
+
 function markRemainingAiCaseGenerationRowsFailed(state: AiCaseGenerateTabState, message: string) {
   state.results
     .filter(item => item.status === 'generating')
     .forEach((item) => {
       item.status = 'failed'
       item.errorMessage = message
-      item.name = item.name.replace('生成中', '生成失败')
     })
 }
 
@@ -4164,7 +4244,79 @@ function updateAiCaseGenerateResultStatus(id: string, status: AiCaseGenerateResu
   const target = findAiCaseGenerateResult(id)
   if (target) {
     target.status = status
+    selectedAiCaseGenerateResultIds.value = selectedAiCaseGenerateResultIds.value.filter(itemId => itemId !== id)
+    refreshAiCaseGenerationResults()
   }
+}
+
+function refreshAiCaseGenerationResults() {
+  const state = activeAiCaseGenerationState.value
+  if (state) {
+    state.results = [...state.results]
+    aiCaseGenerateResults.value = state.results
+  }
+  else {
+    aiCaseGenerateResults.value = [...aiCaseGenerateResults.value]
+  }
+}
+
+function setAiGenerationStatusFilter(status: AiCaseGenerationStatusFilter) {
+  aiGenerationStatusFilter.value = status
+  selectedAiCaseGenerateResultIds.value = selectedAiCaseGenerateResultIds.value
+    .filter(id => filteredAiCaseGenerationResults.value.some(item => item.id === id))
+}
+
+function toggleAiCaseGenerationSelection(id: string, checked: boolean) {
+  const next = new Set(selectedAiCaseGenerateResultIds.value)
+  if (checked) {
+    next.add(id)
+  }
+  else {
+    next.delete(id)
+  }
+  selectedAiCaseGenerateResultIds.value = Array.from(next)
+}
+
+function toggleAllAiCaseGenerationSelection(checked: boolean) {
+  if (!checked) {
+    const visibleIds = new Set(selectableAiCaseGenerationResults.value.map(item => item.id))
+    selectedAiCaseGenerateResultIds.value = selectedAiCaseGenerateResultIds.value.filter(id => !visibleIds.has(id))
+    return
+  }
+  const next = new Set(selectedAiCaseGenerateResultIds.value)
+  selectableAiCaseGenerationResults.value.forEach(item => next.add(item.id))
+  selectedAiCaseGenerateResultIds.value = Array.from(next)
+}
+
+function discardSelectedAiCaseGenerateResults() {
+  if (!selectedAiCaseGenerationResults.value.length) {
+    ElMessage.info('请先选择用例')
+    return
+  }
+  selectedAiCaseGenerationResults.value.forEach((item) => {
+    item.status = 'discarded'
+  })
+  selectedAiCaseGenerateResultIds.value = []
+  refreshAiCaseGenerationResults()
+}
+
+async function acceptSelectedAiCaseGenerateResults() {
+  if (!selectedAiCaseGenerationResults.value.length) {
+    ElMessage.info('请先选择用例')
+    return
+  }
+  for (const item of [...selectedAiCaseGenerationResults.value]) {
+    await acceptAiCaseGenerateResult(item)
+  }
+}
+
+function runSelectedAiCaseGenerateResults() {
+  const target = selectedAiCaseGenerationResults.value[0]
+  if (!target) {
+    ElMessage.info('请先选择用例')
+    return
+  }
+  runAiCaseGenerateResult(target)
 }
 
 function runAiCaseGenerateResult(item: AiCaseGenerateResult) {
@@ -4208,7 +4360,7 @@ function buildCaseDraftFromAiGeneratedCase(item: AiCaseGenerateResult): ApiReque
     definitionName: state?.definitionName || definitionForm.name || '',
     workspaceCode: definitionForm.workspaceCode || workspaceCode.value,
     workspaceName: definitionForm.workspaceName || '',
-    name: item.name,
+    name: normalizeAiGeneratedCaseName(item.name, item.type, item.expected),
     method: item.requestConfig.method || state?.method || 'GET',
     path: item.requestConfig.path || state?.path || '',
     directoryName: item.directoryName || definitionForm.directoryName || '',
@@ -4229,7 +4381,7 @@ function buildCaseDraftFromAiGeneratedCase(item: AiCaseGenerateResult): ApiReque
 }
 
 function syncAiGeneratedCaseFromCaseDrawer(item: AiCaseGenerateResult) {
-  item.name = caseDrawerForm.name
+  item.name = normalizeAiGeneratedCaseName(caseDrawerForm.name, item.type, item.expected)
   item.directoryName = caseDrawerForm.directoryName || ''
   item.description = caseDrawerForm.description || ''
   item.tags = [...(caseDrawerForm.tags || [])]
@@ -4269,7 +4421,7 @@ function openAiGeneratedCaseInCaseDrawer(item: AiCaseGenerateResult) {
   tab.resourceType = 'case'
   tab.resourceId = null
   tab.definitionId = tab.draft.definitionId || activeAiCaseGenerationState.value?.definitionId || definitionForm.id || null
-  tab.title = item.name || 'AI 生成用例'
+  tab.title = normalizeAiGeneratedCaseName(item.name || 'AI 生成用例', item.type, item.expected)
   tab.method = item.requestConfig.method || activeAiCaseGenerationState.value?.method || 'GET'
   tab.debugReportId = item.debugReportId ?? null
   tab.debugFailureSummary = item.debugFailureSummary || ''
@@ -4324,7 +4476,7 @@ async function acceptAiCaseGenerateResult(item: AiCaseGenerateResult) {
     const payload = {
       workspaceCode: definitionForm.workspaceCode || workspaceCode.value,
       definitionId: definitionForm.id,
-      name: item.name,
+      name: normalizeAiGeneratedCaseName(item.name, item.type, item.expected),
       description: item.description || '',
       tags: item.tags || [],
       requestConfig: cloneScenarioRequestConfig(item.requestConfig),
@@ -4334,6 +4486,8 @@ async function acceptAiCaseGenerateResult(item: AiCaseGenerateResult) {
     }
     await platformApi.createApiDefinitionCase(workspaceCode.value, payload)
     item.status = 'accepted'
+    selectedAiCaseGenerateResultIds.value = selectedAiCaseGenerateResultIds.value.filter(id => id !== item.id)
+    refreshAiCaseGenerationResults()
     ElMessage.success('AI 生成用例已采纳并保存')
     await refreshData()
   }
@@ -7101,7 +7255,17 @@ function formatTimeLabel(value?: string | null) {
                     :class="['ms-like-editor-tab', { active: item.key === activeRequestEditorKey }]"
                     @click="activateRequestEditorTab(item.key)"
                   >
-                    <MagicStick v-if="item.resourceType === 'ai-case-generation'" class="ai-generation-tab-icon" />
+                    <span
+                      v-if="item.resourceType === 'ai-case-generation' && item.aiGeneration?.generating"
+                      :class="['ai-generation-tab-spinner', { spinning: item.aiGeneration?.generating }]"
+                      aria-hidden="true"
+                    ></span>
+                    <img
+                      v-else-if="item.resourceType === 'ai-case-generation'"
+                      :src="aiCaseGenerationFinishedIcon"
+                      alt="ai"
+                      class="ai-generation-tab-finished-icon"
+                    >
                     <span v-else :class="['ms-like-method', `method-${item.method.toLowerCase()}`]">
                       {{ item.method }}
                     </span>
@@ -7162,9 +7326,27 @@ function formatTimeLabel(value?: string | null) {
               <div class="ai-generation-detail-workspace">
                 <div class="ai-generation-detail-status-row">
                   <div class="ai-generation-detail-status-tabs">
-                    <button type="button" class="active">待处理 ({{ filteredAiCaseGenerationSelectedCount }})</button>
-                    <button type="button">已采纳</button>
-                    <button type="button">废弃</button>
+                    <button
+                      type="button"
+                      :class="{ active: aiGenerationStatusFilter === 'pending' }"
+                      @click="setAiGenerationStatusFilter('pending')"
+                    >
+                      待处理 ({{ aiCaseGenerationPendingCount }})
+                    </button>
+                    <button
+                      type="button"
+                      :class="{ active: aiGenerationStatusFilter === 'accepted' }"
+                      @click="setAiGenerationStatusFilter('accepted')"
+                    >
+                      已采纳 ({{ aiCaseGenerationAcceptedCount }})
+                    </button>
+                    <button
+                      type="button"
+                      :class="{ active: aiGenerationStatusFilter === 'discarded' }"
+                      @click="setAiGenerationStatusFilter('discarded')"
+                    >
+                      废弃 ({{ aiCaseGenerationDiscardedCount }})
+                    </button>
                   </div>
                   <button type="button" class="ai-generation-regenerate-button">
                     <MagicStick />
@@ -7194,18 +7376,24 @@ function formatTimeLabel(value?: string | null) {
                     />
                   </el-select>
                   <div class="ai-generation-detail-actions">
-                    <button type="button" class="ai-generation-run-selected">
+                    <button type="button" class="ai-generation-run-selected" @click="runSelectedAiCaseGenerateResults">
                       <Play />
                       运行选中
                     </button>
-                    <button type="button" class="ai-generation-accept-selected">采纳选中</button>
-                    <button type="button" class="ai-generation-discard-selected">废弃选中</button>
+                    <button type="button" class="ai-generation-accept-selected" @click="acceptSelectedAiCaseGenerateResults">采纳选中</button>
+                    <button type="button" class="ai-generation-discard-selected" @click="discardSelectedAiCaseGenerateResults">废弃选中</button>
                   </div>
                 </div>
 
                 <div class="ai-generation-detail-table">
                   <div class="ai-generation-detail-head">
-                    <el-checkbox :model-value="true" />
+                    <div class="ai-generation-row-selector">
+                      <el-checkbox
+                        :model-value="isAiCaseGenerationAllSelected"
+                        :indeterminate="isAiCaseGenerationSelectionIndeterminate"
+                        @update:model-value="toggleAllAiCaseGenerationSelection(Boolean($event))"
+                      />
+                    </div>
                     <span>名称</span>
                     <span>类型</span>
                     <span>分组</span>
@@ -7221,28 +7409,52 @@ function formatTimeLabel(value?: string | null) {
                       <span>正在连接 AI 模型，生成结果会逐条显示在这里</span>
                     </div>
                     <template
-                      v-for="item in filteredAiCaseGenerationResults"
+                      v-for="(item, index) in filteredAiCaseGenerationResults"
                       :key="item.id"
                     >
                       <div
                         :class="['ai-generation-detail-row', { active: false }]"
                         @click="toggleAiGeneratedCaseDetail(item)"
                       >
-                        <el-checkbox :model-value="item.status !== 'discarded'" :disabled="item.status === 'generating' || item.status === 'failed'" @click.stop />
+                        <div class="ai-generation-row-selector" @click.stop>
+                          <svg
+                            v-if="item.status === 'generating'"
+                            class="ai-generation-row-loading"
+                            version="1.1"
+                            xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 40 60 16"
+                            aria-hidden="true"
+                            focusable="false"
+                          >
+                            <circle fill="currentColor" stroke="none" cx="6" cy="50" r="6">
+                              <animate attributeName="opacity" dur="1s" values="0;1;0" repeatCount="indefinite" begin="0.1s" />
+                            </circle>
+                            <circle fill="currentColor" stroke="none" cx="26" cy="50" r="6">
+                              <animate attributeName="opacity" dur="1s" values="0;1;0" repeatCount="indefinite" begin="0.2s" />
+                            </circle>
+                            <circle fill="currentColor" stroke="none" cx="46" cy="50" r="6">
+                              <animate attributeName="opacity" dur="1s" values="0;1;0" repeatCount="indefinite" begin="0.3s" />
+                            </circle>
+                          </svg>
+                          <template v-else>
+                            <span class="ai-generation-row-index">{{ index + 1 }}</span>
+                            <el-checkbox
+                              class="ai-generation-row-checkbox"
+                              :model-value="selectedAiCaseGenerateResultIds.includes(item.id)"
+                              :disabled="item.status === 'failed'"
+                              @update:model-value="toggleAiCaseGenerationSelection(item.id, Boolean($event))"
+                            />
+                          </template>
+                        </div>
                         <div class="ai-generation-detail-name">
                           <span>{{ item.name }}</span>
-                          <small v-if="item.status === 'generating'">生成中...</small>
-                          <small v-else-if="item.status === 'failed'">{{ item.errorMessage || '生成失败' }}</small>
-                          <button type="button" class="ai-generation-inline-edit" aria-label="编辑" @click.stop>
-                            <MoreHorizontal />
-                          </button>
                         </div>
                         <div class="ai-generation-detail-group-cell">
                           <span class="ai-generation-case-tag">{{ item.type }}</span>
                         </div>
                         <span :class="['ai-generation-detail-group-type', item.group === '正向' ? 'is-positive' : 'is-negative']">{{ item.group }}</span>
                         <span :class="['ai-generation-run-result', { 'is-success': item.runResult === '通过', 'is-failed': item.runResult === '失败' || item.status === 'failed' }]">
-                          {{ item.status === 'generating' ? '生成中' : item.status === 'failed' ? '生成失败' : item.runResult || '-' }}
+                          {{ item.runResult || '-' }}
                         </span>
                         <div class="ai-generation-row-actions">
                           <button type="button" class="ai-generation-row-run" @click.stop="runAiCaseGenerateResult(item)">
@@ -15831,6 +16043,32 @@ function formatTimeLabel(value?: string | null) {
   border-top: 1px solid #f3f4f6;
 }
 
+.ai-generation-tab-spinner {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #bfdbfe;
+  border-top-color: #2563eb;
+  border-radius: 9999px;
+}
+
+.ai-generation-tab-spinner.spinning {
+  animation: ai-generation-spin 0.8s linear infinite;
+}
+
+.ai-generation-tab-finished-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+@keyframes ai-generation-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .ai-generation-tab-icon {
   width: 14px;
   height: 14px;
@@ -16111,6 +16349,41 @@ function formatTimeLabel(value?: string | null) {
 
 .ai-generation-detail-row.active {
   box-shadow: none;
+}
+
+.ai-generation-row-selector {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  justify-self: center;
+}
+
+.ai-generation-row-index {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.ai-generation-row-loading {
+  width: 16px;
+  height: 16px;
+  color: #3b82f6;
+}
+
+.ai-generation-row-checkbox {
+  display: none;
+}
+
+.ai-generation-detail-row:hover .ai-generation-row-index,
+.ai-generation-detail-row.active .ai-generation-row-index {
+  display: none;
+}
+
+.ai-generation-detail-row:hover .ai-generation-row-checkbox,
+.ai-generation-detail-row.active .ai-generation-row-checkbox {
+  display: inline-flex;
 }
 
 .ai-generation-detail-name {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Close } from '@element-plus/icons-vue'
+import { X } from '@lucide/vue'
 
 const props = defineProps<{
   modelValue: boolean
@@ -14,7 +14,7 @@ const props = defineProps<{
   priorityOptions: readonly string[]
   status: string
   statusOptions: readonly string[]
-  tagsInput: string
+  tags: string[]
   canDebug: boolean
   canWrite: boolean
   saving: boolean
@@ -29,7 +29,7 @@ const emit = defineEmits<{
   (event: 'update:caseName', value: string): void
   (event: 'update:priority', value: string): void
   (event: 'update:status', value: string): void
-  (event: 'update:tagsInput', value: string): void
+  (event: 'update:tags', value: string[]): void
   (event: 'requestClose'): void
   (event: 'debug'): void
   (event: 'create'): void
@@ -49,6 +49,10 @@ function handleDrawerModelValueChange(value: boolean) {
   emit('update:modelValue', value)
 }
 
+function handleBeforeClose() {
+  emit('requestClose')
+}
+
 function handleCloseClick() {
   emit('requestClose')
 }
@@ -65,10 +69,9 @@ function updateStatus(value: string | number) {
   emit('update:status', String(value))
 }
 
-function updateTagsInput(value: string | number) {
-  emit('update:tagsInput', String(value))
+function updateTags(value: string | string[]) {
+  emit('update:tags', Array.isArray(value) ? value.map(item => String(item).trim()).filter(Boolean) : [])
 }
-
 function handleSubmitClick() {
   if (props.isEdit) {
     emit('save')
@@ -90,6 +93,7 @@ function handleSubmitClick() {
     modal-class="api-case-drawer-modal"
     size="894px"
     class="api-case-drawer"
+    :before-close="handleBeforeClose"
     @update:model-value="handleDrawerModelValueChange"
   >
     <div class="api-case-drawer-shell">
@@ -98,9 +102,9 @@ function handleSubmitClick() {
           <div class="api-case-drawer-title">{{ props.title }}</div>
           <div class="api-case-drawer-subtitle">{{ props.subtitle }}</div>
         </div>
-        <el-button text class="api-case-drawer-close" @click="handleCloseClick">
-          <el-icon><Close /></el-icon>
-        </el-button>
+        <button type="button" class="api-case-drawer-close" @click="handleCloseClick">
+          <X />
+        </button>
       </div>
 
       <div class="api-case-drawer-scroll">
@@ -123,7 +127,7 @@ function handleSubmitClick() {
             class="api-case-drawer-name-input"
             @update:model-value="updateCaseName"
           />
-          <el-button type="primary" :disabled="!props.canDebug" :loading="props.saving" @click="emit('debug')">
+          <el-button class="api-case-drawer-debug-button" type="primary" :disabled="!props.canDebug" :loading="props.saving" @click="emit('debug')">
             {{ resolvedPrimaryActionLabel }}
           </el-button>
         </div>
@@ -147,12 +151,19 @@ function handleSubmitClick() {
           >
             <el-option v-for="item in props.statusOptions" :key="item" :label="item" :value="item" />
           </el-select>
-          <el-input
-            :model-value="props.tagsInput"
+          <el-select
+            :model-value="props.tags"
             :disabled="resolvedReadOnly"
             class="api-case-drawer-tags-field"
-            placeholder="添加标签，回车结束"
-            @update:model-value="updateTagsInput"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            :reserve-keyword="false"
+            :teleported="false"
+            popper-class="api-case-drawer-tag-popper"
+            placeholder="输入内容后回车可直接添加标签"
+            @update:model-value="updateTags"
           />
         </div>
 
@@ -168,8 +179,8 @@ function handleSubmitClick() {
       </div>
 
       <div v-if="resolvedShowFooter" class="api-case-drawer-footer">
-        <el-button @click="handleCloseClick">取消</el-button>
-        <el-button type="primary" :disabled="!props.canWrite" :loading="props.saving" @click="handleSubmitClick">
+        <el-button class="api-case-drawer-cancel-button" @click="handleCloseClick">取消</el-button>
+        <el-button class="api-case-drawer-submit-button" type="primary" :disabled="!props.canWrite" :loading="props.saving" @click="handleSubmitClick">
           {{ submitLabel }}
         </el-button>
       </div>
@@ -186,7 +197,9 @@ function handleSubmitClick() {
   max-width: calc(100vw - 24px);
   overflow: hidden;
   background: #fff;
-  box-shadow: -24px 0 56px rgba(15, 23, 42, 0.18);
+  border-left: 1px solid #e5e7eb;
+  border-radius: 16px 0 0 16px;
+  box-shadow: -24px 0 56px rgba(15, 23, 42, 0.16);
 }
 
 .api-case-drawer :deep(.el-drawer__body) {
@@ -207,8 +220,8 @@ function handleSubmitClick() {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 16px 10px;
-  border-bottom: 1px solid var(--el-border-color-light);
+  padding: 20px 24px;
+  border-bottom: 1px solid #f3f4f6;
   background: #fff;
 }
 
@@ -220,39 +233,51 @@ function handleSubmitClick() {
 }
 
 .api-case-drawer-title {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
   line-height: 24px;
-  color: #101828;
+  color: #111827;
 }
 
 .api-case-drawer-subtitle {
   font-size: 13px;
   line-height: 20px;
-  color: #667085;
+  color: #6b7280;
 }
 
 .api-case-drawer-close {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 32px;
   height: 32px;
   padding: 0;
+  border: 0;
   border-radius: 8px;
-  color: rgba(102, 112, 133, 0.4);
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
   transition: color 0.18s ease, background-color 0.18s ease;
 }
 
 .api-case-drawer-close:hover,
 .api-case-drawer-close:focus-visible {
-  color: #344054;
-  background: #f2f4f7;
+  color: #374151;
+  background: #f3f4f6;
+}
+
+.api-case-drawer-close svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2;
 }
 
 .api-case-drawer-scroll {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 14px 16px 16px;
+  padding: 20px 24px 24px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -274,7 +299,7 @@ function handleSubmitClick() {
 }
 
 .api-case-drawer-summary-card {
-  padding: 0 2px;
+  padding: 0;
 }
 
 .api-case-drawer-summary-main {
@@ -308,36 +333,39 @@ function handleSubmitClick() {
 }
 
 .api-case-drawer-method-tag.request-method-get {
-  color: #16a34a;
+  color: #15803d;
 }
 
 .api-case-drawer-method-tag.request-method-post {
-  color: #f97316;
+  color: #ea580c;
 }
 
-.api-case-drawer-method-tag.request-method-put,
-.api-case-drawer-method-tag.request-method-options,
-.api-case-drawer-method-tag.request-method-head {
-  color: #3b82f6;
+.api-case-drawer-method-tag.request-method-put {
+  color: #2563eb;
 }
 
 .api-case-drawer-method-tag.request-method-delete {
   color: #dc2626;
 }
 
-.api-case-drawer-method-tag.request-method-patch {
-  color: #ec4899;
+.api-case-drawer-method-tag.request-method-patch,
+.api-case-drawer-method-tag.request-method-options {
+  color: #7c3aed;
 }
 
 .api-case-drawer-method-tag.request-method-trace {
-  color: #8b5cf6;
+  color: #6b7280;
+}
+
+.api-case-drawer-method-tag.request-method-head {
+  color: #15803d;
 }
 
 .api-case-drawer-summary-path {
   min-width: 0;
   font-size: 13px;
   line-height: 20px;
-  color: #475467;
+  color: #4b5563;
   word-break: break-all;
 }
 
@@ -349,9 +377,96 @@ function handleSubmitClick() {
 }
 
 .api-case-drawer-name-input :deep(.el-input__wrapper),
-.api-case-drawer-meta-field :deep(.el-select__wrapper),
-.api-case-drawer-tags-field :deep(.el-input__wrapper) {
+.api-case-drawer-meta-field :deep(.el-select__wrapper) {
   min-height: 36px;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px #d1d5db;
+}
+
+.api-case-drawer-name-input :deep(.el-input__wrapper:hover),
+.api-case-drawer-meta-field :deep(.el-select__wrapper:hover) {
+  box-shadow: inset 0 0 0 1px #9ca3af;
+}
+
+.api-case-drawer-name-input :deep(.el-input__wrapper.is-focus),
+.api-case-drawer-meta-field :deep(.el-select__wrapper.is-focused) {
+  box-shadow: inset 0 0 0 1px #3b82f6, 0 0 0 2px rgba(59, 130, 246, 0.16);
+}
+
+.api-case-drawer-tags-field :deep(.el-select__wrapper) {
+  align-items: center;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px #d1d5db;
+}
+
+.api-case-drawer-tags-field :deep(.el-select__wrapper:hover) {
+  box-shadow: inset 0 0 0 1px #9ca3af;
+}
+
+.api-case-drawer-tags-field :deep(.el-select__wrapper.is-focused) {
+  box-shadow: inset 0 0 0 1px #3b82f6, 0 0 0 2px rgba(59, 130, 246, 0.16);
+}
+
+.api-case-drawer-tags-field :deep(.el-select__selection) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 34px;
+}
+
+.api-case-drawer-tags-field :deep(.el-select__selected-item) {
+  margin: 0;
+}
+
+.api-case-drawer-tags-field :deep(.el-tag) {
+  height: 24px;
+  margin: 0;
+  padding: 0 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: #f5f7fa;
+  color: #344054;
+  line-height: 22px;
+  box-shadow: none;
+}
+
+.api-case-drawer-tags-field :deep(.el-tag .el-tag__content) {
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.api-case-drawer-tags-field :deep(.el-tag .el-tag__close) {
+  margin-left: 4px;
+  color: #667085;
+}
+
+.api-case-drawer-tags-field :deep(.el-select__input-wrapper) {
+  margin: 0;
+}
+
+.api-case-drawer-tags-field :deep(.el-select__input) {
+  min-width: 96px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 24px;
+}
+
+.api-case-drawer-tags-field :deep(.el-select__placeholder) {
+  color: #98a2b3;
+  font-size: 12px;
+  line-height: 34px;
+}
+
+.api-case-drawer-tags-field :deep(.el-select__caret),
+.api-case-drawer-tags-field :deep(.el-select__suffix) {
+  display: none;
+}
+
+:global(.api-case-drawer-tag-popper) {
+  display: none !important;
 }
 
 .api-case-drawer-meta-row {
@@ -369,11 +484,43 @@ function handleSubmitClick() {
 .api-case-drawer-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
-  padding: 12px 16px;
-  border-top: 1px solid rgba(15, 23, 42, 0.06);
-  box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.04);
-  background: rgba(255, 255, 255, 0.96);
+  gap: 12px;
+  padding: 16px 24px;
+  border-top: 1px solid #f3f4f6;
+  background: #ffffff;
+}
+
+.api-case-drawer-debug-button,
+.api-case-drawer-submit-button,
+.api-case-drawer-cancel-button {
+  min-width: 76px;
+  height: 36px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.api-case-drawer :deep(.api-case-drawer-debug-button.el-button--primary),
+.api-case-drawer :deep(.api-case-drawer-submit-button.el-button--primary) {
+  --el-button-bg-color: #2563eb;
+  --el-button-border-color: #2563eb;
+  --el-button-hover-bg-color: #1d4ed8;
+  --el-button-hover-border-color: #1d4ed8;
+  --el-button-active-bg-color: #1e40af;
+  --el-button-active-border-color: #1e40af;
+  --el-button-disabled-bg-color: #93c5fd;
+  --el-button-disabled-border-color: #93c5fd;
+  color: #ffffff;
+}
+
+.api-case-drawer-cancel-button {
+  --el-button-text-color: #111827;
+  --el-button-border-color: #d1d5db;
+  --el-button-bg-color: #ffffff;
+  --el-button-hover-text-color: #111827;
+  --el-button-hover-border-color: #9ca3af;
+  --el-button-hover-bg-color: #f9fafb;
+  color: #111827;
 }
 
 @media (max-width: 960px) {

@@ -768,6 +768,7 @@ const caseListSettings = useTableSettings({
 })
 const visibleCaseListColumnKeys = computed(() => new Set(caseListSettings.visibleColumns.value.map(item => item.key)))
 const caseListCurrentPage = ref(1)
+const caseListTableRef = ref<{ doLayout?: () => void } | null>(null)
 const caseDrawerCreateSource = ref<'draft' | 'savedDefinition'>('draft')
 const caseDrawerMode = ref<CaseDrawerMode>('create')
 const pagedDefinitionCases = computed(() => {
@@ -1600,6 +1601,12 @@ const assertionEnabledCount = computed(() =>
   definitionForm.assertions.filter(item => item.enabled !== false).length,
 )
 
+function scheduleCaseListTableLayout() {
+  void nextTick(() => {
+    caseListTableRef.value?.doLayout?.()
+  })
+}
+
 function selectableKeyValueRows(items: ApiKeyValue[]) {
   return items
 }
@@ -2168,11 +2175,6 @@ const scenarioSystemRequestActualRequestPreview = computed(() => buildActualRequ
     ),
     body: getModeBodyText(scenarioSystemRequestConfig.value.body.type, { requestConfig: scenarioSystemRequestConfig.value }) || null,
   }))
-const caseDrawerTagsInput = computed({
-  get: () => readTagInput(caseDrawerForm.tags),
-  set: (value: string) => updateTagInput(caseDrawerForm, value),
-})
-
 async function pickBinaryBodyFile() {
   await pickBinaryBodyFileFor(definitionForm)
 }
@@ -2300,6 +2302,7 @@ watch(currentDefinitionCases, () => {
   if (caseListCurrentPage.value > maxPage) {
     caseListCurrentPage.value = maxPage
   }
+  scheduleCaseListTableLayout()
 }, { deep: true })
 
 watch(
@@ -2330,7 +2333,20 @@ watch(
 
 watch(() => caseListSettings.pageSize.value, () => {
   caseListCurrentPage.value = 1
+  scheduleCaseListTableLayout()
 })
+
+watch(
+  () => [
+    showCaseListContent.value,
+    activeRequestEditorKey.value,
+    caseListCurrentPage.value,
+    caseListSettings.visibleColumns.value.map(item => item.key).join('|'),
+  ],
+  () => {
+    scheduleCaseListTableLayout()
+  },
+)
 
 watch(
   () => definitionSaveForm.workspaceCode,
@@ -2718,38 +2734,6 @@ function fingerprintDefinitionDetail(detail: ApiRequestEditorDetail) {
   return JSON.stringify(detail)
 }
 
-function isBlankRequestBody(body: ApiRequestConfig['body']) {
-  return !body.rawText?.trim()
-    && !body.jsonText?.trim()
-    && !body.xmlText?.trim()
-    && !body.plainText?.trim()
-    && !body.binaryBase64
-    && !(body.formItems || []).some(item => !isKeyValueRowEmpty(item))
-}
-
-function isEmptyNewRequestBodyOnlyChange(current: RequestEditorTab, snapshot: ApiRequestEditorDetail) {
-  if (current.resourceType !== 'definition' || current.resourceId !== null || snapshot.id) {
-    return false
-  }
-  if (!isBlankRequestBody(snapshot.requestConfig.body)) {
-    return false
-  }
-  let savedDetail: ApiRequestEditorDetail
-  try {
-    savedDetail = JSON.parse(current.savedFingerprint) as ApiRequestEditorDetail
-  }
-  catch {
-    return false
-  }
-  const normalizedSnapshot = cloneEditorDetail(snapshot)
-  const normalizedSaved = cloneEditorDetail(savedDetail)
-  normalizedSnapshot.requestConfig.body.type = 'NONE'
-  normalizedSnapshot.requestConfig.body.contentType = ''
-  normalizedSaved.requestConfig.body.type = 'NONE'
-  normalizedSaved.requestConfig.body.contentType = ''
-  return fingerprintDefinitionDetail(normalizedSnapshot) === fingerprintDefinitionDetail(normalizedSaved)
-}
-
 function hasEnabledKeyValueRows(rows: ApiKeyValue[]) {
   return rows.some(item => !isKeyValueRowEmpty(item) && item.enabled !== false)
 }
@@ -2850,9 +2834,7 @@ function syncActiveRequestEditorTab() {
   current.title = definitionForm.name || (definitionForm.resourceType === 'case' ? '新建用例' : '\u65b0\u5efa\u8bf7\u6c42')
   current.method = definitionForm.requestConfig.method || definitionForm.method || 'GET'
   current.activeTab = activeRequestTab.value
-  const nextFingerprint = fingerprintDefinitionDetail(snapshot)
-  current.isDirty = current.savedFingerprint !== nextFingerprint
-    && !isEmptyNewRequestBodyOnlyChange(current, snapshot)
+  current.isDirty = true
 }
 
 function syncCaseDrawerEditorTab() {
@@ -2868,7 +2850,7 @@ function syncCaseDrawerEditorTab() {
   current.title = caseDrawerForm.name || '新建用例'
   current.method = caseDrawerForm.requestConfig.method || caseDrawerForm.method || 'GET'
   current.activeTab = caseDrawerRequestTab.value
-  current.isDirty = current.savedFingerprint !== fingerprintDefinitionDetail(snapshot)
+  current.isDirty = true
 }
 
 function setActiveRequestContentTab(tab: RequestContentTab) {
@@ -6369,7 +6351,7 @@ function formatTimeLabel(value?: string | null) {
                     </button>
                   </div>
                 </div>
-                  <div v-if="showCaseListContent" class="ms-like-request-body">
+                  <div v-if="showCaseListContent" class="ms-like-request-body case-list-request-body">
                 <div class="request-section case-list-panel">
                   <div class="editor-actions left">
                     <el-button
@@ -6382,7 +6364,7 @@ function formatTimeLabel(value?: string | null) {
                   </div>
                   <div v-if="!currentDefinitionCases.length" class="empty-hint">当前接口下还没有用例</div>
                   <div v-else class="case-list-table-wrap">
-                  <el-table :data="pagedDefinitionCases" size="small" class="case-list-table">
+                  <el-table ref="caseListTableRef" :data="pagedDefinitionCases" size="small" class="case-list-table">
                     <el-table-column v-if="visibleCaseListColumnKeys.has('id')" prop="id" label="ID" width="92" />
                     <el-table-column v-if="visibleCaseListColumnKeys.has('name')" prop="name" label="用例名称" min-width="200" show-overflow-tooltip />
                     <el-table-column v-if="visibleCaseListColumnKeys.has('protocol')" label="协议" width="90">
@@ -6972,7 +6954,7 @@ function formatTimeLabel(value?: string | null) {
             :priority-options="casePriorityOptions"
             :status="caseDrawerForm.caseStatus || '进行中'"
             :status-options="caseStatusOptions"
-            :tags-input="caseDrawerTagsInput"
+            :tags="caseDrawerForm.tags"
             :can-debug="canDebugCaseDrawer"
             :can-write="canWriteCaseDrawer"
             :saving="saving"
@@ -6984,7 +6966,7 @@ function formatTimeLabel(value?: string | null) {
             @update:case-name="value => caseDrawerForm.name = value"
             @update:priority="value => caseDrawerForm.casePriority = value"
             @update:status="value => caseDrawerForm.caseStatus = value"
-            @update:tags-input="value => caseDrawerTagsInput = value"
+            @update:tags="value => caseDrawerForm.tags = value"
             @debug="debugCaseDrawer"
             @create="saveCaseDrawer"
             @save="saveCaseDrawer"
@@ -8524,7 +8506,7 @@ function formatTimeLabel(value?: string | null) {
       title="导入系统请求"
       size="1200px"
       destroy-on-close
-      class="scenario-import-drawer"
+      class="api-soft-drawer scenario-import-drawer"
       @closed="resetScenarioImportSelection"
     >
       <div class="scenario-import-shell">
@@ -8663,7 +8645,7 @@ function formatTimeLabel(value?: string | null) {
       v-model="scenarioSystemRequestDrawerVisible"
       size="960px"
       destroy-on-close
-      class="scenario-step-config-drawer"
+      class="api-soft-drawer scenario-step-config-drawer"
       @closed="closeScenarioSystemRequestDrawer"
     >
       <template #header>
@@ -8926,7 +8908,7 @@ function formatTimeLabel(value?: string | null) {
       v-model="scenarioCustomRequestDrawerVisible"
       size="960px"
       destroy-on-close
-      class="scenario-step-config-drawer"
+      class="api-soft-drawer scenario-step-config-drawer"
       @closed="resetScenarioCustomRequestForm"
     >
       <template #header>
@@ -9262,7 +9244,7 @@ function formatTimeLabel(value?: string | null) {
       v-model="scenarioScriptDrawerVisible"
       size="960px"
       destroy-on-close
-      class="scenario-step-config-drawer scenario-script-operation-drawer"
+      class="api-soft-drawer scenario-step-config-drawer scenario-script-operation-drawer"
       @closed="resetScenarioScriptForm"
     >
       <template #header>
@@ -9405,7 +9387,13 @@ function formatTimeLabel(value?: string | null) {
       </template>
     </el-drawer>
 
-      <el-drawer v-model="batchAddDrawerVisible" :title="batchAddTitle" size="560px" destroy-on-close>
+      <el-drawer
+        v-model="batchAddDrawerVisible"
+        :title="batchAddTitle"
+        size="560px"
+        destroy-on-close
+        class="api-soft-drawer batch-add-soft-drawer"
+      >
       <div class="batch-drawer">
         <div class="batch-drawer-hint">
           <div class="batch-drawer-label">格式示例</div>
@@ -9428,7 +9416,13 @@ function formatTimeLabel(value?: string | null) {
       </template>
       </el-drawer>
 
-      <el-dialog v-model="definitionSaveDialogVisible" title="保存" width="520px" destroy-on-close>
+      <el-dialog
+        v-model="definitionSaveDialogVisible"
+        title="保存"
+        width="520px"
+        destroy-on-close
+        class="api-soft-dialog"
+      >
       <el-form label-position="top">
         <el-form-item v-if="isAllScope" label="所属空间" required>
           <el-select v-model="definitionSaveForm.workspaceCode" class="full-width" placeholder="请选择空间">
@@ -9466,7 +9460,7 @@ function formatTimeLabel(value?: string | null) {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="bugDialogVisible" title="从报告创建缺陷" width="640px">
+    <el-dialog v-model="bugDialogVisible" title="从报告创建缺陷" width="640px" class="api-soft-dialog">
       <el-form label-width="90px">
         <el-form-item v-if="isAllScope" label="目标空间" required>
           <el-select v-model="bugForm.workspaceCode">
@@ -9486,12 +9480,14 @@ function formatTimeLabel(value?: string | null) {
         </el-form-item>
       </el-form>
       <template #footer>
+        <div class="dialog-footer">
           <el-button @click="bugDialogVisible = false">取消</el-button>
           <el-button type="primary" :loading="saving" @click="submitReportBug">提交</el-button>
+        </div>
       </template>
     </el-dialog>
 
-    <el-drawer v-model="reportDrawerVisible" title="API 执行报告" size="860px">
+    <el-drawer v-model="reportDrawerVisible" title="API 执行报告" size="860px" class="api-soft-drawer">
       <div v-if="reportDetail" class="report-drawer">
         <div class="detail-grid">
           <div><span>报告名称</span><strong>{{ reportDetail.reportName }}</strong></div>
@@ -12516,6 +12512,14 @@ function formatTimeLabel(value?: string | null) {
   padding: 8px 16px 16px;
 }
 
+.case-list-request-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+  padding: 14px 16px;
+}
+
 .ms-like-body-section {
   display: flex;
   flex: 0 0 auto;
@@ -12949,6 +12953,88 @@ function formatTimeLabel(value?: string | null) {
   text-align: center;
 }
 
+:global(.api-case-drawer .ms-like-param-table) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  flex-shrink: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+:global(.api-case-drawer .api-case-drawer-body),
+:global(.api-case-drawer .ms-like-request-body),
+:global(.api-case-drawer .request-section),
+:global(.api-case-drawer .ms-like-body-mode-shell) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+:global(.api-case-drawer .ms-like-body-mode-shell > .ms-like-table-surface) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+:global(.api-case-drawer .ms-like-param-table::-webkit-scrollbar) {
+  height: 8px;
+}
+
+:global(.api-case-drawer .ms-like-param-table::-webkit-scrollbar-thumb) {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.72);
+}
+
+:global(.api-case-drawer .ms-like-param-table::-webkit-scrollbar-track) {
+  background: transparent;
+}
+
+:global(.api-case-drawer .ms-like-param-table .ms-like-table-header),
+:global(.api-case-drawer .ms-like-param-table .ms-like-table-row) {
+  min-width: 100%;
+  padding-right: 0;
+}
+
+:global(.api-case-drawer .ms-like-param-table--query .ms-like-table-header.ms-like-param-table-grid--query),
+:global(.api-case-drawer .ms-like-param-table--query .ms-like-table-row.ms-like-param-table-grid--query) {
+  min-width: 1240px;
+}
+
+:global(.api-case-drawer .ms-like-param-table--header .ms-like-table-header.ms-like-param-table-grid--header),
+:global(.api-case-drawer .ms-like-param-table--header .ms-like-table-row.ms-like-param-table-grid--header) {
+  min-width: 940px;
+}
+
+:global(.api-case-drawer .ms-like-param-table--body-form .ms-like-table-header.ms-like-param-table-grid--body-form),
+:global(.api-case-drawer .ms-like-param-table--body-form .ms-like-table-row.ms-like-param-table-grid--body-form) {
+  min-width: 1160px;
+}
+
+:global(.api-case-drawer .ms-like-param-table .ms-like-link-button),
+:global(.api-case-drawer .ms-like-param-table .ms-like-row-remove) {
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 28px;
+  background: #fff;
+  box-shadow: -1px 0 0 #e5e7eb;
+}
+
+:global(.api-case-drawer .ms-like-param-table .ms-like-table-header .ms-like-link-button) {
+  z-index: 3;
+  background: #f9fafb;
+}
+
+:global(.api-case-drawer .ms-like-param-table .ms-like-table-row:hover .ms-like-row-remove) {
+  background: #f9fafb;
+}
+
 .ms-like-add-row {
   align-self: flex-start;
   padding: 9px 10px 11px;
@@ -13264,6 +13350,149 @@ function formatTimeLabel(value?: string | null) {
 :global(.definition-import-dialog .el-dialog__body) {
   margin: 0;
   padding: 0;
+}
+
+:global(.api-soft-dialog .el-dialog) {
+  padding: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 20px 25px -5px rgba(15, 23, 42, 0.12), 0 8px 10px -6px rgba(15, 23, 42, 0.12);
+}
+
+:global(.api-soft-dialog .el-dialog__header) {
+  display: flex;
+  align-items: center;
+  min-height: 64px;
+  margin: 0;
+  padding: 20px 24px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+:global(.api-soft-dialog .el-dialog__title) {
+  color: #111827;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+:global(.api-soft-dialog .el-dialog__headerbtn) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  top: 16px;
+  right: 18px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: #9ca3af;
+}
+
+:global(.api-soft-dialog .el-dialog__headerbtn:hover) {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+:global(.api-soft-dialog .el-dialog__headerbtn .el-dialog__close) {
+  color: currentColor;
+  font-size: 16px;
+}
+
+:global(.api-soft-dialog .el-dialog__body) {
+  padding: 24px;
+}
+
+:global(.api-soft-dialog .el-dialog__footer) {
+  padding: 16px 24px;
+  border-top: 1px solid #f3f4f6;
+  background: #ffffff;
+}
+
+:global(.api-soft-dialog .el-dialog__footer .el-button:not(.el-button--primary)),
+:global(.api-soft-drawer .el-drawer__footer .el-button:not(.el-button--primary)) {
+  --el-button-text-color: #111827;
+  --el-button-border-color: #d1d5db;
+  --el-button-bg-color: #ffffff;
+  --el-button-hover-text-color: #111827;
+  --el-button-hover-border-color: #9ca3af;
+  --el-button-hover-bg-color: #f9fafb;
+  --el-button-active-text-color: #111827;
+  --el-button-active-border-color: #9ca3af;
+  --el-button-active-bg-color: #f3f4f6;
+  border-color: #d1d5db;
+  background: #ffffff;
+  color: #111827;
+  font-weight: 500;
+}
+
+:global(.api-soft-dialog .el-dialog__footer .el-button:not(.el-button--primary):hover),
+:global(.api-soft-dialog .el-dialog__footer .el-button:not(.el-button--primary):focus),
+:global(.api-soft-drawer .el-drawer__footer .el-button:not(.el-button--primary):hover),
+:global(.api-soft-drawer .el-drawer__footer .el-button:not(.el-button--primary):focus) {
+  border-color: #9ca3af;
+  background: #f9fafb;
+  color: #111827;
+}
+
+:global(.api-soft-dialog .dialog-footer .el-button:not(.el-button--primary)),
+:global(.api-soft-drawer .dialog-footer .el-button:not(.el-button--primary)) {
+  --el-button-text-color: #111827;
+  color: #111827;
+}
+
+:global(.api-soft-drawer .el-drawer) {
+  border-radius: 16px 0 0 16px;
+  overflow: hidden;
+  box-shadow: -12px 0 24px rgba(15, 23, 42, 0.1);
+}
+
+:global(.api-soft-drawer .el-drawer__close-btn) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: #9ca3af;
+  transition: color 0.18s ease, background-color 0.18s ease;
+}
+
+:global(.api-soft-drawer .el-drawer__close-btn:hover),
+:global(.api-soft-drawer .el-drawer__close-btn:focus-visible) {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+:global(.api-soft-drawer .el-drawer__close) {
+  color: currentColor;
+  font-size: 16px;
+}
+
+:global(.api-soft-drawer .el-drawer__header) {
+  display: flex;
+  align-items: center;
+  min-height: 64px;
+  margin: 0;
+  padding: 20px 24px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+:global(.api-soft-drawer .el-drawer__title) {
+  color: #111827;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+:global(.api-soft-drawer .el-drawer__body) {
+  padding: 24px;
+  background: #ffffff;
+}
+
+:global(.api-soft-drawer .el-drawer__footer) {
+  padding: 16px 24px;
+  border-top: 1px solid #f3f4f6;
+  background: #ffffff;
 }
 
 .definition-import-modal {
@@ -13850,6 +14079,13 @@ function formatTimeLabel(value?: string | null) {
   padding: 0;
 }
 
+.case-list-request-body > .case-list-panel {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .scope-hint {
   padding: 10px 12px;
   border: 1px dashed var(--el-color-warning-light-5);
@@ -14119,16 +14355,16 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .batch-drawer-hint {
-  padding: 12px 14px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 8px;
-  background: var(--el-fill-color-light);
+  padding: 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #f9fafb;
 }
 
 .batch-drawer-label {
   font-size: 12px;
   font-weight: 600;
-  color: var(--el-text-color-secondary);
+  color: #374151;
   margin-bottom: 8px;
 }
 
@@ -14136,13 +14372,34 @@ function formatTimeLabel(value?: string | null) {
   font-family: var(--el-font-family-monospace, Consolas, monospace);
   font-size: 12px;
   line-height: 1.7;
-  color: var(--el-text-color-regular);
+  color: #374151;
 }
 
 .batch-drawer-note {
   margin-top: 10px;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: #6b7280;
+}
+
+.batch-drawer-textarea :deep(.el-textarea__inner) {
+  min-height: 360px;
+  border-radius: 12px;
+  border-color: #d1d5db;
+  box-shadow: none;
+  color: #111827;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.batch-drawer-textarea :deep(.el-textarea__inner:focus) {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px #dbeafe;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 pre {
@@ -14163,6 +14420,8 @@ pre {
 
 .case-list-table {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .case-list-panel > .editor-actions.left :deep(.el-button--primary) {
@@ -14183,7 +14442,6 @@ pre {
 .case-list-table :deep(.el-table__inner-wrapper) {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  overflow: hidden;
 }
 
 .case-list-table :deep(.el-table__header-wrapper th) {
@@ -14207,7 +14465,11 @@ pre {
 .case-list-table-wrap {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  gap: 12px;
 }
 
 .case-list-operation-header {

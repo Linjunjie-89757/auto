@@ -425,22 +425,28 @@ function handleSubmitClick() {
   height: 24px;
   margin: 0;
   padding: 0 8px;
-  border: 1px solid #e5e7eb;
-  border-radius: 4px;
-  background: #f5f7fa;
-  color: #344054;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #2563eb;
   line-height: 22px;
   box-shadow: none;
 }
 
 .api-case-drawer-tags-field :deep(.el-tag .el-tag__content) {
   font-size: 12px;
+  font-weight: 500;
   line-height: 22px;
 }
 
 .api-case-drawer-tags-field :deep(.el-tag .el-tag__close) {
   margin-left: 4px;
-  color: #667085;
+  color: #2563eb;
+}
+
+.api-case-drawer-tags-field :deep(.el-tag .el-tag__close:hover) {
+  background: #dbeafe;
+  color: #1d4ed8;
 }
 
 .api-case-drawer-tags-field :deep(.el-select__input-wrapper) {

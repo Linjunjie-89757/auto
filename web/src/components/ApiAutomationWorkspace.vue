@@ -55,6 +55,7 @@ import type {
   ApiAuthConfig,
   ApiAuthCredential,
   ApiDebugCasePayload,
+  ApiRunResponse,
   AiProviderConnection,
   ApiDefinitionCaseDetail,
   ApiDefinitionCaseChangeHistoryItem,
@@ -122,11 +123,27 @@ type AiCaseGenerateOption = {
 type AiCaseGenerateResult = {
   id: string
   name: string
+  directoryName: string
+  tags: string[]
+  description: string
   group: string
   type: string
   expected: string
   status: AiCaseGenerateResultStatus
   runResult?: string
+  activeTab: Exclude<RequestContentTab, 'cases'>
+  responseTab: ResponsePreviewTab
+  requestConfig: ApiRequestConfig
+  assertions: ApiAssertionConfig[]
+  preProcessors: ApiProcessorConfig[]
+  postProcessors: ApiProcessorConfig[]
+  debugReportId?: number | null
+  debugFailureSummary?: string
+  debugStepResults?: ApiRunStepResult[]
+  responseBody?: string
+  responseStatus?: string
+  responseHeaders?: Record<string, string>
+  responseConsole?: string
 }
 type AiCaseGenerateTabState = {
   definitionId: number
@@ -161,6 +178,7 @@ type RequestEditorTab = {
   debugFailureSummary: string
   debugStepResults: ApiRunStepResult[]
   aiGeneration?: AiCaseGenerateTabState
+  aiGeneratedCaseId?: string
 }
 
 type ScenarioEditorTab = {
@@ -502,6 +520,11 @@ const aiCaseGenerateProviderLoading = ref(false)
 const aiCaseGenerateNoDuplicate = ref(true)
 const aiCaseGenerateLoading = ref(false)
 const aiCaseGenerateResults = ref<AiCaseGenerateResult[]>([])
+const aiGenerationDetailKeyword = ref('')
+const aiGenerationDetailGroupFilter = ref<AiCaseGenerateGroup | ''>('')
+const aiGenerationDetailTypeFilter = ref('')
+const activeAiGeneratedCaseId = ref('')
+const aiCaseDrawerResultId = ref('')
 const draggingParamGroup = ref<SortableParamGroup | null>(null)
 const draggingParamIndex = ref<number | null>(null)
 const dragOverParamGroup = ref<SortableParamGroup | null>(null)
@@ -888,6 +911,9 @@ const pagedDefinitionCases = computed(() => {
 })
 const caseListTotalPages = computed(() => Math.max(1, Math.ceil(currentDefinitionCases.value.length / caseListSettings.pageSize.value)))
 const caseDrawerTitle = computed(() => {
+  if (aiCaseDrawerResultId.value) {
+    return 'AI 生成接口用例详情'
+  }
   if (caseDrawerMode.value === 'run') {
     return '用例详情'
   }
@@ -924,7 +950,26 @@ const showRequestEditorMoreAction = computed(() => visibleRequestEditorTabs.valu
 const canCreateCaseForCurrentDefinition = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && !!definitionForm.id)
 const aiCaseGenerateSelectedCount = computed(() => aiCaseGenerateSelectedOptions.value.length)
 const activeAiCaseGenerationResults = computed(() => activeAiCaseGenerationState.value?.results ?? [])
-const activeAiCaseGenerationSelectedCount = computed(() => activeAiCaseGenerationResults.value.filter(item => item.status !== 'discarded').length)
+const aiGenerationDetailTypeOptions = computed(() => aiCaseGenerateOptions
+  .filter(item => !aiGenerationDetailGroupFilter.value || item.group === aiGenerationDetailGroupFilter.value)
+  .map(item => ({ value: item.label, label: item.label })))
+const filteredAiCaseGenerationResults = computed(() => {
+  const keyword = aiGenerationDetailKeyword.value.trim().toLowerCase()
+  return activeAiCaseGenerationResults.value.filter((item) => {
+    const groupKey = aiCaseGenerateGroups.find(group => group.label === item.group)?.key ?? ''
+    if (aiGenerationDetailGroupFilter.value && groupKey !== aiGenerationDetailGroupFilter.value) {
+      return false
+    }
+    if (aiGenerationDetailTypeFilter.value && item.type !== aiGenerationDetailTypeFilter.value) {
+      return false
+    }
+    if (!keyword) {
+      return true
+    }
+    return [item.name, item.type, item.group].some(value => value.toLowerCase().includes(keyword))
+  })
+})
+const filteredAiCaseGenerationSelectedCount = computed(() => filteredAiCaseGenerationResults.value.filter(item => item.status !== 'discarded').length)
 const aiCaseGenerateModelOptions = computed(() =>
   aiCaseGenerateProviderConnections.value
     .filter(item => item.status !== 0 && !!item.modelName?.trim())
@@ -2434,6 +2479,13 @@ watch(caseDrawerForm, () => {
   syncCaseDrawerEditorTab()
 }, { deep: true })
 
+watch(aiGenerationDetailGroupFilter, () => {
+  if (aiGenerationDetailTypeFilter.value
+    && !aiGenerationDetailTypeOptions.value.some(item => item.value === aiGenerationDetailTypeFilter.value)) {
+    aiGenerationDetailTypeFilter.value = ''
+  }
+})
+
 watch(scenarioForm, () => {
   syncActiveScenarioEditorTab()
 }, { deep: true })
@@ -2976,7 +3028,7 @@ function buildEmptyDefinitionDetail(): ApiRequestEditorDetail {
   }
 }
 
-function makeRequestEditorTab(detail?: ApiRequestEditorDetail) {
+function makeRequestEditorTab(detail?: ApiRequestEditorDetail): RequestEditorTab {
   const draft = cloneEditorDetail(detail ?? buildEmptyDefinitionDetail())
   hydrateDefinitionKeyValueRows(draft)
   if (draft.requestConfig.body.type === 'RAW_JSON') {
@@ -3695,7 +3747,15 @@ async function closeOtherRequestEditorTabs() {
 async function closeCaseDrawer() {
   const activeCaseTab = activeCaseDrawerEditorTab.value
   if (!activeCaseTab) {
+    aiCaseDrawerResultId.value = ''
     return
+  }
+  if (aiCaseDrawerResultId.value) {
+    const item = findAiCaseGenerateResult(aiCaseDrawerResultId.value)
+    if (item) {
+      syncAiGeneratedCaseFromCaseDrawer(item)
+    }
+    activeCaseTab.isDirty = false
   }
   await closeRequestEditorTab(activeCaseTab.key, { activateFallback: false })
   caseDrawerVisible.value = false
@@ -3705,6 +3765,7 @@ async function closeCaseDrawer() {
   caseDrawerResponsePreviewTab.value = 'body'
   caseDrawerSourceEditorKey.value = ''
   caseDrawerMode.value = 'create'
+  aiCaseDrawerResultId.value = ''
   resetCaseDrawerDebugState()
   resetCaseDrawerRunHistoryState()
 }
@@ -3837,15 +3898,83 @@ function buildAiCasePreviewResults(): AiCaseGenerateResult[] {
   const selected = aiCaseGenerateOptions.filter(item => aiCaseGenerateSelectedOptions.value.includes(item.key))
   return selected.slice(0, 12).map((item, index) => {
     const group = aiCaseGenerateGroups.find(groupItem => groupItem.key === item.group)?.label ?? '其他'
+    const requestConfig = buildAiGeneratedCaseRequestConfig(item, index)
     return {
       id: `${Date.now()}-${index}`,
       name: `${item.label} - ${method} ${path || '当前接口'}`,
+      directoryName: definitionForm.directoryName || '',
+      tags: [group, item.label],
+      description: item.group === 'positive' ? 'AI 生成的正向接口用例' : 'AI 生成的异常或安全接口用例',
       group,
       type: item.label,
       expected: item.group === 'positive' ? '预期返回 2xx 或业务成功' : '预期返回错误提示或被安全策略拦截',
       status: 'pending',
+      activeTab: 'body',
+      responseTab: 'body',
+      requestConfig,
+      assertions: buildAiGeneratedCaseAssertions(item),
+      preProcessors: [],
+      postProcessors: item.group === 'positive'
+        ? [emptyProcessor('EXTRACT', 'post')]
+        : [],
     }
   })
+}
+
+function buildAiGeneratedCaseRequestConfig(option: AiCaseGenerateOption, index: number): ApiRequestConfig {
+  const source = cloneScenarioRequestConfig(definitionForm.requestConfig)
+  source.method = source.method || definitionForm.method || 'GET'
+  source.path = source.path || definitionForm.path || ''
+  source.queryParams = (source.queryParams || []).filter(item => !isKeyValueRowEmpty(item))
+  source.headers = (source.headers || []).filter(item => !isKeyValueRowEmpty(item))
+  source.cookies = (source.cookies || []).filter(item => !isKeyValueRowEmpty(item))
+  source.body = {
+    type: 'RAW_JSON',
+    contentType: 'application/json',
+    rawText: buildAiGeneratedCaseBody(option, index),
+    jsonText: buildAiGeneratedCaseBody(option, index),
+    xmlText: '',
+    plainText: '',
+    formItems: [],
+    fileName: '',
+    binaryBase64: '',
+  }
+  if (!source.headers.some(item => item.key.toLowerCase() === 'content-type')) {
+    source.headers.push(emptyKeyValue({ key: 'Content-Type', value: 'application/json' }))
+  }
+  if (option.key === 'missing-required') {
+    source.body.jsonText = '{\n  "username": "test_user"\n}'
+    source.body.rawText = source.body.jsonText
+  }
+  if (option.group === 'security') {
+    source.headers.push(emptyKeyValue({ key: 'Authorization', value: 'Bearer ${token}' }))
+  }
+  syncKeyValueRows(source.queryParams, queryParamDefaults())
+  syncKeyValueRows(source.headers, headerParamDefaults())
+  syncKeyValueRows(source.cookies, headerParamDefaults())
+  syncKeyValueRows(source.body.formItems, bodyFormParamDefaults())
+  return source
+}
+
+function buildAiGeneratedCaseBody(option: AiCaseGenerateOption, index: number) {
+  const payload = {
+    username: option.group === 'negative' ? '' : `auto_user_${index + 1}`,
+    password: option.key === 'missing-required' ? undefined : (option.group === 'security' ? "' or '1'='1" : 'P@ssw0rd123'),
+    caseType: option.label,
+  }
+  return JSON.stringify(payload, null, 2)
+}
+
+function buildAiGeneratedCaseAssertions(option: AiCaseGenerateOption): ApiAssertionConfig[] {
+  const success = option.group === 'positive'
+  return [{
+    id: `ai-assert-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    assertionType: 'RESPONSE_CODE',
+    name: success ? '状态码为 2xx' : '返回业务错误',
+    enabled: true,
+    condition: success ? 'LT' : 'GT_OR_EQUALS',
+    expectedValue: success ? '300' : '400',
+  }]
 }
 
 function openAiCaseGenerationResultTab(results: AiCaseGenerateResult[]) {
@@ -3864,6 +3993,7 @@ function openAiCaseGenerationResultTab(results: AiCaseGenerateResult[]) {
   requestEditorTabs.value.push(tab)
   aiCaseGenerateDrawerVisible.value = false
   activateRequestEditorTab(tab.key)
+  activeAiGeneratedCaseId.value = results[0]?.id ?? ''
 }
 
 function submitAiCaseGeneratePreview() {
@@ -3881,14 +4011,195 @@ function submitAiCaseGeneratePreview() {
 }
 
 function updateAiCaseGenerateResultStatus(id: string, status: AiCaseGenerateResultStatus) {
-  const target = aiCaseGenerateResults.value.find(item => item.id === id)
+  const target = findAiCaseGenerateResult(id)
   if (target) {
     target.status = status
   }
 }
 
 function runAiCaseGenerateResult(item: AiCaseGenerateResult) {
-  item.runResult = item.group === '正向' ? '通过' : '失败'
+  openAiGeneratedCaseInCaseDrawer(item)
+  void debugCaseDrawer()
+}
+
+function findAiCaseGenerateResult(id: string) {
+  return activeAiCaseGenerationResults.value.find(item => item.id === id)
+    ?? aiCaseGenerateResults.value.find(item => item.id === id)
+}
+
+function toggleAiGeneratedCaseDetail(item: AiCaseGenerateResult) {
+  openAiGeneratedCaseInCaseDrawer(item)
+}
+
+function buildCaseDraftFromAiGeneratedCase(item: AiCaseGenerateResult): ApiRequestEditorDetail {
+  const state = activeAiCaseGenerationState.value
+  return {
+    id: 0,
+    resourceType: 'case',
+    definitionId: state?.definitionId || definitionForm.id || 0,
+    definitionName: state?.definitionName || definitionForm.name || '',
+    workspaceCode: definitionForm.workspaceCode || workspaceCode.value,
+    workspaceName: definitionForm.workspaceName || '',
+    name: item.name,
+    method: item.requestConfig.method || state?.method || 'GET',
+    path: item.requestConfig.path || state?.path || '',
+    directoryName: item.directoryName || definitionForm.directoryName || '',
+    description: item.description || item.expected || '',
+    tags: [...(item.tags || [])],
+    lastRunResult: item.runResult || null,
+    lastRunAt: null,
+    updatedAt: null,
+    createdAt: null,
+    casePriority: 'P0',
+    caseStatus: item.status === 'discarded' ? '已废弃' : '进行中',
+    requestConfig: cloneScenarioRequestConfig(item.requestConfig),
+    assertions: JSON.parse(JSON.stringify(item.assertions || [])) as ApiAssertionConfig[],
+    extractors: [],
+    preProcessors: JSON.parse(JSON.stringify(item.preProcessors || [])) as ApiProcessorConfig[],
+    postProcessors: JSON.parse(JSON.stringify(item.postProcessors || [])) as ApiProcessorConfig[],
+  }
+}
+
+function syncAiGeneratedCaseFromCaseDrawer(item: AiCaseGenerateResult) {
+  item.name = caseDrawerForm.name
+  item.directoryName = caseDrawerForm.directoryName || ''
+  item.description = caseDrawerForm.description || ''
+  item.tags = [...(caseDrawerForm.tags || [])]
+  item.requestConfig = cloneScenarioRequestConfig(caseDrawerForm.requestConfig)
+  item.assertions = JSON.parse(JSON.stringify(caseDrawerForm.assertions || [])) as ApiAssertionConfig[]
+  item.preProcessors = JSON.parse(JSON.stringify(caseDrawerForm.preProcessors || [])) as ApiProcessorConfig[]
+  item.postProcessors = JSON.parse(JSON.stringify(caseDrawerForm.postProcessors || [])) as ApiProcessorConfig[]
+}
+
+function applyAiGeneratedCaseRunResponse(item: AiCaseGenerateResult, response: Pick<ApiRunResponse, 'reportId' | 'failureSummary' | 'stepResults' | 'result'>) {
+  const step = pickPreferredRunStep(response.stepResults || [])
+  item.debugReportId = response.reportId
+  item.debugFailureSummary = response.failureSummary || ''
+  item.debugStepResults = response.stepResults || []
+  item.responseTab = 'body'
+  item.responseBody = step?.response?.body || ''
+  item.responseHeaders = step?.response?.headers || {}
+  item.responseStatus = step?.response ? `状态 ${step.response.statusCode}` : ''
+  item.responseConsole = buildRunConsolePreview(
+    step?.errorMessage || response.failureSummary || '',
+    step?.processorResults ?? [],
+    step?.assertionResults ?? [],
+    step?.extractionResults ?? [],
+  )
+  item.runResult = response.result === 'SUCCESS' || step?.success
+    ? '通过'
+    : '失败'
+}
+
+function openAiGeneratedCaseInCaseDrawer(item: AiCaseGenerateResult) {
+  activeAiGeneratedCaseId.value = item.id
+  aiCaseDrawerResultId.value = item.id
+  const existingTab = requestEditorTabs.value.find(tab => tab.aiGeneratedCaseId === item.id)
+  const tab = existingTab ?? makeRequestEditorTab(buildCaseDraftFromAiGeneratedCase(item))
+  tab.aiGeneratedCaseId = item.id
+  tab.aiGeneration = activeAiCaseGenerationState.value ?? undefined
+  tab.resourceType = 'case'
+  tab.resourceId = null
+  tab.definitionId = tab.draft.definitionId || activeAiCaseGenerationState.value?.definitionId || definitionForm.id || null
+  tab.title = item.name || 'AI 生成用例'
+  tab.method = item.requestConfig.method || activeAiCaseGenerationState.value?.method || 'GET'
+  tab.debugReportId = item.debugReportId ?? null
+  tab.debugFailureSummary = item.debugFailureSummary || ''
+  tab.debugStepResults = [...(item.debugStepResults || [])]
+  tab.isDirty = true
+  if (!existingTab) {
+    requestEditorTabs.value.push(tab)
+  }
+  caseDrawerSourceEditorKey.value = activeRequestEditorKey.value
+  caseDrawerCreateSource.value = 'draft'
+  caseDrawerMode.value = 'create'
+  caseDrawerViewTab.value = 'detail'
+  caseDrawerEditorKey.value = tab.key
+  caseDrawerRequestTab.value = tab.activeTab || resolveDefaultRequestTab(tab.draft)
+  caseDrawerResponsePreviewTab.value = item.responseTab || 'body'
+  caseDrawerHistoryPreviewTab.value = 'body'
+  applyCaseDrawerDetailToForm(tab.draft)
+  syncCaseDrawerDebugStateFromTab(tab)
+  resetCaseDrawerRunHistoryState()
+  caseDrawerVisible.value = true
+}
+
+function setAiGeneratedCaseTab(item: AiCaseGenerateResult, tab: Exclude<RequestContentTab, 'cases'>) {
+  item.activeTab = tab
+}
+
+function setAiGeneratedCaseResponseTab(item: AiCaseGenerateResult, tab: ResponsePreviewTab) {
+  item.responseTab = tab
+}
+
+function aiGeneratedCaseBodyText(item: AiCaseGenerateResult) {
+  const body = item.requestConfig.body
+  if (body.type === 'RAW_JSON') return body.jsonText || body.rawText || ''
+  if (body.type === 'RAW_XML') return body.xmlText || body.rawText || ''
+  if (body.type === 'RAW_TEXT') return body.plainText || body.rawText || ''
+  return body.rawText || ''
+}
+
+function setAiGeneratedCaseBodyText(item: AiCaseGenerateResult, value: string) {
+  setModeBodyText(item.requestConfig.body.type, value, { requestConfig: item.requestConfig })
+}
+
+function aiGeneratedCaseBodyLanguage(item: AiCaseGenerateResult): 'json' | 'xml' | 'text' {
+  const type = item.requestConfig.body.type
+  if (type === 'RAW_JSON') return 'json'
+  if (type === 'RAW_XML') return 'xml'
+  return 'text'
+}
+
+function aiGeneratedCaseResponsePreview(item: AiCaseGenerateResult) {
+  if (item.responseTab === 'header') {
+    return JSON.stringify(item.responseHeaders || {}, null, 2)
+  }
+  if (item.responseTab === 'console') {
+    return item.responseConsole || ''
+  }
+  if (item.responseTab === 'actualRequest') {
+    return JSON.stringify({
+      method: item.requestConfig.method,
+      path: item.requestConfig.path,
+      queryParams: item.requestConfig.queryParams.filter(row => !isKeyValueRowEmpty(row)),
+      headers: item.requestConfig.headers.filter(row => !isKeyValueRowEmpty(row)),
+      body: item.requestConfig.body,
+    }, null, 2)
+  }
+  if (item.responseTab === 'assertions') {
+    return JSON.stringify(item.assertions.map(assertion => ({
+      name: assertion.name || '断言',
+      expectedValue: assertion.expectedValue || '',
+      result: item.runResult || '未运行',
+    })), null, 2)
+  }
+  return item.responseBody || ''
+}
+
+function aiGeneratedCaseResponseLanguage(item: AiCaseGenerateResult): 'json' | 'text' {
+  return item.responseTab === 'console' ? 'text' : 'json'
+}
+
+function formatAiGeneratedBodyType(type: string) {
+  switch (type) {
+    case 'NONE':
+      return 'none'
+    case 'FORM_DATA':
+      return 'form-data'
+    case 'FORM_URLENCODED':
+      return 'x-www-form-urlencoded'
+    case 'RAW_JSON':
+      return 'JSON'
+    case 'RAW_XML':
+      return 'XML'
+    case 'RAW_TEXT':
+      return 'Text'
+    case 'BINARY':
+      return 'Binary'
+    default:
+      return type || '-'
+  }
 }
 
 async function runCaseItem(id: number) {
@@ -5941,6 +6252,13 @@ async function debugCaseDrawer() {
       response.failureSummary || '',
       response.stepResults || [],
     )
+    if (aiCaseDrawerResultId.value) {
+      const item = findAiCaseGenerateResult(aiCaseDrawerResultId.value)
+      if (item) {
+        syncAiGeneratedCaseFromCaseDrawer(item)
+        applyAiGeneratedCaseRunResponse(item, response)
+      }
+    }
     caseDrawerResponsePreviewTab.value = 'body'
     if (caseDrawerForm.id) {
       await loadCaseDrawerRunHistory(caseDrawerForm.id)
@@ -6630,7 +6948,7 @@ function formatTimeLabel(value?: string | null) {
               <div class="ai-generation-detail-workspace">
                 <div class="ai-generation-detail-status-row">
                   <div class="ai-generation-detail-status-tabs">
-                    <button type="button" class="active">待处理 ({{ activeAiCaseGenerationSelectedCount }})</button>
+                    <button type="button" class="active">待处理 ({{ filteredAiCaseGenerationSelectedCount }})</button>
                     <button type="button">已采纳</button>
                     <button type="button">废弃</button>
                   </div>
@@ -6643,11 +6961,24 @@ function formatTimeLabel(value?: string | null) {
                 <div class="ai-generation-detail-toolbar">
                   <div class="ai-generation-detail-search">
                     <LucideSearch />
-                    <input type="text" placeholder="搜索" />
+                    <input v-model="aiGenerationDetailKeyword" type="text" placeholder="搜索" />
                   </div>
-                  <button type="button" class="ai-generation-filter-button">
-                    <Settings2 />
-                  </button>
+                  <el-select v-model="aiGenerationDetailGroupFilter" class="ai-generation-detail-filter" placeholder="分组" clearable>
+                    <el-option
+                      v-for="group in aiCaseGenerateGroups"
+                      :key="group.key"
+                      :label="group.label"
+                      :value="group.key"
+                    />
+                  </el-select>
+                  <el-select v-model="aiGenerationDetailTypeFilter" class="ai-generation-detail-filter is-wide" placeholder="类型" clearable>
+                    <el-option
+                      v-for="option in aiGenerationDetailTypeOptions"
+                      :key="option.value"
+                      :label="option.label"
+                      :value="option.value"
+                    />
+                  </el-select>
                   <div class="ai-generation-detail-actions">
                     <button type="button" class="ai-generation-run-selected">
                       <Play />
@@ -6662,49 +6993,278 @@ function formatTimeLabel(value?: string | null) {
                   <div class="ai-generation-detail-head">
                     <el-checkbox :model-value="true" />
                     <span>名称</span>
-                    <span></span>
+                    <span>类型</span>
                     <span>分组</span>
                     <span>运行结果</span>
                     <span></span>
                   </div>
                   <div class="ai-generation-detail-body">
-                    <div
-                      v-for="(item, index) in activeAiCaseGenerationResults"
+                    <template
+                      v-for="item in filteredAiCaseGenerationResults"
                       :key="item.id"
-                      :class="['ai-generation-detail-row', { 'is-highlight': index === 5 }]"
                     >
-                      <el-checkbox :model-value="item.status !== 'discarded'" />
-                      <div class="ai-generation-detail-name">
-                        <span>{{ item.name }}</span>
-                        <button v-if="index === 0" type="button" class="ai-generation-inline-edit" aria-label="编辑">
-                          <MoreHorizontal />
-                        </button>
+                      <div
+                        :class="['ai-generation-detail-row', { active: activeAiGeneratedCaseId === item.id }]"
+                        @click="toggleAiGeneratedCaseDetail(item)"
+                      >
+                        <el-checkbox :model-value="item.status !== 'discarded'" @click.stop />
+                        <div class="ai-generation-detail-name">
+                          <span>{{ item.name }}</span>
+                          <button type="button" class="ai-generation-inline-edit" aria-label="编辑" @click.stop>
+                            <MoreHorizontal />
+                          </button>
+                        </div>
+                        <div class="ai-generation-detail-group-cell">
+                          <span class="ai-generation-case-tag">{{ item.type }}</span>
+                        </div>
+                        <span :class="['ai-generation-detail-group-type', item.group === '正向' ? 'is-positive' : 'is-negative']">{{ item.group }}</span>
+                        <span :class="['ai-generation-run-result', { 'is-success': item.runResult === '通过', 'is-failed': item.runResult === '失败' }]">
+                          {{ item.runResult || '-' }}
+                        </span>
+                        <div class="ai-generation-row-actions">
+                          <button type="button" class="ai-generation-row-run" @click.stop="runAiCaseGenerateResult(item)">
+                            <Play />
+                            运行
+                          </button>
+                          <button type="button" class="ai-generation-row-accept" @click.stop="updateAiCaseGenerateResultStatus(item.id, 'accepted')">采纳</button>
+                          <button type="button" class="ai-generation-row-discard" @click.stop="updateAiCaseGenerateResultStatus(item.id, 'discarded')">废弃</button>
+                        </div>
                       </div>
-                      <div class="ai-generation-detail-group-cell">
-                        <span class="ai-generation-case-tag">{{ item.type }}</span>
+
+                      <div v-if="false" class="ai-generation-case-expand">
+                        <div class="ai-generation-case-expand-request">
+                          <div class="ai-generation-case-url-line">
+                            <span :class="['ms-like-method', `method-${item.requestConfig.method.toLowerCase()}`]">{{ item.requestConfig.method }}</span>
+                            <span class="ai-generation-case-path">{{ item.requestConfig.path || activeAiCaseGenerationState?.path || '-' }}</span>
+                            <span class="ai-generation-case-type-tag">{{ item.type }}</span>
+                          </div>
+
+                          <div class="ms-like-top-tabs ai-generation-case-tabs">
+                            <button :class="['ms-like-top-tab', { active: item.activeTab === 'headers' }]" type="button" @click="setAiGeneratedCaseTab(item, 'headers')">请求头</button>
+                            <button :class="['ms-like-top-tab', { active: item.activeTab === 'body' }]" type="button" @click="setAiGeneratedCaseTab(item, 'body')">请求体</button>
+                            <button :class="['ms-like-top-tab', { active: item.activeTab === 'params' }]" type="button" @click="setAiGeneratedCaseTab(item, 'params')">Params</button>
+                            <button :class="['ms-like-top-tab', { active: item.activeTab === 'auth' }]" type="button" @click="setAiGeneratedCaseTab(item, 'auth')">Auth</button>
+                            <button :class="['ms-like-top-tab', { active: item.activeTab === 'pre' }]" type="button" @click="setAiGeneratedCaseTab(item, 'pre')">前置操作</button>
+                            <button :class="['ms-like-top-tab', { active: item.activeTab === 'post' }]" type="button" @click="setAiGeneratedCaseTab(item, 'post')">后置操作</button>
+                            <button :class="['ms-like-top-tab', { active: item.activeTab === 'tests' }]" type="button" @click="setAiGeneratedCaseTab(item, 'tests')">断言</button>
+                            <button :class="['ms-like-top-tab', { active: item.activeTab === 'settings' }]" type="button" @click="setAiGeneratedCaseTab(item, 'settings')">设置</button>
+                          </div>
+
+                          <div class="ms-like-request-body ai-generation-case-config-body">
+                            <template v-if="item.activeTab === 'body'">
+                              <div class="ai-generation-case-body-mode">
+                                <span :class="['ms-like-body-chip', 'active']">{{ formatAiGeneratedBodyType(item.requestConfig.body.type) }}</span>
+                              </div>
+                              <div :class="['ms-like-body-mode-shell', { 'is-none': item.requestConfig.body.type === 'NONE' }]">
+                                <MonacoCodeEditor
+                                  v-if="['RAW_JSON', 'RAW_XML', 'RAW_TEXT'].includes(item.requestConfig.body.type)"
+                                  :model-value="aiGeneratedCaseBodyText(item)"
+                                  :language="aiGeneratedCaseBodyLanguage(item)"
+                                  height="100%"
+                                  adaptive
+                                  :min-adaptive-height="260"
+                                  :max-adaptive-height="720"
+                                  @update:model-value="setAiGeneratedCaseBodyText(item, $event)"
+                                />
+                                <div v-else-if="['FORM_URLENCODED', 'FORM_DATA'].includes(item.requestConfig.body.type)" class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--body-form">
+                                  <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--body-form">
+                                    <div class="ms-like-drag-cell"></div>
+                                    <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header"><el-checkbox :model-value="true" /></div>
+                                    <span class="ms-like-header-input-title">参数名称</span>
+                                    <span class="ms-like-type-header">类型</span>
+                                    <span>参数值</span>
+                                    <span class="ms-like-length-header">长度范围</span>
+                                    <span>描述</span>
+                                    <span></span>
+                                  </div>
+                                  <div v-for="(row, rowIndex) in item.requestConfig.body.formItems" :key="`${item.id}-body-${rowIndex}`" class="ms-like-table-row ms-like-param-table-grid ms-like-param-table-grid--body-form">
+                                    <div class="ms-like-drag-cell"></div>
+                                    <div class="ms-like-checkbox-cell"><el-checkbox v-model="row.enabled" /></div>
+                                    <div class="ms-like-name-field"><el-input v-model="row.key" placeholder="参数名称" @input="handleKeyValueRowInput(item.requestConfig.body.formItems, bodyFormParamDefaults())" /></div>
+                                    <div class="ms-like-type-field">
+                                      <button type="button" :class="['ms-like-required-button', { active: row.required }]" :title="row.required ? '必填' : '非必填'" @click="row.required = !row.required">*</button>
+                                      <el-select v-model="row.paramType" @change="handleKeyValueRowInput(item.requestConfig.body.formItems, bodyFormParamDefaults())">
+                                        <el-option v-for="option in bodyParamTypeOptionsFor({ requestConfig: item.requestConfig })" :key="option" :label="option" :value="option" />
+                                      </el-select>
+                                    </div>
+                                    <el-input v-model="row.value" placeholder="参数值" @input="handleKeyValueRowInput(item.requestConfig.body.formItems, bodyFormParamDefaults())" />
+                                    <div class="ms-like-length-range-cell">
+                                      <el-input-number v-model="row.minLength" :min="0" :controls="false" placeholder="最小" @change="handleKeyValueRowInput(item.requestConfig.body.formItems, bodyFormParamDefaults())" />
+                                      <span>至</span>
+                                      <el-input-number v-model="row.maxLength" :min="0" :controls="false" placeholder="最大" @change="handleKeyValueRowInput(item.requestConfig.body.formItems, bodyFormParamDefaults())" />
+                                    </div>
+                                    <el-input v-model="row.description" placeholder="描述" @input="handleKeyValueRowInput(item.requestConfig.body.formItems, bodyFormParamDefaults())" />
+                                    <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(item.requestConfig.body.formItems, rowIndex, bodyFormParamDefaults())">删除</button>
+                                  </div>
+                                  <button type="button" class="ms-like-add-row" @click="item.requestConfig.body.formItems.push(emptyKeyValue(bodyFormParamDefaults()))">+ 添加一行</button>
+                                </div>
+                                <div v-else-if="item.requestConfig.body.type === 'BINARY'" class="request-section ms-like-form-panel">
+                                  <div class="ms-like-form-row">
+                                    <div class="ms-like-form-label">File</div>
+                                    <el-input v-model="item.requestConfig.body.fileName" class="ms-like-form-control" placeholder="文件名" />
+                                  </div>
+                                </div>
+                                <div v-else class="ms-like-empty-body">请求没有 Body</div>
+                              </div>
+                            </template>
+
+                            <template v-else-if="item.activeTab === 'headers'">
+                              <div class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--header">
+                                <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--header">
+                                  <div class="ms-like-drag-cell"></div>
+                                  <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header"><el-checkbox :model-value="true" /></div>
+                                  <span class="ms-like-header-input-title">Header 名称</span>
+                                  <span>Header 值</span>
+                                  <span>描述</span>
+                                  <button type="button" class="ms-like-link-button">批量添加</button>
+                                </div>
+                                <div v-for="(row, rowIndex) in item.requestConfig.headers" :key="`${item.id}-header-${rowIndex}`" class="ms-like-table-row ms-like-param-table-grid ms-like-param-table-grid--header">
+                                  <div class="ms-like-drag-cell"></div>
+                                  <div class="ms-like-checkbox-cell"><el-checkbox v-model="row.enabled" /></div>
+                                  <div class="ms-like-name-field"><el-input v-model="row.key" placeholder="Header 名称" @input="handleKeyValueRowInput(item.requestConfig.headers, headerParamDefaults())" /></div>
+                                  <el-input v-model="row.value" placeholder="Header 值" @input="handleKeyValueRowInput(item.requestConfig.headers, headerParamDefaults())" />
+                                  <el-input v-model="row.description" placeholder="描述" @input="handleKeyValueRowInput(item.requestConfig.headers, headerParamDefaults())" />
+                                  <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(item.requestConfig.headers, rowIndex, headerParamDefaults())">删除</button>
+                                </div>
+                                <button type="button" class="ms-like-add-row" @click="item.requestConfig.headers.push(emptyKeyValue(headerParamDefaults()))">+ 添加一行</button>
+                              </div>
+                            </template>
+
+                            <template v-else-if="item.activeTab === 'params'">
+                              <div class="request-section ms-like-table-surface ms-like-param-table ms-like-param-table--query">
+                                <div class="ms-like-table-header ms-like-param-table-grid ms-like-param-table-grid--query">
+                                  <div class="ms-like-drag-cell"></div>
+                                  <div class="ms-like-checkbox-cell ms-like-checkbox-cell--header"><el-checkbox :model-value="true" /></div>
+                                  <span class="ms-like-header-input-title">Query 参数</span>
+                                  <span class="ms-like-type-header">类型</span>
+                                  <span>参数值</span>
+                                  <span class="ms-like-length-header">长度范围</span>
+                                  <span>编码</span>
+                                  <span>描述</span>
+                                  <button type="button" class="ms-like-link-button">批量添加</button>
+                                </div>
+                                <div v-for="(row, rowIndex) in item.requestConfig.queryParams" :key="`${item.id}-query-${rowIndex}`" class="ms-like-table-row ms-like-param-table-grid ms-like-param-table-grid--query">
+                                  <div class="ms-like-drag-cell"></div>
+                                  <div class="ms-like-checkbox-cell"><el-checkbox v-model="row.enabled" /></div>
+                                  <div class="ms-like-name-field"><el-input v-model="row.key" placeholder="参数名称" @input="handleKeyValueRowInput(item.requestConfig.queryParams, queryParamDefaults())" /></div>
+                                  <div class="ms-like-type-field">
+                                    <button type="button" :class="['ms-like-required-button', { active: row.required }]" :title="row.required ? '必填' : '非必填'" @click="row.required = !row.required">*</button>
+                                    <el-select v-model="row.paramType" @change="handleKeyValueRowInput(item.requestConfig.queryParams, queryParamDefaults())">
+                                      <el-option v-for="option in queryParamTypeOptions" :key="option" :label="option" :value="option" />
+                                    </el-select>
+                                  </div>
+                                  <el-input v-model="row.value" placeholder="参数值" @input="handleKeyValueRowInput(item.requestConfig.queryParams, queryParamDefaults())" />
+                                  <div class="ms-like-length-range-cell">
+                                    <el-input-number v-model="row.minLength" :min="0" :controls="false" placeholder="最小" @change="handleKeyValueRowInput(item.requestConfig.queryParams, queryParamDefaults())" />
+                                    <span>至</span>
+                                    <el-input-number v-model="row.maxLength" :min="0" :controls="false" placeholder="最大" @change="handleKeyValueRowInput(item.requestConfig.queryParams, queryParamDefaults())" />
+                                  </div>
+                                  <div class="ms-like-switch-cell ms-like-switch-cell--query"><el-switch v-model="row.encode" size="small" /></div>
+                                  <el-input v-model="row.description" placeholder="描述" @input="handleKeyValueRowInput(item.requestConfig.queryParams, queryParamDefaults())" />
+                                  <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(item.requestConfig.queryParams, rowIndex, queryParamDefaults())">删除</button>
+                                </div>
+                                <button type="button" class="ms-like-add-row" @click="item.requestConfig.queryParams.push(emptyKeyValue(queryParamDefaults()))">+ 添加一行</button>
+                              </div>
+                            </template>
+
+                            <template v-else-if="item.activeTab === 'auth'">
+                              <div class="ai-generation-case-summary-grid">
+                                <span>认证方式</span><strong>{{ item.requestConfig.authConfig.authType }}</strong>
+                                <span>用户名</span><strong>{{ item.requestConfig.authConfig.basicAuth.userName || item.requestConfig.authConfig.digestAuth.userName || '-' }}</strong>
+                              </div>
+                            </template>
+
+                            <template v-else-if="item.activeTab === 'pre'">
+                              <div class="request-section">
+                                <ApiProcessorEditor
+                                  v-model="item.preProcessors"
+                                  v-model:active-id="activePreProcessorId"
+                                  stage="pre"
+                                  :db-connections="dbConnections"
+                                />
+                              </div>
+                            </template>
+
+                            <template v-else-if="item.activeTab === 'post'">
+                              <div class="request-section">
+                                <ApiProcessorEditor
+                                  v-model="item.postProcessors"
+                                  v-model:active-id="activePostProcessorId"
+                                  stage="post"
+                                  :db-connections="dbConnections"
+                                />
+                              </div>
+                            </template>
+
+                            <template v-else-if="item.activeTab === 'tests'">
+                              <div class="request-section">
+                                <ApiAssertionEditor
+                                  v-model="item.assertions"
+                                  v-model:active-id="activeAssertionId"
+                                />
+                              </div>
+                            </template>
+
+                            <template v-else>
+                              <div class="ai-generation-case-summary-grid">
+                                <span>用例类型</span><strong>{{ item.type }}</strong>
+                                <span>所属分组</span><strong>{{ item.group }}</strong>
+                                <span>预期结果</span><strong>{{ item.expected }}</strong>
+                              </div>
+                            </template>
+                          </div>
+                        </div>
+
+                        <div class="ms-like-response-shell ai-generation-case-expand-response">
+                          <div class="ms-like-response-header">
+                            <div class="ms-like-response-title">返回响应</div>
+                            <div v-if="item.responseBody" class="ms-like-response-metrics">
+                              <span :class="['ms-like-response-metric', item.runResult === '通过' ? 'is-success' : 'is-failed']">{{ item.responseStatus || '-' }}</span>
+                            </div>
+                          </div>
+                          <div class="ms-like-response-content-panel">
+                            <div v-if="!item.responseBody" class="ms-like-response-empty">
+                              <div class="ms-like-response-empty-card">
+                                <div class="ms-like-response-empty-visual">
+                                  <div class="ms-like-response-empty-window">
+                                    <span></span>
+                                    <span></span>
+                                    <span></span>
+                                  </div>
+                                </div>
+                                <div class="ms-like-response-empty-text">点击 <span>运行</span> 获取返回结果</div>
+                              </div>
+                            </div>
+                            <template v-else>
+                              <div class="ms-like-response-tabs">
+                                <button :class="['ms-like-top-tab', { active: item.responseTab === 'body' }]" @click="setAiGeneratedCaseResponseTab(item, 'body')">Body</button>
+                                <button :class="['ms-like-top-tab', { active: item.responseTab === 'header' }]" @click="setAiGeneratedCaseResponseTab(item, 'header')">Header</button>
+                                <button :class="['ms-like-top-tab', { active: item.responseTab === 'console' }]" @click="setAiGeneratedCaseResponseTab(item, 'console')">控制台</button>
+                                <button :class="['ms-like-top-tab', { active: item.responseTab === 'actualRequest' }]" @click="setAiGeneratedCaseResponseTab(item, 'actualRequest')">实际请求</button>
+                                <button :class="['ms-like-top-tab', { active: item.responseTab === 'assertions' }]" @click="setAiGeneratedCaseResponseTab(item, 'assertions')">断言</button>
+                              </div>
+                              <div class="ms-like-response-body">
+                                <MonacoCodeEditor
+                                  :model-value="aiGeneratedCaseResponsePreview(item)"
+                                  :language="aiGeneratedCaseResponseLanguage(item)"
+                                  :read-only="true"
+                                  :show-format-button="false"
+                                  :fit-content="true"
+                                  :max-fit-content-height="720"
+                                  height="100%"
+                                />
+                              </div>
+                            </template>
+                          </div>
+                        </div>
                       </div>
-                      <span :class="['ai-generation-detail-group-type', item.group === '正向' ? 'is-positive' : 'is-negative']">{{ item.group }}</span>
-                      <span :class="['ai-generation-run-result', { 'is-success': item.runResult === '通过', 'is-failed': item.runResult === '失败' }]">
-                        {{ item.runResult || '-' }}
-                      </span>
-                      <div class="ai-generation-row-actions">
-                        <button v-if="index === 0" type="button" class="ai-generation-row-run" @click="runAiCaseGenerateResult(item)">
-                          <Play />
-                          运行
-                        </button>
-                        <button v-if="index === 0" type="button" class="ai-generation-row-accept" @click="updateAiCaseGenerateResultStatus(item.id, 'accepted')">采纳</button>
-                        <button v-if="index === 0" type="button" class="ai-generation-row-discard" @click="updateAiCaseGenerateResultStatus(item.id, 'discarded')">废弃</button>
-                        <button v-else type="button" class="ai-generation-row-more">
-                          <MoreHorizontal />
-                        </button>
-                      </div>
-                    </div>
+                    </template>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div v-else :class="['ms-like-editor-shell', { 'without-response': !shouldShowResponsePanel }]">
+              <div v-else :class="['ms-like-editor-shell', { 'without-response': !shouldShowResponsePanel }]">
               <div class="ms-like-request-shell">
                 <div v-if="isAllScope && !definitionForm.workspaceCode" class="scope-hint">
                   &#24403;&#21069;&#22788;&#20110; ALL &#35270;&#35282;&#65292;&#35831;&#20808;&#22312;&#39030;&#37096;&#36873;&#25321;&#30446;&#26631;&#31354;&#38388;&#21518;&#20877;&#20445;&#23384;&#25110;&#35843;&#35797;&#12290;
@@ -13732,7 +14292,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-body-mode-shell.is-none {
-  min-height: 100px;
+  min-height: 300px;
   border: 0;
   border-radius: var(--ath-radius-sm);
   background: #f9fafb;
@@ -13748,7 +14308,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-body-mode-shell.is-none > .ms-like-empty-body {
-  min-height: 100px;
+  min-height: 300px;
 }
 
 .ms-like-body-mode-shell > .ms-monaco-editor {
@@ -15172,7 +15732,7 @@ function formatTimeLabel(value?: string | null) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  width: 132px;
+  width: 160px;
   height: 28px;
   border: 1px solid #e5e7eb;
   border-radius: 6px;
@@ -15180,8 +15740,7 @@ function formatTimeLabel(value?: string | null) {
   padding: 0 8px;
 }
 
-.ai-generation-detail-search svg,
-.ai-generation-filter-button svg {
+.ai-generation-detail-search svg {
   width: 14px;
   height: 14px;
   color: #94a3b8;
@@ -15200,16 +15759,24 @@ function formatTimeLabel(value?: string | null) {
   color: #cbd5e1;
 }
 
-.ai-generation-filter-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: 1px solid #e5e7eb;
+.ai-generation-detail-filter {
+  width: 112px;
+}
+
+.ai-generation-detail-filter.is-wide {
+  width: 168px;
+}
+
+.ai-generation-detail-filter :deep(.el-select__wrapper) {
+  min-height: 28px;
   border-radius: 6px;
-  background: #ffffff;
-  cursor: pointer;
+  box-shadow: inset 0 0 0 1px #e5e7eb;
+}
+
+.ai-generation-detail-filter :deep(.el-select__placeholder),
+.ai-generation-detail-filter :deep(.el-select__selected-item) {
+  color: #64748b;
+  font-size: 12px;
 }
 
 .ai-generation-detail-actions {
@@ -15294,12 +15861,17 @@ function formatTimeLabel(value?: string | null) {
   min-height: 46px;
   border-bottom: 1px solid #edf2f7;
   color: #334155;
+  cursor: pointer;
   font-size: 13px;
 }
 
 .ai-generation-detail-row:hover,
-.ai-generation-detail-row.is-highlight {
+.ai-generation-detail-row.active {
   background: #f4f7fb;
+}
+
+.ai-generation-detail-row.active {
+  box-shadow: none;
 }
 
 .ai-generation-detail-name {
@@ -15369,7 +15941,14 @@ function formatTimeLabel(value?: string | null) {
   justify-content: flex-end;
   gap: 6px;
   min-width: 0;
+  opacity: 0;
+  pointer-events: none;
   white-space: nowrap;
+}
+
+.ai-generation-detail-row:hover .ai-generation-row-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .ai-generation-row-actions button {
@@ -15377,7 +15956,72 @@ function formatTimeLabel(value?: string | null) {
   white-space: nowrap;
 }
 
+.ai-generation-case-url-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  border-bottom: 1px solid #edf2f7;
+  padding: 0 16px;
+}
 
+.ai-generation-case-path {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-generation-case-type-tag {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+.ai-generation-case-config-body {
+  min-height: 278px;
+  padding: 8px 16px 16px;
+}
+
+.ai-generation-case-body-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  margin-bottom: 8px;
+}
+
+.ai-generation-case-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.ai-generation-case-summary-grid {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 12px 16px;
+  max-width: 620px;
+  color: #64748b;
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+.ai-generation-case-summary-grid strong {
+  min-width: 0;
+  color: #334155;
+  font-weight: 500;
+}
 
 .ai-case-drawer-header {
   display: flex;

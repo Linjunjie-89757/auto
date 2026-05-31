@@ -699,14 +699,17 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
   display: grid;
   grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
   gap: 12px;
-  min-height: 420px;
+  min-height: 360px;
+  color: #111827;
 }
 
 .processor-sidebar,
 .processor-detail {
-  border: 1px solid var(--el-border-color-light);
+  min-height: 0;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
-  background: var(--el-bg-color);
+  background: #ffffff;
+  overflow: hidden;
 }
 
 .processor-sidebar {
@@ -717,15 +720,39 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
 .processor-toolbar {
   display: flex;
   justify-content: flex-start;
-  padding: 12px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  height: 48px;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.processor-toolbar :deep(.el-button) {
+  height: 32px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.processor-toolbar :deep(.el-button--primary) {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.processor-toolbar :deep(.el-button--primary:hover),
+.processor-toolbar :deep(.el-button--primary:focus) {
+  border-color: #1d4ed8;
+  background: #1d4ed8;
+  color: #ffffff;
 }
 
 .processor-list {
   display: flex;
   flex-direction: column;
   padding: 8px;
-  gap: 8px;
+  gap: 6px;
+  overflow-x: hidden;
 }
 
 .processor-list-item {
@@ -734,17 +761,23 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--el-border-color-light);
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: var(--el-fill-color-blank);
+  background: #ffffff;
   text-align: left;
   cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.processor-list-item:hover {
+  background: #f9fafb;
 }
 
 .processor-list-item.active {
-  border-color: var(--el-color-primary);
-  background: color-mix(in srgb, var(--el-color-primary) 8%, white);
+  border-color: #bfdbfe;
+  background: #eff6ff;
 }
 
 .processor-list-item-main,
@@ -770,7 +803,9 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
 }
 
 .processor-list-title {
-  color: var(--el-text-color-primary);
+  color: #111827;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .processor-list-meta,
@@ -778,7 +813,7 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
 .processor-hint,
 .processor-form-grid span {
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: #6b7280;
 }
 
 .processor-list-actions,
@@ -792,12 +827,15 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow-x: hidden;
   padding: 12px;
 }
 
 .processor-detail-header {
   justify-content: space-between;
   flex-wrap: wrap;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f3f4f6;
 }
 
 .processor-detail-fields {
@@ -807,6 +845,14 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
 
 .processor-detail-fields :deep(.el-input) {
   flex: 1;
+}
+
+.processor-detail-fields :deep(.el-input__wrapper),
+.processor-form-grid :deep(.el-input__wrapper),
+.processor-form-grid :deep(.el-select__wrapper) {
+  min-height: 34px;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px #d1d5db;
 }
 
 .processor-form-grid {
@@ -824,7 +870,7 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
 .extractor-table {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .extractor-table.compact {
@@ -844,14 +890,15 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
 }
 
 .extractor-table-header {
-  color: var(--el-text-color-secondary);
+  color: #6b7280;
   font-size: 12px;
+  font-weight: 500;
 }
 
 .extractor-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .extractor-panel-header {
@@ -863,13 +910,13 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
 .extractor-panel-title {
   font-size: 14px;
   font-weight: 600;
-  color: var(--el-text-color-primary);
+  color: #111827;
 }
 
 .extractor-grid {
   width: max-content;
   min-width: 100%;
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
   overflow: visible;
 }
@@ -909,10 +956,11 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
 }
 
 .extractor-grid-header {
-  background: var(--el-fill-color-lighter);
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  font-weight: 400;
+  min-height: 40px;
+  background: #f9fafb;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .extractor-grid-header-action {
@@ -921,7 +969,11 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
 }
 
 .extractor-grid-row + .extractor-grid-row {
-  border-top: 1px solid var(--el-border-color-lighter);
+  border-top: 1px solid #f3f4f6;
+}
+
+.extractor-grid-row:hover {
+  background: #f9fafb;
 }
 
 .extractor-grid-cell {
@@ -1034,8 +1086,10 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
   width: fit-content;
   border: none;
   background: transparent;
-  color: var(--el-color-primary);
+  color: #2563eb;
   cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
   padding: 0;
 }
 
@@ -1044,13 +1098,15 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
   align-items: center;
   justify-content: center;
   min-height: 240px;
-  color: var(--el-text-color-secondary);
+  color: #9ca3af;
+  font-size: 13px;
 }
 
 .processor-empty--inline {
   min-height: 160px;
-  border: 1px dashed var(--el-border-color);
+  border: 1px dashed #d1d5db;
   border-radius: 8px;
+  background: #f9fafb;
 }
 
 @media (max-width: 1400px) {

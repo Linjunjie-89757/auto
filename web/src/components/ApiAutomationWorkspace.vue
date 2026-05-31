@@ -213,10 +213,6 @@ const scenarioAssertionTypeOptions: Array<{ label: string; value: ApiScenarioAss
   { label: '执行步骤数等于', value: 'STEP_COUNT_EQUALS' },
 ]
 const CASE_LIST_PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50] as const
-const REQUEST_RESPONSE_SPLIT_STORAGE_KEY = 'api-definition-request-response-ratio'
-const DEFAULT_REQUEST_RESPONSE_RATIO = 50
-const MIN_REQUEST_RESPONSE_RATIO = 28
-const MAX_REQUEST_RESPONSE_RATIO = 72
 const definitionImportFormats: Array<{
   value: DefinitionImportFormat
   label: string
@@ -456,11 +452,6 @@ const definitionImportFormat = ref<DefinitionImportFormat>('swagger')
 const definitionImportMode = ref<DefinitionImportMode>('url')
 const definitionImportUrl = ref('')
 const definitionImportFileName = ref('')
-const definitionEditorShellRef = ref<HTMLElement | null>(null)
-const requestResponseRatio = ref(DEFAULT_REQUEST_RESPONSE_RATIO)
-const requestResponseDragging = ref(false)
-let requestResponseDragStartY = 0
-let requestResponseDragStartRatio = DEFAULT_REQUEST_RESPONSE_RATIO
 
 const definitionSaveForm = reactive({
   workspaceCode: '',
@@ -2365,7 +2356,6 @@ watch(definitionDirectoryTree, (tree) => {
 }, { immediate: true })
 
 onMounted(() => {
-  loadRequestResponseRatio()
   openNewRequestTab()
   caseListSettings.load()
   document.addEventListener('mousedown', handleScenarioStepNameOutsidePointerDown, true)
@@ -2396,7 +2386,6 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  stopRequestResponseResize()
   document.removeEventListener('mousedown', handleScenarioStepNameOutsidePointerDown, true)
   tabStripCleanupFns.forEach(cleanup => cleanup())
   resizeObservers.forEach(observer => observer.disconnect())
@@ -6018,65 +6007,6 @@ const selectedDefinitionImportFormat = computed(() =>
   definitionImportFormats.find(item => item.value === definitionImportFormat.value) ?? definitionImportFormats[0],
 )
 
-const definitionEditorGridStyle = computed(() => {
-  if (!shouldShowResponsePanel.value) {
-    return {}
-  }
-  return {
-    gridTemplateRows: `minmax(0, ${requestResponseRatio.value}fr) 6px minmax(0, ${100 - requestResponseRatio.value}fr)`,
-  }
-})
-
-function clampRequestResponseRatio(value: number) {
-  return Math.min(MAX_REQUEST_RESPONSE_RATIO, Math.max(MIN_REQUEST_RESPONSE_RATIO, Math.round(value)))
-}
-
-function loadRequestResponseRatio() {
-  const storedValue = Number(localStorage.getItem(REQUEST_RESPONSE_SPLIT_STORAGE_KEY))
-  if (Number.isFinite(storedValue)) {
-    requestResponseRatio.value = clampRequestResponseRatio(storedValue)
-  }
-}
-
-function persistRequestResponseRatio() {
-  localStorage.setItem(REQUEST_RESPONSE_SPLIT_STORAGE_KEY, String(requestResponseRatio.value))
-}
-
-function startRequestResponseResize(event: MouseEvent) {
-  if (!shouldShowResponsePanel.value || !definitionEditorShellRef.value) {
-    return
-  }
-  requestResponseDragging.value = true
-  requestResponseDragStartY = event.clientY
-  requestResponseDragStartRatio = requestResponseRatio.value
-  document.body.classList.add('is-api-response-resizing')
-  window.addEventListener('mousemove', handleRequestResponseResize)
-  window.addEventListener('mouseup', stopRequestResponseResize)
-}
-
-function handleRequestResponseResize(event: MouseEvent) {
-  if (!requestResponseDragging.value || !definitionEditorShellRef.value) {
-    return
-  }
-  const shellHeight = definitionEditorShellRef.value.clientHeight
-  if (shellHeight <= 0) {
-    return
-  }
-  const deltaRatio = ((event.clientY - requestResponseDragStartY) / shellHeight) * 100
-  requestResponseRatio.value = clampRequestResponseRatio(requestResponseDragStartRatio + deltaRatio)
-}
-
-function stopRequestResponseResize() {
-  if (!requestResponseDragging.value) {
-    return
-  }
-  requestResponseDragging.value = false
-  document.body.classList.remove('is-api-response-resizing')
-  window.removeEventListener('mousemove', handleRequestResponseResize)
-  window.removeEventListener('mouseup', stopRequestResponseResize)
-  persistRequestResponseRatio()
-}
-
 function openDefinitionImportDialog() {
   definitionImportDialogVisible.value = true
 }
@@ -6349,9 +6279,7 @@ function formatTimeLabel(value?: string | null) {
             </div>
 
             <div
-              ref="definitionEditorShellRef"
-              :class="['ms-like-editor-shell', { 'is-resizing': requestResponseDragging, 'without-response': !shouldShowResponsePanel }]"
-              :style="definitionEditorGridStyle"
+              :class="['ms-like-editor-shell', { 'without-response': !shouldShowResponsePanel }]"
             >
               <div class="ms-like-request-shell">
                 <div v-if="isAllScope && !definitionForm.workspaceCode" class="scope-hint">
@@ -6907,16 +6835,6 @@ function formatTimeLabel(value?: string | null) {
                   </div>
                 </div>
               </div>
-
-              <button
-                v-if="shouldShowResponsePanel"
-                type="button"
-                class="ms-like-response-resizer"
-                aria-label="调整请求和响应区域高度"
-                @mousedown.prevent="startRequestResponseResize"
-              >
-                <span></span>
-              </button>
 
               <div v-if="shouldShowResponsePanel" class="ms-like-response-shell">
               <div class="ms-like-response-header">
@@ -12305,25 +12223,34 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-editor-shell {
-  display: grid;
+  display: flex;
   flex: 1 1 auto;
-  grid-template-rows: minmax(0, 1fr) 6px minmax(0, 1fr);
+  flex-direction: column;
   min-height: 0;
+  min-width: 0;
   gap: 0;
   padding: 0;
   background: #ffffff;
   border: 0;
   border-radius: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: #d7dbe3 transparent;
+  scrollbar-width: thin;
 }
 
 .ms-like-editor-shell.without-response {
-  display: flex;
-  flex-direction: column;
+  overflow: hidden;
+}
+
+.ms-like-editor-shell.without-response .ms-like-request-shell {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .ms-like-request-shell {
   display: flex;
+  flex: 0 0 auto;
   min-height: 0;
   min-width: 0;
   flex-direction: column;
@@ -12332,8 +12259,12 @@ function formatTimeLabel(value?: string | null) {
   border: 0;
   border-radius: 0;
   background: #fff;
-  overflow: hidden;
+  overflow: visible;
   box-shadow: none;
+}
+
+.ms-like-editor-shell.without-response .ms-like-request-shell {
+  overflow: hidden;
 }
 
 .ms-like-request-row {
@@ -12439,22 +12370,25 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-request-content-panel {
   display: flex;
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 400px;
   min-width: 0;
   flex-direction: column;
   margin: 0;
   border: 0;
   border-radius: 0;
   background: #fff;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .ms-like-top-tabs,
 .ms-like-response-tabs {
   display: flex;
   align-items: center;
-  gap: 4px;
-  overflow: visible;
+  flex: 0 0 auto;
+  gap: 0;
+  height: 41px;
+  min-height: 41px;
+  overflow: hidden;
   border-bottom: 1px solid #e5e7eb;
   padding: 0 16px;
   background: #ffffff;
@@ -12465,30 +12399,24 @@ function formatTimeLabel(value?: string | null) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  box-sizing: border-box;
+  height: 40px;
   border: 0;
+  border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--ath-text-muted);
   font-size: var(--ath-font-sm);
   font-weight: var(--ath-weight-normal);
   line-height: var(--ath-line-sm);
-  padding: 10px 12px;
+  padding: 0 12px;
   cursor: pointer;
   white-space: nowrap;
 }
 
 .ms-like-top-tab.active {
+  border-bottom-color: var(--ath-primary);
   color: var(--ath-primary);
   font-weight: var(--ath-weight-medium);
-}
-
-.ms-like-top-tab.active::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 2px;
-  background: var(--ath-primary);
 }
 
 .ms-like-tab-badge {
@@ -12514,16 +12442,16 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-request-body {
   display: flex;
   flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
+  min-height: 320px;
+  overflow: visible;
   background: #fff;
-  padding: 14px 16px;
+  padding: 12px 16px;
 }
 
 .ms-like-body-section {
   display: grid;
   grid-template-rows: 32px minmax(0, 1fr);
-  gap: 8px;
+  gap: 10px;
   overflow: hidden;
 }
 
@@ -12599,15 +12527,15 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-body-chip {
-  height: 24px;
+  height: 26px;
   border: 0;
-  border-radius: var(--ath-radius-sm);
+  border-radius: 6px;
   background: #ffffff;
   color: var(--ath-text-muted);
   font-size: var(--ath-font-xs);
   font-weight: var(--ath-weight-medium);
   line-height: var(--ath-line-xs);
-  padding: 4px 12px;
+  padding: 0 12px;
   cursor: pointer;
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
@@ -12621,8 +12549,8 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-body-chip.active {
-  background: var(--ath-primary);
-  color: #ffffff;
+  background: #eff6ff;
+  color: #2563eb;
 }
 
 .ms-like-body-chip:hover {
@@ -12631,8 +12559,8 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-body-chip.active:hover {
-  background: var(--ath-primary);
-  color: #ffffff;
+  background: #eff6ff;
+  color: #2563eb;
 }
 
 .ms-like-body-chip.ghost {
@@ -12645,10 +12573,11 @@ function formatTimeLabel(value?: string | null) {
   align-items: center;
   justify-content: center;
   min-height: 0;
-  border-radius: 10px;
+  border: 1px dashed #d1d5db;
+  border-radius: 8px;
   background: #f9fafb;
-  color: var(--el-text-color-secondary);
-  font-size: 14px;
+  color: #9ca3af;
+  font-size: 13px;
 }
 
 .ms-like-table-surface {
@@ -12696,10 +12625,10 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-param-table .ms-like-table-header {
-  color: #7d7d7f;
-  font-size: 14px;
+  color: #6b7280;
+  font-size: 12px;
   font-weight: 500;
-  line-height: 22px;
+  line-height: 16px;
 }
 
 .ms-like-check-cell,
@@ -12759,9 +12688,9 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-table-row {
-  min-height: 38px;
+  min-height: 40px;
   border-bottom: 1px solid #f3f4f6;
-  padding: 4px 10px 4px 0;
+  padding: 5px 10px 5px 0;
   transition: background-color 0.15s ease;
 }
 
@@ -12864,9 +12793,9 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-table-row :deep(.el-select__wrapper) {
   box-shadow: inset 0 0 0 1px transparent;
   background: transparent;
-  border-radius: 4px;
-  min-height: 24px;
-  padding: 0 6px;
+  border-radius: 6px;
+  min-height: 28px;
+  padding: 0 8px;
   transition: box-shadow 0.15s ease, background-color 0.15s ease;
 }
 
@@ -12921,6 +12850,7 @@ function formatTimeLabel(value?: string | null) {
   color: #2563eb;
   cursor: pointer;
   font-size: 12px;
+  font-weight: 500;
   padding: 0;
 }
 
@@ -12937,24 +12867,24 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-add-row {
   align-self: flex-start;
-  padding: 8px 10px 10px;
+  padding: 9px 10px 11px;
 }
 
 .ms-like-form-panel {
   gap: 0;
   border: 1px solid #e5e7eb;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #fff;
   overflow: hidden;
 }
 
 .ms-like-form-row {
   display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
+  grid-template-columns: 128px minmax(0, 1fr);
   align-items: center;
-  gap: 16px;
-  border-bottom: 1px solid #f2f3f5;
-  padding: 12px 16px;
+  gap: 18px;
+  border-bottom: 1px solid #f3f4f6;
+  padding: 12px 18px;
 }
 
 .ms-like-form-row:last-of-type {
@@ -12966,12 +12896,30 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-form-label {
-  color: #606266;
-  font-size: 13px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .ms-like-form-control {
   width: 100%;
+}
+
+.ms-like-form-control :deep(.el-input__wrapper),
+.ms-like-form-control :deep(.el-textarea__inner),
+.ms-like-form-control.full-width :deep(.el-input__wrapper) {
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px #d1d5db;
+}
+
+.ms-like-form-control :deep(.el-input__wrapper:hover),
+.ms-like-form-control :deep(.el-textarea__inner:hover) {
+  box-shadow: inset 0 0 0 1px #9ca3af;
+}
+
+.ms-like-form-control :deep(.el-input__wrapper.is-focus),
+.ms-like-form-control :deep(.el-textarea__inner:focus) {
+  box-shadow: inset 0 0 0 1px #3b82f6, 0 0 0 2px rgba(59, 130, 246, 0.12);
 }
 
 .ms-like-binary-actions {
@@ -12996,9 +12944,11 @@ function formatTimeLabel(value?: string | null) {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
-  color: #909399;
+  color: #6b7280;
   font-size: 12px;
-  padding: 12px 16px;
+  padding: 12px 18px;
+  border-top: 1px solid #f3f4f6;
+  background: #f9fafb;
 }
 
 .ms-like-code-editor :deep(textarea) {
@@ -13021,33 +12971,10 @@ function formatTimeLabel(value?: string | null) {
   box-shadow: none;
 }
 
-.ms-like-response-resizer {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 6px;
-  border: 0;
-  background: #f9fafb;
-  cursor: row-resize;
-}
-
-.ms-like-response-resizer span {
-  width: 42px;
-  height: 2px;
-  border-radius: 999px;
-  background: #d1d5db;
-  transition: background-color 0.15s ease, width 0.15s ease;
-}
-
-.ms-like-response-resizer:hover span,
-.ms-like-editor-shell.is-resizing .ms-like-response-resizer span {
-  width: 58px;
-  background: #3b82f6;
-}
-
-:global(body.is-api-response-resizing) {
-  cursor: row-resize;
-  user-select: none;
+.ms-like-editor-shell > .ms-like-response-shell {
+  flex: 0 0 auto;
+  min-height: 360px;
+  overflow: visible;
 }
 
 .ms-like-response-content-panel {
@@ -13060,6 +12987,10 @@ function formatTimeLabel(value?: string | null) {
   border-radius: 0;
   background: #fff;
   overflow: hidden;
+}
+
+.ms-like-editor-shell > .ms-like-response-shell > .ms-like-response-content-panel {
+  min-height: 300px;
 }
 
 .ms-like-response-metrics {
@@ -13087,6 +13018,11 @@ function formatTimeLabel(value?: string | null) {
   overflow: hidden;
   flex-direction: column;
   padding: 12px;
+}
+
+.ms-like-editor-shell > .ms-like-response-shell .ms-like-response-body {
+  min-height: 260px;
+  overflow: visible;
 }
 
 .ms-like-response-empty {
@@ -13878,11 +13814,11 @@ function formatTimeLabel(value?: string | null) {
 .ms-auth-panel {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 16px;
-  border: 1px solid var(--el-border-color);
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid #e5e7eb;
   border-radius: 8px;
-  background: var(--el-bg-color);
+  background: #ffffff;
 }
 
 .ms-auth-panel--compact {
@@ -13890,18 +13826,34 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-auth-panel-title {
-  color: var(--el-text-color-primary);
+  color: #111827;
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .ms-auth-radio-group {
   align-self: flex-start;
 }
 
+.ms-auth-radio-group :deep(.el-radio-button__inner) {
+  height: 32px;
+  border-color: #d1d5db;
+  color: #374151;
+  font-size: 13px;
+  line-height: 30px;
+  padding: 0 14px;
+}
+
+.ms-auth-radio-group :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  border-color: #3b82f6;
+  background: #eff6ff;
+  color: #2563eb;
+  box-shadow: -1px 0 0 0 #3b82f6;
+}
+
 .ms-auth-form {
   display: grid;
-  gap: 16px;
+  gap: 14px;
 }
 
 .ms-auth-form--compact {
@@ -13910,25 +13862,33 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-auth-form-item {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .ms-auth-form-label {
-  color: var(--el-text-color-regular);
-  font-size: 13px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .ms-auth-form-control {
   width: min(100%, 450px);
 }
 
-.empty-hint {
-  padding: 14px;
-  border: 1px dashed var(--el-border-color);
+.ms-auth-form-control :deep(.el-input__wrapper) {
+  min-height: 34px;
   border-radius: 8px;
-  color: var(--el-text-color-secondary);
-  background: var(--el-fill-color-lighter);
+  box-shadow: inset 0 0 0 1px #d1d5db;
+}
+
+.empty-hint {
+  padding: 18px;
+  border: 1px dashed #d1d5db;
+  border-radius: 8px;
+  color: #9ca3af;
+  background: #f9fafb;
   font-size: 13px;
+  text-align: center;
 }
 
 .metric-card {
@@ -14114,10 +14074,49 @@ pre {
   width: 100%;
 }
 
+.case-list-panel > .editor-actions.left :deep(.el-button--primary) {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.case-list-panel > .editor-actions.left :deep(.el-button--primary:hover),
+.case-list-panel > .editor-actions.left :deep(.el-button--primary:focus) {
+  border-color: #1d4ed8;
+  background: #1d4ed8;
+  color: #ffffff;
+}
+
+.case-list-table :deep(.el-table__inner-wrapper) {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.case-list-table :deep(.el-table__header-wrapper th) {
+  height: 40px;
+  background: #f9fafb;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.case-list-table :deep(.el-table__body-wrapper td) {
+  height: 42px;
+  color: #374151;
+  font-size: 13px;
+}
+
+.case-list-table :deep(.el-table__row:hover > td.el-table__cell) {
+  background: #f9fafb;
+}
+
 .case-list-table-wrap {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .case-list-operation-header {
@@ -14132,13 +14131,14 @@ pre {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 4px;
   white-space: nowrap;
 }
 
 .case-list-action-button,
 .case-list-more-button {
-  color: var(--el-color-primary);
+  color: #2563eb;
+  font-weight: 500;
 }
 
 .case-list-more-button {
@@ -14152,7 +14152,7 @@ pre {
   height: 22px;
   min-height: 22px;
   padding: 0;
-  color: var(--el-text-color-secondary);
+  color: #6b7280;
 }
 
 .case-list-pagination {
@@ -14160,11 +14160,17 @@ pre {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  padding: 2px 0;
 }
 
 .case-list-pagination-summary {
-  color: var(--el-text-color-secondary);
+  color: #6b7280;
   font-size: 12px;
+}
+
+.case-list-pagination :deep(.el-pagination) {
+  --el-pagination-button-width: 28px;
+  --el-pagination-button-height: 28px;
 }
 
 :deep(.case-list-more-menu .case-list-menu-item) {
@@ -14178,10 +14184,6 @@ pre {
 @media (max-width: 1480px) {
   .ms-like-layout {
     grid-template-columns: 272px minmax(0, 1fr);
-  }
-
-  .ms-like-editor-shell {
-    grid-template-rows: minmax(0, 48fr) 6px minmax(0, 52fr);
   }
 
   .ms-like-param-table-grid--query {

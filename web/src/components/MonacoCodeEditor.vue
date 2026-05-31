@@ -56,6 +56,7 @@ const containerRef = ref<HTMLDivElement | null>(null)
 const bodyHeight = ref(props.height)
 let editor: monaco.editor.IStandaloneCodeEditor | null = null
 let suppressModelSync = false
+let readOnlyFormatTimer: ReturnType<typeof window.setTimeout> | null = null
 
 const showToolbar = computed(() => props.showFormatButton && !props.readOnly)
 
@@ -146,6 +147,19 @@ async function formatDocument() {
   }
 }
 
+function scheduleReadOnlyFormat() {
+  if (!props.readOnly) {
+    return
+  }
+  if (readOnlyFormatTimer !== null) {
+    window.clearTimeout(readOnlyFormatTimer)
+  }
+  readOnlyFormatTimer = window.setTimeout(() => {
+    readOnlyFormatTimer = null
+    void formatDocument()
+  }, 100)
+}
+
 function syncEditorHeight() {
   if (!props.fitContent || !editor) {
     return
@@ -196,7 +210,7 @@ function createEditor() {
     syncEditorHeight()
   }
   if (props.readOnly) {
-    void formatDocument()
+    scheduleReadOnlyFormat()
   }
   editor.onDidChangeModelContent(() => {
     if (!editor || suppressModelSync) {
@@ -220,6 +234,7 @@ watch(
     suppressModelSync = true
     editor.setValue(value)
     suppressModelSync = false
+    scheduleReadOnlyFormat()
     syncEditorHeight()
   },
 )
@@ -232,6 +247,7 @@ watch(
       return
     }
     monaco.editor.setModelLanguage(model, mapLanguage(language))
+    scheduleReadOnlyFormat()
     syncEditorHeight()
   },
 )
@@ -243,6 +259,7 @@ watch(
       readOnly,
       contextmenu: !readOnly,
     })
+    scheduleReadOnlyFormat()
     syncEditorHeight()
   },
 )
@@ -283,6 +300,10 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (readOnlyFormatTimer !== null) {
+    window.clearTimeout(readOnlyFormatTimer)
+    readOnlyFormatTimer = null
+  }
   editor?.dispose()
   editor = null
 })

@@ -24,7 +24,10 @@ public final class ApiAutomationModels {
             Boolean required,
             Boolean encode,
             Integer minLength,
-            Integer maxLength
+            Integer maxLength,
+            String fileName,
+            String contentType,
+            String fileBase64
     ) {
     }
 

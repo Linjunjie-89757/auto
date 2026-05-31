@@ -3214,6 +3214,30 @@ public class ApiAutomationService {
             if (item == null || item.key() == null || item.key().isBlank() || Boolean.FALSE.equals(item.enabled())) {
                 continue;
             }
+            if ("file".equalsIgnoreCase(Optional.ofNullable(item.paramType()).orElse(""))) {
+                String base64 = Optional.ofNullable(item.fileBase64()).orElse("");
+                if (base64.isBlank()) {
+                    continue;
+                }
+                byte[] content;
+                try {
+                    content = Base64.getDecoder().decode(base64);
+                } catch (IllegalArgumentException exception) {
+                    throw new BadRequestException("Form-data file content is not valid base64");
+                }
+                String fileName = Optional.ofNullable(item.fileName()).filter(value -> !value.isBlank()).orElse(item.value());
+                if (fileName == null || fileName.isBlank()) {
+                    fileName = "upload";
+                }
+                String contentType = Optional.ofNullable(item.contentType()).filter(value -> !value.isBlank()).orElse("application/octet-stream");
+                String partHeader = "--" + boundary + "\r\n"
+                        + "Content-Disposition: form-data; name=\"" + item.key() + "\"; filename=\"" + escapeMultipartHeader(fileName) + "\"\r\n"
+                        + "Content-Type: " + contentType + "\r\n\r\n";
+                buffers.add(StandardCharsets.UTF_8.encode(partHeader));
+                buffers.add(ByteBuffer.wrap(content));
+                buffers.add(StandardCharsets.UTF_8.encode("\r\n"));
+                continue;
+            }
             String part = "--" + boundary + "\r\n"
                     + "Content-Disposition: form-data; name=\"" + item.key() + "\"\r\n\r\n"
                     + Optional.ofNullable(item.value()).orElse("")
@@ -3222,6 +3246,10 @@ public class ApiAutomationService {
         }
         buffers.add(StandardCharsets.UTF_8.encode("--" + boundary + "--\r\n"));
         return new MultipartPayload(boundary, HttpRequest.BodyPublishers.fromPublisher(new ByteBufferPublisher(buffers)));
+    }
+
+    private String escapeMultipartHeader(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private String joinBaseUrl(String baseUrl, String path) {

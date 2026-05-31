@@ -560,6 +560,9 @@ export interface ApiKeyValue {
   encode?: boolean
   minLength?: number | null
   maxLength?: number | null
+  fileName?: string | null
+  contentType?: string | null
+  fileBase64?: string | null
 }
 
 export interface ApiAuthConfig {

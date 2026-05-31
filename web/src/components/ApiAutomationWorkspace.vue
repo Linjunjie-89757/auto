@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { Component, Directive } from 'vue'
 import {
@@ -55,6 +55,7 @@ import type {
   ApiAuthConfig,
   ApiAuthCredential,
   ApiDebugCasePayload,
+  AiProviderConnection,
   ApiDefinitionCaseDetail,
   ApiDefinitionCaseChangeHistoryItem,
   ApiDefinitionCaseItem,
@@ -111,6 +112,21 @@ type ScenarioScriptInputMode = 'manual' | 'common'
 type ScenarioScriptResultTab = 'console' | 'assertions'
 type DefinitionImportFormat = 'swagger' | 'postman' | 'har'
 type DefinitionImportMode = 'url' | 'file'
+type AiCaseGenerateGroup = 'positive' | 'negative' | 'boundary' | 'security'
+type AiCaseGenerateResultStatus = 'pending' | 'accepted' | 'discarded'
+type AiCaseGenerateOption = {
+  key: string
+  group: AiCaseGenerateGroup
+  label: string
+}
+type AiCaseGenerateResult = {
+  id: string
+  name: string
+  group: string
+  type: string
+  expected: string
+  status: AiCaseGenerateResultStatus
+}
 type RequestConfigHost = {
   requestConfig: ApiRequestConfig
 }
@@ -182,8 +198,8 @@ type TabStripOverflowState = {
 }
 
 const requestMethodOptions = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD', 'PATCH', 'TRACE'] as const
-const queryParamTypeOptions = ['string', 'integer', 'number', 'boolean'] as const
-const bodyParamTypeOptions = ['string', 'integer', 'number', 'boolean'] as const
+const queryParamTypeOptions = ['string', 'integer', 'number', 'boolean', 'array'] as const
+const bodyParamTypeOptions = ['string', 'integer', 'number', 'boolean', 'array', 'json', 'file'] as const
 const requestAuthTypeOptions = [
   { label: 'No Auth', value: 'NONE' },
   { label: 'Basic Auth', value: 'BASIC' },
@@ -249,6 +265,35 @@ const definitionImportFormats: Array<{
     tone: 'purple',
     accept: '.har',
   },
+]
+const aiCaseGenerateGroups: Array<{ key: AiCaseGenerateGroup, label: string }> = [
+  { key: 'positive', label: '正向' },
+  { key: 'negative', label: '负向' },
+  { key: 'boundary', label: '边界值' },
+  { key: 'security', label: '安全性' },
+]
+const aiCaseGenerateOptions: AiCaseGenerateOption[] = [
+  { key: 'required-only', group: 'positive', label: '仅传必要字段' },
+  { key: 'valid-semantics', group: 'positive', label: '语义合法' },
+  { key: 'sample-combination', group: 'positive', label: '覆盖枚举组合' },
+  { key: 'other-positive', group: 'positive', label: '其他正向' },
+  { key: 'empty-value', group: 'negative', label: '无效值' },
+  { key: 'missing-required', group: 'negative', label: '缺失必填字段' },
+  { key: 'format-error', group: 'negative', label: '格式错误' },
+  { key: 'type-error', group: 'negative', label: '类型错误' },
+  { key: 'semantic-invalid', group: 'negative', label: '语义非法' },
+  { key: 'other-negative', group: 'negative', label: '其他负向' },
+  { key: 'max-min', group: 'boundary', label: '极大值/极小值' },
+  { key: 'over-boundary', group: 'boundary', label: '超出最大、最小边界值' },
+  { key: 'null-empty', group: 'boundary', label: 'Null/零值/空值' },
+  { key: 'string-length', group: 'boundary', label: '字符串过长、过短' },
+  { key: 'auth-control', group: 'security', label: '鉴权控制' },
+  { key: 'sql-injection', group: 'security', label: 'SQL注入' },
+  { key: 'fuzzy-input', group: 'security', label: '模糊输入' },
+  { key: 'xss-injection', group: 'security', label: 'XSS注入' },
+  { key: 'command-injection', group: 'security', label: '命令行注入' },
+  { key: 'json-injection', group: 'security', label: 'JSON注入' },
+  { key: 'nosql-injection', group: 'security', label: 'NoSQL注入' },
 ]
 const executionSuiteTree = [
   {
@@ -409,6 +454,7 @@ const reportDrawerVisible = ref(false)
 const bugDialogVisible = ref(false)
 const definitionSaveDialogVisible = ref(false)
 const batchAddDrawerVisible = ref(false)
+const aiCaseGenerateDrawerVisible = ref(false)
 const activeTab = ref<'definitions' | 'scenarios' | 'execution' | 'reports' | 'settings'>('definitions')
 const activeRequestTab = ref<RequestContentTab>('body')
 const responsePreviewTab = ref<ResponsePreviewTab>('body')
@@ -433,6 +479,23 @@ const caseDrawerChangeHistoryItems = ref<ApiDefinitionCaseChangeHistoryItem[]>([
 const batchAddMode = ref<BatchAddMode>('query')
 const batchAddInput = ref('')
 const batchAddContext = ref<'main' | 'case'>('main')
+const batchAddParamStyle = ref<'quick' | 'standard'>('standard')
+const aiCaseGenerateSelectedOptions = ref<string[]>(
+  aiCaseGenerateOptions
+    .filter(item => item.group !== 'security' || item.key === 'auth-control')
+    .map(item => item.key),
+)
+const aiCaseGeneratePrompt = ref('')
+const aiCaseGenerateCount = ref<'AUTO' | 10 | 20 | 40 | 80>('AUTO')
+const aiCaseGenerateModel = ref('')
+const aiCaseGenerateProviderConnections = ref<AiProviderConnection[]>([])
+const aiCaseGenerateProviderLoading = ref(false)
+const aiCaseGenerateStepByStep = ref(false)
+const aiCaseGenerateAutoComplete = ref(false)
+const aiCaseGenerateNoDuplicate = ref(true)
+const aiCaseGenerateRounds = ref(1)
+const aiCaseGenerateLoading = ref(false)
+const aiCaseGenerateResults = ref<AiCaseGenerateResult[]>([])
 const draggingParamGroup = ref<SortableParamGroup | null>(null)
 const draggingParamIndex = ref<number | null>(null)
 const dragOverParamGroup = ref<SortableParamGroup | null>(null)
@@ -851,6 +914,23 @@ const showCaseListContent = computed(() => activeRequestEditorTab.value?.resourc
 const visibleRequestEditorTabs = computed(() => requestEditorTabs.value.filter(item => item.resourceType === 'definition'))
 const showRequestEditorMoreAction = computed(() => visibleRequestEditorTabs.value.length > 0)
 const canCreateCaseForCurrentDefinition = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && !!definitionForm.id)
+const aiCaseGenerateSelectedCount = computed(() => aiCaseGenerateSelectedOptions.value.length)
+const aiCaseGeneratePendingResults = computed(() => aiCaseGenerateResults.value.filter(item => item.status === 'pending'))
+const aiCaseGenerateAcceptedResults = computed(() => aiCaseGenerateResults.value.filter(item => item.status === 'accepted'))
+const aiCaseGenerateDiscardedResults = computed(() => aiCaseGenerateResults.value.filter(item => item.status === 'discarded'))
+const aiCaseGenerateResultStats = computed(() => ({
+  pending: aiCaseGeneratePendingResults.value.length,
+  accepted: aiCaseGenerateAcceptedResults.value.length,
+  discarded: aiCaseGenerateDiscardedResults.value.length,
+}))
+const aiCaseGenerateModelOptions = computed(() =>
+  aiCaseGenerateProviderConnections.value
+    .filter(item => item.status !== 0 && !!item.modelName?.trim())
+    .map(item => ({
+      value: `${item.id}:${item.modelName}`,
+      label: `${item.connectionName} / ${item.modelName}`,
+    })),
+)
 const requestTabNavRef = ref<HTMLElement | null>(null)
 const scenarioTabNavRef = ref<HTMLElement | null>(null)
 const requestTabOverflow = reactive<TabStripOverflowState>({
@@ -2242,6 +2322,58 @@ async function pickBinaryBodyFileFor(form: ApiRequestEditorDetail) {
   input.click()
 }
 
+async function readFileAsBase64(file: File) {
+  const buffer = await file.arrayBuffer()
+  let binary = ''
+  const bytes = new Uint8Array(buffer)
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+  return btoa(binary)
+}
+
+async function pickBodyFormRowFile(row: ApiKeyValue, target: ApiKeyValue[], defaults?: Partial<ApiKeyValue>) {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '*/*'
+  input.onchange = async () => {
+    const file = input.files?.[0]
+    if (!file) {
+      return
+    }
+    row.paramType = 'file'
+    row.value = file.name
+    row.fileName = file.name
+    row.contentType = file.type || 'application/octet-stream'
+    row.fileBase64 = await readFileAsBase64(file)
+    handleKeyValueRowInput(target, defaults)
+  }
+  input.click()
+}
+
+function clearBodyFormRowFile(row: ApiKeyValue) {
+  row.value = ''
+  row.fileName = ''
+  row.contentType = ''
+  row.fileBase64 = ''
+}
+
+function formatBodyFormFileSize(row: ApiKeyValue) {
+  const base64 = row.fileBase64 || ''
+  if (!base64) {
+    return ''
+  }
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
+  const bytes = Math.max(0, Math.floor(base64.length * 3 / 4) - padding)
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`
+  }
+  return `${bytes} B`
+}
+
 function clearBinaryBodyFile() {
   clearBinaryBodyFileFor(definitionForm)
 }
@@ -2453,6 +2585,9 @@ function emptyKeyValue(overrides: Partial<ApiKeyValue> = {}): ApiKeyValue {
     encode: false,
     minLength: null,
     maxLength: null,
+    fileName: '',
+    contentType: '',
+    fileBase64: '',
     ...overrides,
   }
 }
@@ -2464,12 +2599,13 @@ function isKeyValueRowEmpty(row: ApiKeyValue | null | undefined) {
   return !row.key?.trim()
     && !row.value?.trim()
     && !row.description?.trim()
+    && !row.fileName?.trim()
 }
 
 function normalizeKeyValueRow(row: ApiKeyValue | null | undefined, defaults?: Partial<ApiKeyValue>) {
   return emptyKeyValue({
-    ...(row ?? {}),
     ...defaults,
+    ...(row ?? {}),
   })
 }
 
@@ -2506,6 +2642,13 @@ function headerParamDefaults() {
 
 function bodyFormParamDefaults() {
   return { paramType: 'string', required: false, encode: false }
+}
+
+function bodyParamTypeOptionsFor(form: RequestConfigHost = definitionForm) {
+  if (form.requestConfig.body.type === 'FORM_DATA') {
+    return bodyParamTypeOptions
+  }
+  return bodyParamTypeOptions.filter(option => option !== 'file' && option !== 'json')
 }
 
 function emptyAuthCredential(): ApiAuthCredential {
@@ -2715,6 +2858,11 @@ const batchAddPlaceholder = computed(() => {
       return '每行一条，支持 TAB 或连续空格分列'
     case 'extractor':
       return '每行一条，格式：变量名<TAB>来源<TAB>表达式'
+    case 'query':
+    case 'body-form':
+      return batchAddParamStyle.value === 'standard'
+        ? '每行一条，格式：参数名,类型,必填,参数值；例如 username,string,true,admin'
+        : '每行一条，格式：名称<TAB>值 或 名称:值；空行自动忽略，同名以最后一条为准'
     default:
       return '每行一条，格式：名称<TAB>值 或 名称:值；空行自动忽略，同名以最后一条为准'
   }
@@ -2723,13 +2871,17 @@ const batchAddPlaceholder = computed(() => {
 const batchAddExamples = computed(() => {
   switch (batchAddMode.value) {
     case 'query':
-      return ['page\t1', 'pageSize\t20', 'keyword:test']
+      return batchAddParamStyle.value === 'standard'
+        ? ['page,integer,true,1', 'pageSize,integer,false,20', 'keyword,string,false,test']
+        : ['page\t1', 'pageSize\t20', 'keyword:test']
     case 'cookie':
       return ['SESSION\tabc123', 'token:{{authToken}}']
     case 'header':
       return ['Content-Type\tapplication/json', 'Authorization\tBearer {{token}}']
     case 'body-form':
-      return ['username\tadmin', 'password\t123456']
+      return batchAddParamStyle.value === 'standard'
+        ? ['username,string,true,admin', 'avatar,file,false,avatar.png', 'profile,json,false,{"name":"admin"}']
+        : ['username\tadmin', 'password\t123456']
     case 'assertion':
       return ['STATUS_CODE\t200', 'HEADER_EQUALS\tContent-Type\tapplication/json', 'BODY_JSONPATH_EQUALS\t$.code\t0']
     case 'extractor':
@@ -3595,6 +3747,96 @@ function openCaseDraftFromDefinition(options?: { fromSavedDefinition?: boolean }
   syncCaseDrawerDebugStateFromTab(tab)
   resetCaseDrawerRunHistoryState()
   caseDrawerVisible.value = true
+}
+
+function openAiCaseGenerateDrawer() {
+  if (!canCreateCaseForCurrentDefinition.value) {
+    ElMessage.warning('请先保存接口，再使用 AI 生成用例')
+    return
+  }
+  aiCaseGenerateDrawerVisible.value = true
+  void loadAiCaseGenerateModels()
+}
+
+async function loadAiCaseGenerateModels() {
+  if (aiCaseGenerateProviderLoading.value || aiCaseGenerateProviderConnections.value.length) {
+    return
+  }
+  aiCaseGenerateProviderLoading.value = true
+  try {
+    aiCaseGenerateProviderConnections.value = await platformApi.getAiProviderConnections(workspaceCode.value)
+    if (!aiCaseGenerateModel.value && aiCaseGenerateModelOptions.value.length) {
+      aiCaseGenerateModel.value = aiCaseGenerateModelOptions.value[0].value
+    }
+  } catch (error) {
+    ElMessage.error((error as Error).message || 'AI 模型配置加载失败')
+  } finally {
+    aiCaseGenerateProviderLoading.value = false
+  }
+}
+
+function toggleAiCaseGroup(group: AiCaseGenerateGroup, checked: boolean) {
+  const groupKeys = aiCaseGenerateOptions.filter(item => item.group === group).map(item => item.key)
+  const next = new Set(aiCaseGenerateSelectedOptions.value)
+  groupKeys.forEach((key) => {
+    if (checked) {
+      next.add(key)
+    } else {
+      next.delete(key)
+    }
+  })
+  aiCaseGenerateSelectedOptions.value = Array.from(next)
+}
+
+function isAiCaseGroupAllSelected(group: AiCaseGenerateGroup) {
+  const groupKeys = aiCaseGenerateOptions.filter(item => item.group === group).map(item => item.key)
+  return groupKeys.length > 0 && groupKeys.every(key => aiCaseGenerateSelectedOptions.value.includes(key))
+}
+
+function buildAiCasePreviewResults(): AiCaseGenerateResult[] {
+  const method = definitionForm.requestConfig.method || 'GET'
+  const path = definitionForm.requestConfig.path || definitionForm.path || ''
+  const selected = aiCaseGenerateOptions.filter(item => aiCaseGenerateSelectedOptions.value.includes(item.key))
+  return selected.slice(0, 12).map((item, index) => {
+    const group = aiCaseGenerateGroups.find(groupItem => groupItem.key === item.group)?.label ?? '其他'
+    return {
+      id: `${Date.now()}-${index}`,
+      name: `${item.label} - ${method} ${path || '当前接口'}`,
+      group,
+      type: item.label,
+      expected: item.group === 'positive' ? '预期返回 2xx 或业务成功' : '预期返回错误提示或被安全策略拦截',
+      status: 'pending',
+    }
+  })
+}
+
+function submitAiCaseGeneratePreview() {
+  if (!aiCaseGenerateSelectedOptions.value.length) {
+    ElMessage.warning('请至少选择一种生成类型')
+    return
+  }
+  aiCaseGenerateLoading.value = true
+  window.setTimeout(() => {
+    aiCaseGenerateResults.value = buildAiCasePreviewResults()
+    aiCaseGenerateLoading.value = false
+    ElMessage.success('已生成预览结果，真实 AI 接口待后端接入')
+  }, 400)
+}
+
+function updateAiCaseGenerateResultStatus(id: string, status: AiCaseGenerateResultStatus) {
+  const target = aiCaseGenerateResults.value.find(item => item.id === id)
+  if (target) {
+    target.status = status
+  }
+}
+
+function acceptAllAiCaseGenerateResults() {
+  aiCaseGenerateResults.value.forEach((item) => {
+    if (item.status === 'pending') {
+      item.status = 'accepted'
+    }
+  })
+  ElMessage.info('采纳保存接口待接入，当前仅更新预览状态')
 }
 
 async function runCaseItem(id: number) {
@@ -4701,6 +4943,7 @@ function openBatchAddDrawer(mode: BatchAddMode, context: 'main' | 'case' = 'main
   batchAddMode.value = mode
   batchAddInput.value = ''
   batchAddContext.value = context
+  batchAddParamStyle.value = mode === 'query' || mode === 'body-form' ? 'standard' : 'quick'
   batchAddDrawerVisible.value = true
 }
 
@@ -4777,6 +5020,39 @@ function parseBatchKeyValueInput() {
     })
     .filter(isNonNull)
     .filter(item => !!item.key)
+  return dedupeByKey(rows, item => item.key)
+}
+
+function normalizeParamType(value: string, mode: BatchAddMode) {
+  const normalized = value.trim().toLowerCase()
+  const options = mode === 'body-form'
+    ? new Set<string>(bodyParamTypeOptions)
+    : new Set<string>(queryParamTypeOptions)
+  return options.has(normalized) ? normalized : 'string'
+}
+
+function parseBatchStandardParamInput(mode: Extract<BatchAddMode, 'query' | 'body-form'>) {
+  const rows = batchAddInput.value
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map<ApiKeyValue | null>((line) => {
+      const columns = line.split(',').map(item => item.trim())
+      const key = columns[0] || ''
+      if (!key) {
+        return null
+      }
+      const paramType = normalizeParamType(columns[1] || 'string', mode)
+      const required = normalizeBooleanLike(columns[2] || '') ?? false
+      return {
+        key,
+        paramType,
+        required,
+        value: columns.slice(3).join(',').trim(),
+        enabled: true,
+      }
+    })
+    .filter(isNonNull)
   return dedupeByKey(rows, item => item.key)
 }
 
@@ -4858,7 +5134,7 @@ function confirmBatchAdd() {
   const targetForm = batchAddContext.value === 'case' ? caseDrawerForm : definitionForm
   let count = 0
   if (batchAddMode.value === 'query') {
-    const rows = parseBatchKeyValueInput()
+    const rows = batchAddParamStyle.value === 'standard' ? parseBatchStandardParamInput('query') : parseBatchKeyValueInput()
     targetForm.requestConfig.queryParams.push(...rows.map(row => normalizeKeyValueRow(row, queryParamDefaults())))
     syncKeyValueRows(targetForm.requestConfig.queryParams, queryParamDefaults())
     count = rows.length
@@ -4875,7 +5151,7 @@ function confirmBatchAdd() {
     count = rows.length
   }
   else if (batchAddMode.value === 'body-form') {
-    const rows = parseBatchKeyValueInput()
+    const rows = batchAddParamStyle.value === 'standard' ? parseBatchStandardParamInput('body-form') : parseBatchKeyValueInput()
     targetForm.requestConfig.body.formItems.push(...rows.map(row => normalizeKeyValueRow(row, bodyFormParamDefaults())))
     syncKeyValueRows(targetForm.requestConfig.body.formItems, bodyFormParamDefaults())
     count = rows.length
@@ -6385,6 +6661,16 @@ function formatTimeLabel(value?: string | null) {
                     >
                       新建用例
                     </el-button>
+                    <button
+                      type="button"
+                      class="case-ai-generate-button"
+                      :disabled="!canCreateCaseForCurrentDefinition"
+                      :title="canCreateCaseForCurrentDefinition ? 'AI 生成接口用例' : '请先保存接口，再使用 AI 生成用例'"
+                      @click="openAiCaseGenerateDrawer"
+                    >
+                      <MagicStick />
+                      <span>AI生成用例</span>
+                    </button>
                   </div>
                   <div v-if="!currentDefinitionCases.length" class="empty-hint">当前接口下还没有用例</div>
                   <div v-else class="case-list-table-wrap">
@@ -6471,8 +6757,9 @@ function formatTimeLabel(value?: string | null) {
                         />
                       </div>
                       <span class="ms-like-header-input-title">Query 参数</span>
-                      <span>类型</span>
+                      <span class="ms-like-type-header">类型</span>
                       <span>参数值</span>
+                      <span class="ms-like-length-header">长度范围</span>
                       <span>编码</span>
                       <span>描述</span>
                       <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('query')">批量添加</button>
@@ -6500,27 +6787,47 @@ function formatTimeLabel(value?: string | null) {
                         <el-checkbox v-model="row.enabled" />
                       </div>
                       <div class="ms-like-name-field">
-                        <button
-                          type="button"
-                          :class="['ms-like-required-button', { active: row.required }]"
-                          @click="row.required = !row.required"
-                        >
-                          *
-                        </button>
                         <el-input
                           v-model="row.key"
                           placeholder="参数名称"
                           @input="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
                         />
                       </div>
-                      <el-select v-model="row.paramType" @change="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())">
-                        <el-option v-for="option in queryParamTypeOptions" :key="option" :label="option" :value="option" />
-                      </el-select>
+                      <div class="ms-like-type-field">
+                        <button
+                          type="button"
+                          :class="['ms-like-required-button', { active: row.required }]"
+                          :title="row.required ? '必填' : '非必填'"
+                          @click="row.required = !row.required"
+                        >
+                          *
+                        </button>
+                        <el-select v-model="row.paramType" @change="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())">
+                          <el-option v-for="option in queryParamTypeOptions" :key="option" :label="option" :value="option" />
+                        </el-select>
+                      </div>
                       <el-input
                         v-model="row.value"
                         placeholder="参数值 / {{variable}}"
                         @input="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
                       />
+                      <div class="ms-like-length-range-cell">
+                        <el-input-number
+                          v-model="row.minLength"
+                          :min="0"
+                          :controls="false"
+                          placeholder="最小"
+                          @change="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
+                        />
+                        <span>至</span>
+                        <el-input-number
+                          v-model="row.maxLength"
+                          :min="0"
+                          :controls="false"
+                          placeholder="最大"
+                          @change="handleKeyValueRowInput(definitionForm.requestConfig.queryParams, queryParamDefaults())"
+                        />
+                      </div>
                       <div class="ms-like-switch-cell ms-like-switch-cell--query">
                         <el-switch v-model="row.encode" size="small" />
                       </div>
@@ -6652,8 +6959,9 @@ function formatTimeLabel(value?: string | null) {
                           />
                         </div>
                         <span class="ms-like-header-input-title">参数名称</span>
-                        <span>类型</span>
+                        <span class="ms-like-type-header">类型</span>
                         <span>参数值</span>
+                        <span class="ms-like-length-header">长度范围</span>
                         <span>描述</span>
                         <button type="button" class="ms-like-link-button" @click="openBatchAddDrawer('body-form')">批量添加</button>
                       </div>
@@ -6680,27 +6988,55 @@ function formatTimeLabel(value?: string | null) {
                           <el-checkbox v-model="row.enabled" />
                         </div>
                         <div class="ms-like-name-field">
-                          <button
-                            type="button"
-                            :class="['ms-like-required-button', { active: row.required }]"
-                            @click="row.required = !row.required"
-                          >
-                            *
-                          </button>
                           <el-input
                             v-model="row.key"
                             placeholder="参数名称"
                             @input="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())"
                           />
                         </div>
-                        <el-select v-model="row.paramType" @change="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())">
-                          <el-option v-for="option in bodyParamTypeOptions" :key="option" :label="option" :value="option" />
-                        </el-select>
+                        <div class="ms-like-type-field">
+                          <button
+                            type="button"
+                            :class="['ms-like-required-button', { active: row.required }]"
+                            :title="row.required ? '必填' : '非必填'"
+                            @click="row.required = !row.required"
+                          >
+                            *
+                          </button>
+                          <el-select v-model="row.paramType" @change="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())">
+                            <el-option v-for="option in bodyParamTypeOptionsFor(definitionForm)" :key="option" :label="option" :value="option" />
+                          </el-select>
+                        </div>
+                        <div v-if="row.paramType === 'file'" class="ms-like-file-param-cell">
+                          <button type="button" class="ms-like-file-pick" @click="pickBodyFormRowFile(row, definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())">
+                            {{ row.fileName || '选择文件' }}
+                          </button>
+                          <button v-if="row.fileBase64" type="button" class="ms-like-file-clear" @click="clearBodyFormRowFile(row)">清空</button>
+                          <small v-if="row.fileBase64">{{ formatBodyFormFileSize(row) }}</small>
+                        </div>
                         <el-input
+                          v-else
                           v-model="row.value"
                           placeholder="参数值"
                           @input="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())"
                         />
+                        <div class="ms-like-length-range-cell">
+                          <el-input-number
+                            v-model="row.minLength"
+                            :min="0"
+                            :controls="false"
+                            placeholder="最小"
+                            @change="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())"
+                          />
+                          <span>至</span>
+                          <el-input-number
+                            v-model="row.maxLength"
+                            :min="0"
+                            :controls="false"
+                            placeholder="最大"
+                            @change="handleKeyValueRowInput(definitionForm.requestConfig.body.formItems, bodyFormParamDefaults())"
+                          />
+                        </div>
                         <el-input
                           v-model="row.description"
                           placeholder="描述"
@@ -7033,8 +7369,9 @@ function formatTimeLabel(value?: string | null) {
                         />
                       </div>
                       <span class="ms-like-header-input-title">Query 参数</span>
-                      <span>类型</span>
+                      <span class="ms-like-type-header">类型</span>
                       <span>参数值</span>
+                      <span class="ms-like-length-header">长度范围</span>
                       <span>编码</span>
                       <span>描述</span>
                       <button v-if="!caseDrawerReadOnly" type="button" class="ms-like-link-button" @click="openBatchAddDrawer('query', 'case')">批量添加</button>
@@ -7063,14 +7400,6 @@ function formatTimeLabel(value?: string | null) {
                         <el-checkbox v-model="row.enabled" :disabled="caseDrawerReadOnly" />
                       </div>
                       <div class="ms-like-name-field">
-                        <button
-                          type="button"
-                          :class="['ms-like-required-button', { active: row.required }]"
-                          :disabled="caseDrawerReadOnly"
-                          @click="row.required = !row.required"
-                        >
-                          *
-                        </button>
                         <el-input
                           v-model="row.key"
                           :disabled="caseDrawerReadOnly"
@@ -7078,15 +7407,45 @@ function formatTimeLabel(value?: string | null) {
                           @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())"
                         />
                       </div>
-                      <el-select v-model="row.paramType" :disabled="caseDrawerReadOnly" @change="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())">
-                        <el-option v-for="option in queryParamTypeOptions" :key="option" :label="option" :value="option" />
-                      </el-select>
+                      <div class="ms-like-type-field">
+                        <button
+                          type="button"
+                          :class="['ms-like-required-button', { active: row.required }]"
+                          :title="row.required ? '必填' : '非必填'"
+                          :disabled="caseDrawerReadOnly"
+                          @click="row.required = !row.required"
+                        >
+                          *
+                        </button>
+                        <el-select v-model="row.paramType" :disabled="caseDrawerReadOnly" @change="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())">
+                          <el-option v-for="option in queryParamTypeOptions" :key="option" :label="option" :value="option" />
+                        </el-select>
+                      </div>
                       <el-input
                         v-model="row.value"
                         :disabled="caseDrawerReadOnly"
                         placeholder="参数值 / {{variable}}"
                         @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())"
                       />
+                      <div class="ms-like-length-range-cell">
+                        <el-input-number
+                          v-model="row.minLength"
+                          :disabled="caseDrawerReadOnly"
+                          :min="0"
+                          :controls="false"
+                          placeholder="最小"
+                          @change="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())"
+                        />
+                        <span>至</span>
+                        <el-input-number
+                          v-model="row.maxLength"
+                          :disabled="caseDrawerReadOnly"
+                          :min="0"
+                          :controls="false"
+                          placeholder="最大"
+                          @change="handleKeyValueRowInput(caseDrawerForm.requestConfig.queryParams, queryParamDefaults())"
+                        />
+                      </div>
                       <div class="ms-like-switch-cell ms-like-switch-cell--query">
                         <el-switch v-model="row.encode" :disabled="caseDrawerReadOnly" size="small" />
                       </div>
@@ -7227,8 +7586,9 @@ function formatTimeLabel(value?: string | null) {
                               />
                           </div>
                           <span class="ms-like-header-input-title">参数名称</span>
-                          <span>类型</span>
+                          <span class="ms-like-type-header">类型</span>
                           <span>参数值</span>
+                          <span class="ms-like-length-header">长度范围</span>
                           <span>描述</span>
                           <button v-if="!caseDrawerReadOnly" type="button" class="ms-like-link-button" @click="openBatchAddDrawer('body-form', 'case')">批量添加</button>
                         </div>
@@ -7256,14 +7616,6 @@ function formatTimeLabel(value?: string | null) {
                             <el-checkbox v-model="row.enabled" :disabled="caseDrawerReadOnly" />
                           </div>
                           <div class="ms-like-name-field">
-                            <button
-                              type="button"
-                              :class="['ms-like-required-button', { active: row.required }]"
-                              :disabled="caseDrawerReadOnly"
-                              @click="row.required = !row.required"
-                            >
-                              *
-                            </button>
                             <el-input
                               v-model="row.key"
                               :disabled="caseDrawerReadOnly"
@@ -7271,15 +7623,54 @@ function formatTimeLabel(value?: string | null) {
                               @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())"
                             />
                           </div>
-                          <el-select v-model="row.paramType" :disabled="caseDrawerReadOnly" @change="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())">
-                            <el-option v-for="option in bodyParamTypeOptions" :key="option" :label="option" :value="option" />
-                          </el-select>
+                          <div class="ms-like-type-field">
+                            <button
+                              type="button"
+                              :class="['ms-like-required-button', { active: row.required }]"
+                              :title="row.required ? '必填' : '非必填'"
+                              :disabled="caseDrawerReadOnly"
+                              @click="row.required = !row.required"
+                            >
+                              *
+                            </button>
+                            <el-select v-model="row.paramType" :disabled="caseDrawerReadOnly" @change="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())">
+                              <el-option v-for="option in bodyParamTypeOptionsFor(caseDrawerForm)" :key="option" :label="option" :value="option" />
+                            </el-select>
+                          </div>
+                          <div v-if="row.paramType === 'file'" class="ms-like-file-param-cell">
+                            <button v-if="!caseDrawerReadOnly" type="button" class="ms-like-file-pick" @click="pickBodyFormRowFile(row, caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())">
+                              {{ row.fileName || '选择文件' }}
+                            </button>
+                            <span v-else>{{ row.fileName || '-' }}</span>
+                            <button v-if="row.fileBase64 && !caseDrawerReadOnly" type="button" class="ms-like-file-clear" @click="clearBodyFormRowFile(row)">清空</button>
+                            <small v-if="row.fileBase64">{{ formatBodyFormFileSize(row) }}</small>
+                          </div>
                           <el-input
+                            v-else
                             v-model="row.value"
                             :disabled="caseDrawerReadOnly"
                             placeholder="参数值"
                             @input="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())"
                           />
+                          <div class="ms-like-length-range-cell">
+                            <el-input-number
+                              v-model="row.minLength"
+                              :disabled="caseDrawerReadOnly"
+                              :min="0"
+                              :controls="false"
+                              placeholder="最小"
+                              @change="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())"
+                            />
+                            <span>至</span>
+                            <el-input-number
+                              v-model="row.maxLength"
+                              :disabled="caseDrawerReadOnly"
+                              :min="0"
+                              :controls="false"
+                              placeholder="最大"
+                              @change="handleKeyValueRowInput(caseDrawerForm.requestConfig.body.formItems, bodyFormParamDefaults())"
+                            />
+                          </div>
                           <el-input
                             v-model="row.description"
                             :disabled="caseDrawerReadOnly"
@@ -8041,7 +8432,7 @@ function formatTimeLabel(value?: string | null) {
                     <el-table :data="filteredScenarios" size="small" class="scenario-table ms-scenario-table">
                     <el-table-column type="selection" width="44" />
                     <el-table-column width="34">
-                      <template #default>⋮⋮</template>
+                      <template #default>??</template>
                     </el-table-column>
                     <el-table-column label="ID" width="120" sortable>
                       <template #default="{ row }">
@@ -8103,9 +8494,9 @@ function formatTimeLabel(value?: string | null) {
                   </el-table>
                     <div class="ms-scenario-pagination">
                       <span>共 {{ filteredScenarios.length }} 条</span>
-                      <button type="button">‹</button>
+                      <button type="button">?</button>
                       <span class="ms-scenario-page-current">1</span>
-                      <button type="button">›</button>
+                      <button type="button">?</button>
                     </div>
                   </div>
                 </template>
@@ -9168,8 +9559,9 @@ function formatTimeLabel(value?: string | null) {
                   <el-checkbox v-model="scenarioCustomRequestQueryTableSelectionModel" :indeterminate="tableSelectionState(scenarioCustomRequestConfig.queryParams).indeterminate" />
                 </div>
                 <span class="ms-like-header-input-title">Query 参数</span>
-                <span>类型</span>
+                <span class="ms-like-type-header">类型</span>
                 <span>参数值</span>
+                <span class="ms-like-length-header">长度范围</span>
                 <span>编码</span>
                 <span>描述</span>
                 <span></span>
@@ -9178,13 +9570,20 @@ function formatTimeLabel(value?: string | null) {
                 <div class="ms-like-drag-cell"></div>
                 <div class="ms-like-checkbox-cell"><el-checkbox v-model="row.enabled" /></div>
                 <div class="ms-like-name-field">
-                  <button type="button" :class="['ms-like-required-button', { active: row.required }]" @click="row.required = !row.required">*</button>
                   <el-input v-model="row.key" placeholder="参数名称" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.queryParams, queryParamDefaults())" />
                 </div>
-                <el-select v-model="row.paramType" @change="handleKeyValueRowInput(scenarioCustomRequestConfig.queryParams, queryParamDefaults())">
-                  <el-option v-for="option in queryParamTypeOptions" :key="option" :label="option" :value="option" />
-                </el-select>
+                <div class="ms-like-type-field">
+                  <button type="button" :class="['ms-like-required-button', { active: row.required }]" :title="row.required ? '必填' : '非必填'" @click="row.required = !row.required">*</button>
+                  <el-select v-model="row.paramType" @change="handleKeyValueRowInput(scenarioCustomRequestConfig.queryParams, queryParamDefaults())">
+                    <el-option v-for="option in queryParamTypeOptions" :key="option" :label="option" :value="option" />
+                  </el-select>
+                </div>
                 <el-input v-model="row.value" placeholder="参数值 / {{variable}}" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.queryParams, queryParamDefaults())" />
+                <div class="ms-like-length-range-cell">
+                  <el-input-number v-model="row.minLength" :min="0" :controls="false" placeholder="最小" @change="handleKeyValueRowInput(scenarioCustomRequestConfig.queryParams, queryParamDefaults())" />
+                  <span>至</span>
+                  <el-input-number v-model="row.maxLength" :min="0" :controls="false" placeholder="最大" @change="handleKeyValueRowInput(scenarioCustomRequestConfig.queryParams, queryParamDefaults())" />
+                </div>
                 <div class="ms-like-switch-cell ms-like-switch-cell--query"><el-switch v-model="row.encode" size="small" /></div>
                 <el-input v-model="row.description" placeholder="描述" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.queryParams, queryParamDefaults())" />
                 <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(scenarioCustomRequestConfig.queryParams, index, queryParamDefaults())">删除</button>
@@ -9243,8 +9642,9 @@ function formatTimeLabel(value?: string | null) {
                       <el-checkbox v-model="scenarioCustomRequestBodyFormTableSelectionModel" :indeterminate="tableSelectionState(scenarioCustomRequestConfig.body.formItems).indeterminate" />
                     </div>
                     <span class="ms-like-header-input-title">参数名称</span>
-                    <span>类型</span>
+                    <span class="ms-like-type-header">类型</span>
                     <span>参数值</span>
+                    <span class="ms-like-length-header">长度范围</span>
                     <span>描述</span>
                     <span></span>
                   </div>
@@ -9252,13 +9652,25 @@ function formatTimeLabel(value?: string | null) {
                     <div class="ms-like-drag-cell"></div>
                     <div class="ms-like-checkbox-cell"><el-checkbox v-model="row.enabled" /></div>
                     <div class="ms-like-name-field">
-                      <button type="button" :class="['ms-like-required-button', { active: row.required }]" @click="row.required = !row.required">*</button>
                       <el-input v-model="row.key" placeholder="参数名称" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.body.formItems, bodyFormParamDefaults())" />
                     </div>
-                    <el-select v-model="row.paramType" @change="handleKeyValueRowInput(scenarioCustomRequestConfig.body.formItems, bodyFormParamDefaults())">
-                      <el-option v-for="option in bodyParamTypeOptions" :key="option" :label="option" :value="option" />
-                    </el-select>
-                    <el-input v-model="row.value" placeholder="参数值" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.body.formItems, bodyFormParamDefaults())" />
+                    <div class="ms-like-type-field">
+                      <button type="button" :class="['ms-like-required-button', { active: row.required }]" :title="row.required ? '必填' : '非必填'" @click="row.required = !row.required">*</button>
+                      <el-select v-model="row.paramType" @change="handleKeyValueRowInput(scenarioCustomRequestConfig.body.formItems, bodyFormParamDefaults())">
+                        <el-option v-for="option in bodyParamTypeOptionsFor({ requestConfig: scenarioCustomRequestConfig } as RequestConfigHost)" :key="option" :label="option" :value="option" />
+                      </el-select>
+                    </div>
+                    <div v-if="row.paramType === 'file'" class="ms-like-file-param-cell">
+                      <button type="button" class="ms-like-file-pick" @click="pickBodyFormRowFile(row, scenarioCustomRequestConfig.body.formItems, bodyFormParamDefaults())">{{ row.fileName || '选择文件' }}</button>
+                      <button v-if="row.fileBase64" type="button" class="ms-like-file-clear" @click="clearBodyFormRowFile(row)">清空</button>
+                      <small v-if="row.fileBase64">{{ formatBodyFormFileSize(row) }}</small>
+                    </div>
+                    <el-input v-else v-model="row.value" placeholder="参数值" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.body.formItems, bodyFormParamDefaults())" />
+                    <div class="ms-like-length-range-cell">
+                      <el-input-number v-model="row.minLength" :min="0" :controls="false" placeholder="最小" @change="handleKeyValueRowInput(scenarioCustomRequestConfig.body.formItems, bodyFormParamDefaults())" />
+                      <span>至</span>
+                      <el-input-number v-model="row.maxLength" :min="0" :controls="false" placeholder="最大" @change="handleKeyValueRowInput(scenarioCustomRequestConfig.body.formItems, bodyFormParamDefaults())" />
+                    </div>
                     <el-input v-model="row.description" placeholder="描述" @input="handleKeyValueRowInput(scenarioCustomRequestConfig.body.formItems, bodyFormParamDefaults())" />
                     <button type="button" class="ms-like-row-remove" @click="removeKeyValueRow(scenarioCustomRequestConfig.body.formItems, index, bodyFormParamDefaults())">删除</button>
                   </div>
@@ -9586,10 +9998,26 @@ function formatTimeLabel(value?: string | null) {
         size="560px"
         destroy-on-close
         class="api-soft-drawer batch-add-soft-drawer"
-      >
-      <div class="batch-drawer">
-        <div class="batch-drawer-hint">
-          <div class="batch-drawer-label">格式示例</div>
+        >
+        <div class="batch-drawer">
+          <div v-if="batchAddMode === 'query' || batchAddMode === 'body-form'" class="batch-drawer-mode-row">
+            <button
+              type="button"
+              :class="{ active: batchAddParamStyle === 'standard' }"
+              @click="batchAddParamStyle = 'standard'"
+            >
+              标准添加
+            </button>
+            <button
+              type="button"
+              :class="{ active: batchAddParamStyle === 'quick' }"
+              @click="batchAddParamStyle = 'quick'"
+            >
+              快捷添加
+            </button>
+          </div>
+          <div class="batch-drawer-hint">
+            <div class="batch-drawer-label">格式示例</div>
           <div v-for="item in batchAddExamples" :key="item" class="batch-drawer-example">{{ item }}</div>
           <div class="batch-drawer-note">空行会自动忽略；同名重复时以最后一条为准。</div>
         </div>
@@ -9817,6 +10245,189 @@ function formatTimeLabel(value?: string | null) {
         </div>
       </div>
     </el-dialog>
+
+    <el-drawer
+      v-model="aiCaseGenerateDrawerVisible"
+      size="640px"
+      class="api-ai-case-drawer"
+      :show-close="false"
+      destroy-on-close
+    >
+      <template #header>
+        <div class="ai-case-drawer-header">
+          <div>
+            <div class="ai-case-drawer-title">
+              <MagicStick />
+              <span>AI 生成接口用例</span>
+            </div>
+          </div>
+          <button type="button" class="definition-import-close" @click="aiCaseGenerateDrawerVisible = false">
+            <X />
+          </button>
+        </div>
+      </template>
+
+      <div class="ai-case-drawer-body" v-loading="aiCaseGenerateLoading">
+        <section class="ai-case-section">
+          <div class="ai-case-section-title">
+            <span>选择生成的用例类型</span>
+            <small>已选 {{ aiCaseGenerateSelectedCount }} 项</small>
+          </div>
+          <div class="ai-case-option-groups">
+            <div v-for="group in aiCaseGenerateGroups" :key="group.key" class="ai-case-option-group">
+              <div class="ai-case-option-group-title">
+                <strong>{{ group.label }}</strong>
+                <button
+                  type="button"
+                  class="ai-case-select-all-link"
+                  @click="toggleAiCaseGroup(group.key, !isAiCaseGroupAllSelected(group.key))"
+                >
+                  全选
+                </button>
+              </div>
+              <el-checkbox-group v-model="aiCaseGenerateSelectedOptions" class="ai-case-option-list">
+                <el-checkbox
+                  v-for="option in aiCaseGenerateOptions.filter(item => item.group === group.key)"
+                  :key="option.key"
+                  :label="option.key"
+                >
+                  {{ option.label }}
+                </el-checkbox>
+              </el-checkbox-group>
+            </div>
+          </div>
+        </section>
+
+        <section class="ai-case-section ai-case-form-section">
+          <label class="ai-case-form-field">
+            <span>用例数</span>
+            <el-select v-model="aiCaseGenerateCount" class="ai-case-form-control">
+              <el-option label="自动" value="AUTO" />
+              <el-option label="10 条" :value="10" />
+              <el-option label="20 条" :value="20" />
+              <el-option label="40 条" :value="40" />
+              <el-option label="80 条" :value="80" />
+            </el-select>
+          </label>
+          <label class="ai-case-form-field">
+            <span>AI模型</span>
+            <el-select
+              v-model="aiCaseGenerateModel"
+              class="ai-case-form-control"
+              :loading="aiCaseGenerateProviderLoading"
+              placeholder="选择 AI 连接池配置的模型"
+              empty-text="暂无可用 AI 模型"
+            >
+              <el-option
+                v-for="item in aiCaseGenerateModelOptions"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value"
+              />
+            </el-select>
+          </label>
+          <div class="ai-case-form-switch">
+            <el-switch v-model="aiCaseGenerateStepByStep" />
+            <span>
+              <strong>分步生成</strong>
+              <small>先生成用例列表，可人工校对，确认无误再生成用例详情数据，生成更可控</small>
+            </span>
+          </div>
+          <div class="ai-case-form-switch">
+            <el-switch v-model="aiCaseGenerateAutoComplete" />
+            <span>
+              <strong>自动补充用例</strong>
+              <small>生成用例列表时，AI 将检测用例已生成用例的覆盖率，并自动补充用例以提升覆盖率</small>
+              <span class="ai-case-rounds-field">
+                <span class="ai-case-rounds-title">
+                  补充生成轮次
+                  <el-tooltip
+                    effect="light"
+                    placement="top-start"
+                    popper-class="ai-case-rounds-tooltip"
+                  >
+                    <template #content>
+                      <div>基于覆盖率补充生成：</div>
+                      <div>覆盖率 = 已生成用例 / 要求生成用例 * 100%</div>
+                    </template>
+                    <button type="button" class="ai-case-help-icon">?</button>
+                  </el-tooltip>
+                </span>
+                <span class="ai-case-rounds-options">
+                  <label v-for="round in [1, 2, 3]" :key="round" class="ai-case-round-option">
+                    <input
+                      v-model="aiCaseGenerateRounds"
+                      type="radio"
+                      name="ai-case-generate-rounds"
+                      :value="round"
+                      :disabled="!aiCaseGenerateAutoComplete"
+                    >
+                    <span>{{ round }} 轮</span>
+                  </label>
+                </span>
+              </span>
+            </span>
+          </div>
+          <div class="ai-case-form-switch">
+            <el-switch v-model="aiCaseGenerateNoDuplicate" />
+            <span>
+              <strong>不重复生成用例</strong>
+              <small>不生成与已有用例同用例类型的用例。关闭后，生成不受已有用例的影响</small>
+            </span>
+          </div>
+          <label class="ai-case-form-field">
+            <el-input
+              v-model="aiCaseGeneratePrompt"
+              type="textarea"
+              :autosize="{ minRows: 3, maxRows: 5 }"
+              placeholder="输入更多要求"
+              class="ai-case-form-control"
+            />
+          </label>
+          <button type="button" class="ai-case-generate-submit" @click="submitAiCaseGeneratePreview">
+            <MagicStick />
+            生成
+          </button>
+        </section>
+
+        <section v-if="aiCaseGenerateResults.length" class="ai-case-section">
+          <div class="ai-case-result-toolbar">
+            <div class="ai-case-result-tabs">
+              <span>待处理 {{ aiCaseGenerateResultStats.pending }}</span>
+              <span>已采纳 {{ aiCaseGenerateResultStats.accepted }}</span>
+              <span>废弃 {{ aiCaseGenerateResultStats.discarded }}</span>
+            </div>
+            <button type="button" class="ai-case-accept-all" @click="acceptAllAiCaseGenerateResults">采纳全部</button>
+          </div>
+          <div class="ai-case-result-list">
+            <div v-for="item in aiCaseGenerateResults" :key="item.id" class="ai-case-result-item">
+              <div class="ai-case-result-main">
+                <strong>{{ item.name }}</strong>
+                <small>{{ item.expected }}</small>
+              </div>
+              <span class="ai-case-result-tag">{{ item.type }}</span>
+              <span class="ai-case-result-group">{{ item.group }}</span>
+              <div class="ai-case-result-actions">
+                <button
+                  type="button"
+                  :disabled="item.status === 'accepted'"
+                  @click="updateAiCaseGenerateResultStatus(item.id, 'accepted')"
+                >
+                  采纳
+                </button>
+                <button
+                  type="button"
+                  :disabled="item.status === 'discarded'"
+                  @click="updateAiCaseGenerateResultStatus(item.id, 'discarded')"
+                >
+                  废弃
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </el-drawer>
 
     <TableSettingsDrawer
       v-model="caseListSettings.settingsVisible.value"
@@ -13195,7 +13806,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-param-table-grid--query {
-  grid-template-columns: 24px 32px minmax(220px, 1.25fr) 130px minmax(260px, 1.2fr) 80px minmax(220px, 1fr) 80px;
+  grid-template-columns: 24px 32px minmax(240px, 1fr) 150px minmax(240px, 1fr) 200px 80px minmax(220px, 1fr) 90px;
 }
 
 .ms-like-param-table-grid--header {
@@ -13203,7 +13814,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-param-table-grid--body-form {
-  grid-template-columns: 24px 32px minmax(220px, 1.15fr) 130px minmax(220px, 1.05fr) minmax(180px, 1fr) 80px;
+  grid-template-columns: 24px 32px 240px 150px 240px 200px minmax(220px, 1fr) 90px;
 }
 
 .ms-like-table-header {
@@ -13239,10 +13850,6 @@ function formatTimeLabel(value?: string | null) {
   min-width: 0;
 }
 
-.ms-like-name-field {
-  position: relative;
-}
-
 .ms-like-checkbox-cell {
   justify-content: center;
 }
@@ -13265,7 +13872,15 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-param-table--query .ms-like-header-input-title,
 .ms-like-param-table--body-form .ms-like-header-input-title {
-  padding-left: 28px;
+  padding-left: 0;
+}
+
+.ms-like-type-header {
+  padding-left: 30px;
+}
+
+.ms-like-length-header {
+  padding-left: 22px;
 }
 
 .ms-like-param-table .ms-like-header-input-title,
@@ -13346,18 +13961,22 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-name-field :deep(.el-input),
+.ms-like-type-field :deep(.el-select),
 .ms-like-header-input-cell :deep(.el-input) {
   width: 100%;
 }
 
+.ms-like-type-field {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .ms-like-required-button {
-  position: absolute;
-  top: 50%;
-  left: 6px;
-  z-index: 1;
-  transform: translateY(-50%);
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -13375,6 +13994,7 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-checkbox-field :deep(.el-input),
 .ms-like-name-field :deep(.el-input),
+.ms-like-type-field :deep(.el-select),
 .ms-like-table-row :deep(.el-input),
 .ms-like-table-row :deep(.el-select) {
   width: 100%;
@@ -13382,6 +14002,7 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-checkbox-field :deep(.el-input__wrapper),
 .ms-like-name-field :deep(.el-input__wrapper),
+.ms-like-type-field :deep(.el-select__wrapper),
 .ms-like-table-row :deep(.el-input__wrapper),
 .ms-like-table-row :deep(.el-select__wrapper) {
   box-shadow: inset 0 0 0 1px transparent;
@@ -13392,12 +14013,10 @@ function formatTimeLabel(value?: string | null) {
   transition: box-shadow 0.15s ease, background-color 0.15s ease;
 }
 
-.ms-like-name-field :deep(.el-input__wrapper) {
-  padding-left: 28px;
-}
-
 .ms-like-checkbox-field :deep(.el-input__inner),
 .ms-like-name-field :deep(.el-input__inner),
+.ms-like-type-field :deep(.el-select__placeholder),
+.ms-like-type-field :deep(.el-select__selected-item),
 .ms-like-table-row :deep(.el-input__inner),
 .ms-like-table-row :deep(.el-select__placeholder),
 .ms-like-table-row :deep(.el-select__selected-item) {
@@ -13406,6 +14025,7 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-checkbox-field :deep(.el-input__wrapper:hover),
 .ms-like-name-field :deep(.el-input__wrapper:hover),
+.ms-like-type-field :deep(.el-select__wrapper:hover),
 .ms-like-table-row :deep(.el-input__wrapper:hover),
 .ms-like-table-row :deep(.el-select__wrapper:hover) {
   box-shadow: inset 0 0 0 1px #d0d5dd;
@@ -13414,6 +14034,8 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-checkbox-field :deep(.el-input.is-focus .el-input__wrapper),
 .ms-like-name-field :deep(.el-input.is-focus .el-input__wrapper),
+.ms-like-type-field :deep(.el-select.is-focus .el-select__wrapper),
+.ms-like-type-field :deep(.el-select__wrapper.is-focused),
 .ms-like-table-row :deep(.el-input.is-focus .el-input__wrapper),
 .ms-like-table-row :deep(.el-select.is-focus .el-select__wrapper),
 .ms-like-table-row :deep(.el-select__wrapper.is-focused) {
@@ -13424,6 +14046,64 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-switch-cell {
   color: #667085;
   font-size: 12px;
+}
+
+.ms-like-length-range-cell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.ms-like-length-range-cell :deep(.el-input-number) {
+  width: 100%;
+}
+
+.ms-like-file-param-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ms-like-file-pick,
+.ms-like-file-clear {
+  min-width: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 28px;
+  padding: 0 8px;
+}
+
+.ms-like-file-pick {
+  flex: 1;
+  overflow: hidden;
+  color: #374151;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ms-like-file-pick:hover {
+  background: #f9fafb;
+  color: #2563eb;
+}
+
+.ms-like-file-clear {
+  flex: 0 0 auto;
+  color: #c75450;
+}
+
+.ms-like-file-param-cell small {
+  flex: 0 0 auto;
+  color: #6b7280;
+  font-size: 11px;
 }
 
 .ms-like-switch-cell {
@@ -13504,7 +14184,7 @@ function formatTimeLabel(value?: string | null) {
 
 :global(.api-case-drawer .ms-like-param-table--query .ms-like-table-header.ms-like-param-table-grid--query),
 :global(.api-case-drawer .ms-like-param-table--query .ms-like-table-row.ms-like-param-table-grid--query) {
-  min-width: 1240px;
+  min-width: 1480px;
 }
 
 :global(.api-case-drawer .ms-like-param-table--header .ms-like-table-header.ms-like-param-table-grid--header),
@@ -13514,7 +14194,7 @@ function formatTimeLabel(value?: string | null) {
 
 :global(.api-case-drawer .ms-like-param-table--body-form .ms-like-table-header.ms-like-param-table-grid--body-form),
 :global(.api-case-drawer .ms-like-param-table--body-form .ms-like-table-row.ms-like-param-table-grid--body-form) {
-  min-width: 1160px;
+  min-width: 1400px;
 }
 
 :global(.api-case-drawer .ms-like-param-table .ms-like-link-button),
@@ -14291,6 +14971,481 @@ function formatTimeLabel(value?: string | null) {
   border-color: #1d4ed8;
   background: #1d4ed8;
 }
+
+:global(.api-ai-case-drawer .el-drawer__header) {
+  padding: 0;
+  margin: 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+:global(.api-ai-case-drawer .el-drawer__body) {
+  padding: 0;
+  background: #ffffff;
+}
+
+:global(.api-ai-case-drawer .el-drawer__footer) {
+  padding: 0;
+  border-top: 1px solid #f3f4f6;
+}
+
+.ai-case-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 64px;
+  padding: 16px 20px;
+}
+
+.ai-case-drawer-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.ai-case-drawer-title svg {
+  width: 18px;
+  height: 18px;
+  color: #2563eb;
+}
+
+.ai-case-drawer-subtitle {
+  margin-top: 5px;
+  max-width: 420px;
+  overflow: hidden;
+  color: #6b7280;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-case-drawer-body {
+  display: block;
+  min-height: 0;
+  overflow: auto;
+}
+
+.ai-case-section {
+  display: grid;
+  gap: 12px;
+  padding: 18px 24px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.ai-case-section-title,
+.ai-case-option-group-title,
+.ai-case-result-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ai-case-section-title {
+  color: #6b7280;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+.ai-case-section-title small {
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ai-case-option-groups {
+  display: grid;
+  gap: 20px;
+}
+
+.ai-case-option-group {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.ai-case-option-group:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.ai-case-option-group-title strong {
+  color: #374151;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.ai-case-select-all-link {
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+
+.ai-case-option-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, max-content));
+  gap: 12px 18px;
+  justify-content: start;
+}
+
+.ai-case-option-list :deep(.el-checkbox) {
+  height: 18px;
+  margin-right: 0;
+  color: #374151;
+  font-size: 14px;
+  font-weight: 400;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.ai-case-section :deep(.el-checkbox__input.is-checked .el-checkbox__inner),
+.ai-case-section :deep(.el-checkbox__input.is-indeterminate .el-checkbox__inner) {
+  border-color: #2563eb;
+  background: #2563eb;
+}
+
+.ai-case-section :deep(.el-checkbox__input.is-checked + .el-checkbox__label) {
+  color: #374151;
+}
+
+:global(.api-ai-case-drawer .el-switch.is-checked .el-switch__core) {
+  border-color: #2563eb;
+  background-color: #2563eb;
+}
+
+.ai-case-result-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 9px;
+  background: #f3f4f6;
+}
+
+.ai-case-result-tabs span {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  border-radius: 7px;
+  padding: 0 12px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ai-case-result-tabs span:first-child {
+  background: #ffffff;
+  color: #374151;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.ai-case-accept-all {
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.ai-case-result-list {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.ai-case-result-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px 64px 92px;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 9px 12px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.ai-case-result-item:last-child {
+  border-bottom: 0;
+}
+
+.ai-case-result-main {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.ai-case-result-main strong,
+.ai-case-result-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-case-result-main strong {
+  color: #111827;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ai-case-result-main small {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.ai-case-result-tag {
+  justify-self: start;
+  max-width: 92px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 12px;
+  padding: 2px 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-case-result-group {
+  color: #374151;
+  font-size: 12px;
+}
+
+.ai-case-result-actions {
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.ai-case-result-actions button {
+  height: 26px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #2563eb;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ai-case-result-actions button:disabled {
+  color: #9ca3af;
+  cursor: default;
+}
+
+.ai-case-drawer-footer {
+  display: grid;
+  gap: 12px;
+  padding: 18px 20px 20px;
+  background: #ffffff;
+}
+
+.ai-case-form-section {
+  gap: 16px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.ai-case-form-field {
+  display: grid;
+  gap: 6px;
+}
+
+.ai-case-form-field > span {
+  color: #374151;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.ai-case-form-control {
+  width: 100%;
+}
+
+.ai-case-form-control :deep(.el-select__wrapper),
+.ai-case-form-control :deep(.el-textarea__inner) {
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px #dbe2ea;
+}
+
+.ai-case-form-control :deep(.el-select__wrapper) {
+  min-height: 36px;
+  font-size: 13px;
+}
+
+.ai-case-form-control :deep(.el-select__wrapper.is-disabled) {
+  background: #f9fafb;
+  box-shadow: inset 0 0 0 1px #e5e7eb;
+}
+
+.ai-case-form-control :deep(.el-textarea__inner) {
+  min-height: 98px !important;
+  color: #374151;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 12px;
+}
+
+.ai-case-form-control :deep(.el-select__wrapper.is-focused),
+.ai-case-form-control :deep(.el-textarea__inner:focus) {
+  box-shadow: inset 0 0 0 1px #2563eb, 0 0 0 2px rgba(37, 99, 235, 0.14);
+}
+
+.ai-case-form-switch {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.ai-case-form-switch :deep(.el-switch) {
+  height: 20px;
+}
+
+.ai-case-form-switch > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ai-case-form-switch strong {
+  color: #374151;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.ai-case-form-switch small {
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.55;
+}
+
+.ai-case-rounds-field {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ai-case-rounds-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #6b7280;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+.ai-case-help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #94a3b8;
+  cursor: help;
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+}
+
+.ai-case-help-icon:hover {
+  border-color: #94a3b8;
+  color: #64748b;
+}
+
+:global(.ai-case-rounds-tooltip) {
+  max-width: 280px;
+  color: #374151;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ai-case-rounds-options {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.ai-case-round-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #6b7280;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.ai-case-round-option input {
+  width: 16px;
+  height: 16px;
+  appearance: none;
+  border: 2px solid #d1d5db;
+  border-radius: 999px;
+  background: #ffffff;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ai-case-round-option input:checked {
+  border: 5px solid #2563eb;
+}
+
+.ai-case-round-option input:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+}
+
+.ai-case-round-option input:disabled {
+  border-color: #e5e7eb;
+  background: #f3f4f6;
+  cursor: not-allowed;
+}
+
+.ai-case-round-option:has(input:disabled) {
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
+.ai-case-generate-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 42px;
+  border: 0;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ai-case-generate-submit:hover {
+  background: #1d4ed8;
+}
+
+.ai-case-generate-submit svg {
+  width: 16px;
+  height: 16px;
+}
+
 
 .ms-like-result-pill {
   display: inline-flex;
@@ -15501,6 +16656,34 @@ function formatTimeLabel(value?: string | null) {
   gap: 16px;
 }
 
+.batch-drawer-mode-row {
+  display: inline-flex;
+  justify-self: flex-start;
+  gap: 4px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+  padding: 3px;
+}
+
+.batch-drawer-mode-row button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #4b5563;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  height: 28px;
+  padding: 0 12px;
+}
+
+.batch-drawer-mode-row button.active {
+  background: #fff;
+  color: #2563eb;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
 .batch-drawer-hint {
   padding: 14px;
   border: 1px solid #e5e7eb;
@@ -15584,6 +16767,56 @@ pre {
   border-color: #1d4ed8;
   background: #1d4ed8;
   color: #ffffff;
+}
+
+.case-ai-generate-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #2563eb;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.case-ai-generate-button::before {
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(93deg, #3370ff 0%, #8b5cf6 100%);
+  content: "";
+  pointer-events: none;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+}
+
+.case-ai-generate-button svg {
+  width: 15px;
+  height: 15px;
+  color: #7c3aed;
+}
+
+.case-ai-generate-button span {
+  color: transparent;
+  background: linear-gradient(90deg, #2563eb 0%, #7c3aed 100%);
+  background-clip: text;
+}
+
+.case-ai-generate-button:hover {
+  background: #f8fbff;
+}
+
+.case-ai-generate-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .case-list-table :deep(.el-table__inner-wrapper) {
@@ -15687,7 +16920,7 @@ pre {
   }
 
   .ms-like-param-table-grid--query {
-      grid-template-columns: 24px 28px minmax(190px, 1.15fr) 112px minmax(220px, 1fr) 72px minmax(170px, 0.95fr) 64px;
+      grid-template-columns: 24px 28px 220px 140px 220px 180px 72px minmax(180px, 1fr) 72px;
   }
 
   .ms-like-param-table-grid--header {
@@ -15695,7 +16928,7 @@ pre {
   }
 
   .ms-like-param-table-grid--body-form {
-      grid-template-columns: 24px 28px minmax(190px, 1.1fr) 112px minmax(180px, 1fr) minmax(150px, 0.9fr) 64px;
+      grid-template-columns: 24px 28px 220px 140px 220px 180px minmax(180px, 1fr) 72px;
   }
 }
 

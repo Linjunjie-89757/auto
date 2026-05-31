@@ -452,6 +452,7 @@ const definitionImportFormat = ref<DefinitionImportFormat>('swagger')
 const definitionImportMode = ref<DefinitionImportMode>('url')
 const definitionImportUrl = ref('')
 const definitionImportFileName = ref('')
+const definitionEditorShellRef = ref<HTMLElement | null>(null)
 
 const definitionSaveForm = reactive({
   workspaceCode: '',
@@ -2876,6 +2877,10 @@ function setActiveRequestContentTab(tab: RequestContentTab) {
   if (current) {
     current.activeTab = tab
   }
+  definitionEditorShellRef.value?.scrollTo({
+    top: 0,
+    behavior: 'smooth',
+  })
 }
 
 function emptyApiRequestConfig(): ApiRequestConfig {
@@ -6278,9 +6283,7 @@ function formatTimeLabel(value?: string | null) {
               </div>
             </div>
 
-            <div
-              :class="['ms-like-editor-shell', { 'without-response': !shouldShowResponsePanel }]"
-            >
+            <div :class="['ms-like-editor-shell', { 'without-response': !shouldShowResponsePanel }]">
               <div class="ms-like-request-shell">
                 <div v-if="isAllScope && !definitionForm.workspaceCode" class="scope-hint">
                   &#24403;&#21069;&#22788;&#20110; ALL &#35270;&#35282;&#65292;&#35831;&#20808;&#22312;&#39030;&#37096;&#36873;&#25321;&#30446;&#26631;&#31354;&#38388;&#21518;&#20877;&#20445;&#23384;&#25110;&#35843;&#35797;&#12290;
@@ -6341,6 +6344,9 @@ function formatTimeLabel(value?: string | null) {
                   </el-dropdown>
                 </div>
 
+              </div>
+
+              <div ref="definitionEditorShellRef" class="ms-like-editor-scroll">
                 <div class="ms-like-request-content-panel">
                   <div class="ms-like-top-tabs">
                     <button :class="['ms-like-top-tab', { active: activeRequestTab === 'headers' }]" @click="setActiveRequestContentTab('headers')">&#35831;&#27714;&#22836;</button>
@@ -6362,7 +6368,7 @@ function formatTimeLabel(value?: string | null) {
                       <span v-if="currentDefinitionCaseCount" class="ms-like-tab-badge">{{ currentDefinitionCaseCount }}</span>
                     </button>
                   </div>
-
+                </div>
                   <div v-if="showCaseListContent" class="ms-like-request-body">
                 <div class="request-section case-list-panel">
                   <div class="editor-actions left">
@@ -6594,12 +6600,15 @@ function formatTimeLabel(value?: string | null) {
                       <button :class="['ms-like-body-chip', { active: isBodyMode('RAW_TEXT') }]" @click="setBodyMode('RAW_TEXT')">raw</button>
                       <button :class="['ms-like-body-chip', { active: isBodyMode('BINARY') }]" @click="setBodyMode('BINARY')">binary</button>
                     </div>
-                    <div class="ms-like-body-mode-shell">
+                    <div :class="['ms-like-body-mode-shell', { 'is-none': definitionForm.requestConfig.body.type === 'NONE' }]">
                     <MonacoCodeEditor
                       v-if="['RAW_JSON', 'RAW_XML', 'RAW_TEXT'].includes(definitionForm.requestConfig.body.type)"
                       v-model="activeBodyRawText"
                       :language="activeBodyLanguage"
                       height="100%"
+                      adaptive
+                      :min-adaptive-height="300"
+                      :max-adaptive-height="1000"
                     />
                     <div v-else-if="definitionForm.requestConfig.body.type === 'BINARY'" class="request-section ms-like-form-panel">
                       <div class="ms-like-form-row">
@@ -6833,8 +6842,6 @@ function formatTimeLabel(value?: string | null) {
                   </div>
                 </template>
                   </div>
-                </div>
-              </div>
 
               <div v-if="shouldShowResponsePanel" class="ms-like-response-shell">
               <div class="ms-like-response-header">
@@ -6948,6 +6955,7 @@ function formatTimeLabel(value?: string | null) {
                 </template>
               </div>
             </div>
+              </div>
           </div>
           </section>
 
@@ -7172,6 +7180,9 @@ function formatTimeLabel(value?: string | null) {
                         :read-only="caseDrawerReadOnly"
                         class="case-drawer-body-editor"
                         height="300px"
+                        adaptive
+                        :min-adaptive-height="300"
+                        :max-adaptive-height="1000"
                       />
                       <div v-else-if="caseDrawerForm.requestConfig.body.type === 'BINARY'" class="request-section ms-like-form-panel">
                         <div class="ms-like-form-row">
@@ -9653,6 +9664,50 @@ function formatTimeLabel(value?: string | null) {
   border-radius: 12px;
   background: #ffffff;
   font-family: Inter, "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --el-color-primary: #2563eb;
+  --el-color-primary-light-3: #3b82f6;
+  --el-color-primary-light-5: #93c5fd;
+  --el-color-primary-light-7: #bfdbfe;
+  --el-color-primary-light-8: #dbeafe;
+  --el-color-primary-light-9: #eff6ff;
+  --el-color-primary-dark-2: #1d4ed8;
+}
+
+.api-automation-page :deep(.el-button--primary) {
+  --el-button-bg-color: #2563eb;
+  --el-button-border-color: #2563eb;
+  --el-button-hover-bg-color: #1d4ed8;
+  --el-button-hover-border-color: #1d4ed8;
+  --el-button-active-bg-color: #1d4ed8;
+  --el-button-active-border-color: #1d4ed8;
+}
+
+.api-automation-page :deep(.el-button--primary.is-plain) {
+  --el-button-bg-color: #eff6ff;
+  --el-button-border-color: #bfdbfe;
+  --el-button-text-color: #2563eb;
+  --el-button-hover-bg-color: #2563eb;
+  --el-button-hover-border-color: #2563eb;
+  --el-button-hover-text-color: #ffffff;
+  --el-button-active-bg-color: #1d4ed8;
+  --el-button-active-border-color: #1d4ed8;
+}
+
+.api-automation-page :deep(.el-button--primary.is-text) {
+  --el-button-text-color: #2563eb;
+  --el-button-hover-text-color: #1d4ed8;
+  --el-button-hover-bg-color: #eff6ff;
+}
+
+.api-automation-page :deep(.el-checkbox__input.is-checked .el-checkbox__inner),
+.api-automation-page :deep(.el-checkbox__input.is-indeterminate .el-checkbox__inner) {
+  border-color: #2563eb;
+  background-color: #2563eb;
+}
+
+.api-automation-page :deep(.el-checkbox__input.is-focus .el-checkbox__inner),
+.api-automation-page :deep(.el-checkbox__inner:hover) {
+  border-color: #2563eb;
 }
 
 .api-tabs {
@@ -12233,19 +12288,11 @@ function formatTimeLabel(value?: string | null) {
   background: #ffffff;
   border: 0;
   border-radius: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-color: #d7dbe3 transparent;
-  scrollbar-width: thin;
-}
-
-.ms-like-editor-shell.without-response {
   overflow: hidden;
 }
 
 .ms-like-editor-shell.without-response .ms-like-request-shell {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 0 0 auto;
 }
 
 .ms-like-request-shell {
@@ -12263,8 +12310,17 @@ function formatTimeLabel(value?: string | null) {
   box-shadow: none;
 }
 
-.ms-like-editor-shell.without-response .ms-like-request-shell {
-  overflow: hidden;
+.ms-like-editor-scroll {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: #ffffff;
+  scrollbar-color: #d7dbe3 transparent;
+  scrollbar-width: thin;
 }
 
 .ms-like-request-row {
@@ -12369,8 +12425,8 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-request-content-panel {
   display: flex;
-  flex: 1 1 auto;
-  min-height: 400px;
+  flex: 0 0 auto;
+  min-height: 0;
   min-width: 0;
   flex-direction: column;
   margin: 0;
@@ -12380,18 +12436,30 @@ function formatTimeLabel(value?: string | null) {
   overflow: visible;
 }
 
+.ms-like-editor-scroll > .ms-like-request-content-panel {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: #ffffff;
+}
+
 .ms-like-top-tabs,
 .ms-like-response-tabs {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
   gap: 0;
-  height: 41px;
-  min-height: 41px;
+  height: 46px;
+  min-height: 46px;
   overflow: hidden;
   border-bottom: 1px solid #e5e7eb;
   padding: 0 16px;
   background: #ffffff;
+}
+
+.ms-like-response-tabs {
+  height: 41px;
+  min-height: 41px;
 }
 
 .ms-like-top-tab {
@@ -12400,7 +12468,7 @@ function formatTimeLabel(value?: string | null) {
   align-items: center;
   gap: 6px;
   box-sizing: border-box;
-  height: 40px;
+  height: 45px;
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
@@ -12441,18 +12509,20 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-request-body {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-height: 320px;
   overflow: visible;
   background: #fff;
-  padding: 12px 16px;
+  padding: 8px 16px 16px;
 }
 
 .ms-like-body-section {
-  display: grid;
-  grid-template-rows: 32px minmax(0, 1fr);
-  gap: 10px;
-  overflow: hidden;
+  display: flex;
+  flex: 0 0 auto;
+  align-self: stretch;
+  flex-direction: column;
+  gap: 8px;
+  overflow: visible;
 }
 
 .ms-like-body-type-row {
@@ -12461,7 +12531,7 @@ function formatTimeLabel(value?: string | null) {
   flex-wrap: wrap;
   gap: 4px;
   width: fit-content;
-  min-height: 32px;
+  min-height: 24px;
   margin-bottom: 0;
   border: 0;
   border-radius: 0;
@@ -12472,14 +12542,20 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-body-mode-shell {
   display: flex;
-  flex: 1 1 auto;
-  min-height: 0;
-  height: 100%;
+  flex: 0 0 auto;
+  min-height: 300px;
   flex-direction: column;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   background: #fff;
-  overflow: hidden;
+  overflow: visible;
+}
+
+.ms-like-body-mode-shell.is-none {
+  min-height: 100px;
+  border: 0;
+  border-radius: var(--ath-radius-sm);
+  background: #f9fafb;
 }
 
 .ms-like-body-mode-shell > .ms-monaco-editor,
@@ -12487,15 +12563,19 @@ function formatTimeLabel(value?: string | null) {
 .ms-like-body-mode-shell > .ms-like-form-panel,
 .ms-like-body-mode-shell > .ms-like-empty-body {
   width: 100%;
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 0 0 auto;
+  min-height: 300px;
+}
+
+.ms-like-body-mode-shell.is-none > .ms-like-empty-body {
+  min-height: 100px;
 }
 
 .ms-like-body-mode-shell > .ms-monaco-editor {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  min-height: 0;
+  min-height: 300px;
+  height: auto;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -12506,12 +12586,15 @@ function formatTimeLabel(value?: string | null) {
   box-sizing: border-box;
   height: 40px;
   padding: 0 12px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 0;
 }
 
 .ms-like-body-mode-shell > .ms-monaco-editor :deep(.ms-monaco-editor__body) {
   flex: 1 1 auto;
-  height: auto !important;
+  min-height: 300px;
+}
+
+.ms-like-body-mode-shell > .ms-monaco-editor.is-adaptive :deep(.ms-monaco-editor__body) {
   min-height: 0;
 }
 
@@ -12527,8 +12610,8 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-body-chip {
-  height: 26px;
-  border: 0;
+  height: 24px;
+  border: 1px solid #d1d5db;
   border-radius: 6px;
   background: #ffffff;
   color: var(--ath-text-muted);
@@ -12550,6 +12633,7 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-body-chip.active {
   background: #eff6ff;
+  border-color: #93c5fd;
   color: #2563eb;
 }
 
@@ -12572,9 +12656,9 @@ function formatTimeLabel(value?: string | null) {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 0;
-  border: 1px dashed #d1d5db;
-  border-radius: 8px;
+  min-height: 100px;
+  border: 0;
+  border-radius: var(--ath-radius-sm);
   background: #f9fafb;
   color: #9ca3af;
   font-size: 13px;
@@ -12971,10 +13055,17 @@ function formatTimeLabel(value?: string | null) {
   box-shadow: none;
 }
 
-.ms-like-editor-shell > .ms-like-response-shell {
+.ms-like-editor-scroll > .ms-like-response-shell {
   flex: 0 0 auto;
   min-height: 360px;
+  border-top: 1px solid #e5e7eb;
   overflow: visible;
+}
+
+.ms-like-editor-scroll > .ms-like-response-shell > .ms-like-response-header {
+  position: sticky;
+  top: 46px;
+  z-index: 20;
 }
 
 .ms-like-response-content-panel {
@@ -12989,7 +13080,7 @@ function formatTimeLabel(value?: string | null) {
   overflow: hidden;
 }
 
-.ms-like-editor-shell > .ms-like-response-shell > .ms-like-response-content-panel {
+.ms-like-editor-scroll > .ms-like-response-shell > .ms-like-response-content-panel {
   min-height: 300px;
 }
 
@@ -13020,7 +13111,7 @@ function formatTimeLabel(value?: string | null) {
   padding: 12px;
 }
 
-.ms-like-editor-shell > .ms-like-response-shell .ms-like-response-body {
+.ms-like-editor-scroll > .ms-like-response-shell .ms-like-response-body {
   min-height: 260px;
   overflow: visible;
 }

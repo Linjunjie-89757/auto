@@ -47,6 +47,13 @@
   --ath-radius-sm: 6px;
   --ath-radius-md: 8px;
   --ath-radius-lg: 12px;
+  --el-color-primary: #2563eb;
+  --el-color-primary-light-3: #3b82f6;
+  --el-color-primary-light-5: #93c5fd;
+  --el-color-primary-light-7: #bfdbfe;
+  --el-color-primary-light-8: #dbeafe;
+  --el-color-primary-light-9: #eff6ff;
+  --el-color-primary-dark-2: #1d4ed8;
 }
 
 * {
@@ -74,6 +81,25 @@ a {
 .app-shell {
   height: 100vh;
   overflow: hidden;
+}
+
+.el-message-box {
+  --el-color-primary: #2563eb;
+  --el-color-primary-light-3: #3b82f6;
+  --el-color-primary-light-5: #93c5fd;
+  --el-color-primary-light-7: #bfdbfe;
+  --el-color-primary-light-8: #dbeafe;
+  --el-color-primary-light-9: #eff6ff;
+  --el-color-primary-dark-2: #1d4ed8;
+}
+
+.el-message-box .el-button--primary {
+  --el-button-bg-color: #2563eb;
+  --el-button-border-color: #2563eb;
+  --el-button-hover-bg-color: #1d4ed8;
+  --el-button-hover-border-color: #1d4ed8;
+  --el-button-active-bg-color: #1d4ed8;
+  --el-button-active-border-color: #1d4ed8;
 }
 
 .app-shell > .el-container {

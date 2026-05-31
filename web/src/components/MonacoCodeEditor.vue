@@ -1,5 +1,5 @@
 <template>
-  <div class="ms-monaco-editor">
+  <div class="ms-monaco-editor" :class="{ 'is-adaptive': props.adaptive }" :style="editorShellStyle">
     <div v-if="showToolbar" class="ms-monaco-editor__toolbar">
       <button
         v-if="showFormatButton"
@@ -10,7 +10,7 @@
         格式化
       </button>
     </div>
-    <div ref="containerRef" class="ms-monaco-editor__body" :style="{ height: bodyHeight }"></div>
+    <div ref="containerRef" class="ms-monaco-editor__body" :style="editorBodyStyle"></div>
   </div>
 </template>
 
@@ -37,6 +37,9 @@ const props = withDefaults(defineProps<{
   showFormatButton?: boolean
   fitContent?: boolean
   maxFitContentHeight?: number
+  adaptive?: boolean
+  minAdaptiveHeight?: number
+  maxAdaptiveHeight?: number
   wordWrap?: EditorWordWrap
 }>(), {
   height: '500px',
@@ -44,6 +47,9 @@ const props = withDefaults(defineProps<{
   showFormatButton: true,
   fitContent: false,
   maxFitContentHeight: 1000,
+  adaptive: false,
+  minAdaptiveHeight: 300,
+  maxAdaptiveHeight: 1000,
   wordWrap: 'on',
 })
 
@@ -54,11 +60,14 @@ const emit = defineEmits<{
 
 const containerRef = ref<HTMLDivElement | null>(null)
 const bodyHeight = ref(props.height)
+const editorHeight = ref(props.height)
 let editor: monaco.editor.IStandaloneCodeEditor | null = null
 let suppressModelSync = false
 let readOnlyFormatTimer: ReturnType<typeof window.setTimeout> | null = null
 
 const showToolbar = computed(() => props.showFormatButton && !props.readOnly)
+const editorShellStyle = computed(() => props.adaptive ? { height: editorHeight.value } : {})
+const editorBodyStyle = computed(() => props.adaptive ? {} : { height: bodyHeight.value })
 
 function mapLanguage(language: EditorLanguage) {
   if (language === 'text') {
@@ -161,13 +170,29 @@ function scheduleReadOnlyFormat() {
 }
 
 function syncEditorHeight() {
-  if (!props.fitContent || !editor) {
+  if ((!props.fitContent && !props.adaptive) || !editor) {
     return
   }
-  const contentHeight = editor.getContentHeight()
-  const height = Math.max(120, Math.min(contentHeight, props.maxFitContentHeight))
-  bodyHeight.value = `${height}px`
+  const height = props.adaptive
+    ? getAdaptiveEditorHeight()
+    : Math.max(120, Math.min(editor.getContentHeight(), props.maxFitContentHeight))
+  if (props.adaptive) {
+    editorHeight.value = `${height}px`
+  }
+  else {
+    bodyHeight.value = `${height}px`
+  }
   editor.layout()
+}
+
+function getAdaptiveEditorHeight() {
+  if (!editor) {
+    return props.minAdaptiveHeight
+  }
+  const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight)
+  const lineCount = editor.getModel()?.getLineCount() || 10
+  const contentHeight = (lineCount + 3) * lineHeight + 24
+  return Math.max(props.minAdaptiveHeight, Math.min(contentHeight, props.maxAdaptiveHeight))
 }
 
 function createEditor() {
@@ -175,6 +200,7 @@ function createEditor() {
     return
   }
   bodyHeight.value = props.height
+  editorHeight.value = props.height
   editor = monaco.editor.create(containerRef.value, {
     value: props.modelValue,
     language: mapLanguage(props.language),
@@ -203,7 +229,7 @@ function createEditor() {
   })
 
   editor.getModel()?.setEOL(monaco.editor.EndOfLineSequence.LF)
-  if (props.fitContent) {
+  if (props.fitContent || props.adaptive) {
     editor.onDidContentSizeChange(() => {
       syncEditorHeight()
     })
@@ -267,8 +293,11 @@ watch(
 watch(
   () => props.height,
   (height) => {
-    if (!props.fitContent) {
+    if (!props.fitContent && !props.adaptive) {
       bodyHeight.value = height
+    }
+    else if (props.adaptive && !editor) {
+      editorHeight.value = height
     }
   },
 )
@@ -323,6 +352,11 @@ defineExpose({
   overflow: hidden;
 }
 
+.ms-monaco-editor.is-adaptive {
+  display: flex;
+  flex-direction: column;
+}
+
 .ms-monaco-editor__toolbar {
   display: flex;
   justify-content: flex-end;
@@ -352,6 +386,11 @@ defineExpose({
 
 .ms-monaco-editor__body {
   min-height: 300px;
+}
+
+.ms-monaco-editor.is-adaptive .ms-monaco-editor__body {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .ms-monaco-editor__body :deep(.monaco-editor),

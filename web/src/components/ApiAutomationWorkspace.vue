@@ -11,8 +11,6 @@ import {
   Delete,
   EditPen,
   Fold,
-  Folder,
-  FolderOpened,
   MagicStick,
   MoreFilled,
   Plus,
@@ -22,18 +20,24 @@ import {
 } from '@element-plus/icons-vue'
 import {
   Check,
+  Bell,
+  Clock,
   FileJson,
   FileText,
   Folder as LucideFolder,
   FolderOpen as LucideFolderOpen,
+  GripVertical,
   Link,
+  Layers,
   MoreHorizontal,
   Play,
   Plus as LucidePlus,
   Save,
   Search as LucideSearch,
+  Settings2,
   Upload,
   X,
+  Zap,
 } from '@lucide/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
@@ -246,6 +250,44 @@ const definitionImportFormats: Array<{
     accept: '.har',
   },
 ]
+const executionSuiteTree = [
+  {
+    id: 'workspace-account',
+    label: '开户工作空间',
+    count: 4,
+    children: [
+      { id: 'suite-smoke', label: '冒烟测试', count: 2, children: [
+        { id: 'suite-order-smoke', label: '订单冒烟', count: 0 },
+        { id: 'suite-account-smoke', label: '开户冒烟', count: 0 },
+      ] },
+      { id: 'suite-regression', label: '回归测试', count: 2, children: [
+        { id: 'suite-login-regression', label: '登录回归', count: 0 },
+        { id: 'suite-full-regression', label: '全量回归', count: 0 },
+      ] },
+    ],
+  },
+  {
+    id: 'workspace-trade',
+    label: '交易工作空间',
+    count: 0,
+    children: [],
+  },
+] as const
+const executionSuiteCases = [
+  { id: 'api-login', type: 'api', name: '用户登录接口用例', method: 'POST', path: '/api/auth/login', description: '' },
+  { id: 'api-profile', type: 'api', name: '获取用户信息', method: 'GET', path: '/api/user/profile', description: '' },
+  { id: 'scene-account', type: 'scene', name: '开户完整流程', method: '', path: '', description: '包含登录、开户注册、状态校验' },
+] as const
+const executionVisualEnvironment = ref('uat')
+const executionVisualRunMode = ref('parallel')
+const executionVisualRunOn = ref('local')
+const executionVisualNotify = ref(true)
+const executionSubTabs = [
+  { key: 'arrange', label: '编排', icon: Layers },
+  { key: 'schedule', label: '定时', icon: Clock },
+  { key: 'branch', label: '分支', icon: Zap },
+  { key: 'report', label: '报告', icon: FileText },
+] as const
 
 type DefinitionDirectoryTreeNode = {
   key: string
@@ -441,7 +483,7 @@ const selectedDefinitionTreeKey = ref(DEFINITION_TREE_ROOT_KEY)
 const definitionTreeRenderKey = ref(0)
 const expandedDefinitionTreeKeys = ref<string[]>([DEFINITION_TREE_ROOT_KEY])
 const scenarioModuleTreeRenderKey = ref(0)
-const expandedScenarioModuleTreeKeys = ref<string[]>([SCENARIO_MODULE_ROOT_KEY])
+const expandedScenarioModuleTreeKeys = ref<string[]>([])
 
 const definitionFilters = reactive({
   keyword: '',
@@ -851,15 +893,7 @@ const scenarioModuleTree = computed<ScenarioModuleTreeNode[]>(() => {
       children,
     }
   }).filter(node => !keyword || node.name.toLowerCase().includes(keyword) || node.children.length)
-  return [{
-    key: SCENARIO_MODULE_ROOT_KEY,
-    type: 'root',
-    id: null,
-    name: '全部场景',
-    scenarioCount: scenarios.value.length,
-    workspaceCode: isAllScope.value ? 'ALL' : workspaceCode.value,
-    children: workspaceNodes,
-  }]
+  return workspaceNodes
 })
 const selectedScenarioModuleTreeKey = computed(() => {
   if (selectedScenarioModuleId.value != null) {
@@ -4424,7 +4458,7 @@ function syncScenarioModuleExpandedKeys(keys?: string[]) {
 }
 
 function collapseAllScenarioModuleTreeChildren() {
-  syncScenarioModuleExpandedKeys([SCENARIO_MODULE_ROOT_KEY])
+  syncScenarioModuleExpandedKeys(scenarioModuleTree.value.map(node => node.key))
 }
 
 function handleScenarioModuleTreeExpand(_: ScenarioModuleTreeNode, treeNode: { key: string }) {
@@ -5963,16 +5997,6 @@ function selectVariableSet(item: ApiVariableSetItem) {
   runOptions.variableSetId = item.id
 }
 
-function fillFromDefinition(item: ApiDefinitionItem) {
-  void selectDefinition(item.id)
-  activeTab.value = 'definitions'
-}
-
-async function runDefinitionItem(id: number) {
-  await selectDefinition(id)
-  await debugActiveEditor()
-}
-
 function duplicateDefinition() {
   const snapshot = cloneEditorDetail(definitionForm)
   const duplicated = Object.assign(buildEmptyDefinitionDetail(), snapshot, {
@@ -6110,7 +6134,7 @@ function formatTimeLabel(value?: string | null) {
                   <div :class="['ms-like-directory-node', { 'is-root': data.type === 'root', 'is-request': data.type === 'request' }]">
                     <div class="ms-like-directory-main">
                       <span
-                        v-if="data.type === 'workspace'"
+                        v-if="data.type === 'workspace' || data.type === 'module'"
                         :class="['tree-node-folder-svg', { 'is-open': isDefinitionTreeExpanded(data.key) }]"
                         aria-hidden="true"
                       >
@@ -7829,10 +7853,33 @@ function formatTimeLabel(value?: string | null) {
         <div class="scenario-workbench ms-scenario-workbench">
           <aside class="scenario-module-pane">
             <div class="ms-like-sidebar-tools">
-              <el-input v-model="scenarioModuleKeyword" placeholder="请输入模块或场景名称" clearable />
-              <el-button v-if="canCreateInCurrentScope" type="primary" @click="resetScenarioForm">新建场景</el-button>
+              <el-button v-if="canCreateInCurrentScope" type="primary" class="scenario-sidebar-primary" @click="resetScenarioForm">
+                <LucidePlus class="scenario-sidebar-primary-icon" />
+                新建场景
+              </el-button>
+              <el-input v-model="scenarioModuleKeyword" class="scenario-sidebar-search" placeholder="搜索模块或场景名称" clearable>
+                <template #prefix>
+                  <LucideSearch class="scenario-sidebar-search-icon" />
+                </template>
+              </el-input>
             </div>
             <div class="ms-like-directory-shell">
+              <div class="scenario-directory-title-row">
+                <div class="scenario-directory-title-main">
+                  <span>场景目录</span>
+                  <small>{{ scenarios.length }}</small>
+                </div>
+                <div class="scenario-directory-title-actions">
+                  <button
+                    type="button"
+                    class="scenario-directory-collapse-button"
+                    title="收起全部子模块"
+                    @click.stop="collapseAllScenarioModuleTreeChildren"
+                  >
+                    <el-icon class="tree-collapse-icon"><Fold /></el-icon>
+                  </button>
+                </div>
+              </div>
               <el-tree
                 :key="scenarioModuleTreeRenderKey"
                 :data="scenarioModuleTree"
@@ -7854,24 +7901,13 @@ function formatTimeLabel(value?: string | null) {
                         :class="['tree-node-folder-svg', { 'is-open': isScenarioModuleTreeExpanded(data.key) }]"
                         aria-hidden="true"
                       >
-                        <el-icon class="tree-node-folder-icon">
-                          <FolderOpened v-if="isScenarioModuleTreeExpanded(data.key)" />
-                          <Folder v-else />
-                        </el-icon>
+                        <LucideFolderOpen v-if="isScenarioModuleTreeExpanded(data.key)" class="tree-node-folder-icon" />
+                        <LucideFolder v-else class="tree-node-folder-icon" />
                       </span>
                       <span v-overflow-title="data.name" class="ms-like-directory-label">{{ data.name }}</span>
                       <span class="ms-like-directory-count">{{ data.scenarioCount }}</span>
                     </div>
                     <div class="ms-like-directory-actions" @click.stop>
-                      <el-button
-                        v-if="data.type === 'root'"
-                        text
-                        class="tree-icon-button"
-                        title="收起全部子模块"
-                        @click.stop="collapseAllScenarioModuleTreeChildren"
-                      >
-                        <el-icon class="tree-collapse-icon"><Fold /></el-icon>
-                      </el-button>
                       <el-button
                         v-if="(data.type === 'workspace' || data.type === 'module') && canWriteWorkspace(data.workspaceCode)"
                         text
@@ -7969,22 +8005,6 @@ function formatTimeLabel(value?: string | null) {
                     </el-dropdown-menu>
                   </template>
                 </el-dropdown>
-              </div>
-              <div v-if="activeScenarioEditorKey !== 'scenario-list'" class="ms-like-tab-strip-primary">
-                <el-select
-                  v-model="runOptions.environmentId"
-                  class="scenario-header-environment-select"
-                  placeholder="选择环境"
-                  clearable
-                >
-                  <el-option v-for="item in environments" :key="item.id" :label="item.name" :value="item.id" />
-                </el-select>
-                <el-button type="primary" plain class="scenario-header-run-button" :disabled="!scenarioForm.id || !canWriteScenario" :loading="saving" @click="runScenario">
-                  执行
-                </el-button>
-                <el-button type="primary" class="scenario-header-save-button" :disabled="!canWriteScenario" :loading="saving" @click="saveScenario">
-                  保存
-                </el-button>
               </div>
             </div>
             <el-tabs
@@ -8272,8 +8292,27 @@ function formatTimeLabel(value?: string | null) {
                       </div>
                     </section>
                     <aside class="scenario-property-panel">
-                      <div v-if="scenarioForm.id" class="scenario-property-actions">
-                        <el-button v-if="scenarioForm.id" :disabled="!canWriteScenario" @click="removeScenario">删除</el-button>
+                      <div class="scenario-property-card">
+                      <div class="scenario-property-header">
+                        <el-select
+                          v-model="runOptions.environmentId"
+                          class="scenario-property-environment-select"
+                          placeholder="选择环境"
+                          clearable
+                        >
+                          <el-option v-for="item in environments" :key="item.id" :label="item.name" :value="item.id" />
+                        </el-select>
+                        <div class="scenario-property-run-actions">
+                          <el-button type="primary" class="scenario-property-run-button" :disabled="!scenarioForm.id || !canWriteScenario" :loading="saving" @click="runScenario">
+                            <el-icon><CaretRight /></el-icon>
+                            执行
+                          </el-button>
+                          <el-button class="scenario-property-save-button" :disabled="!canWriteScenario" :loading="saving" @click="saveScenario">
+                            <el-icon><Check /></el-icon>
+                            保存
+                          </el-button>
+                        </div>
+                        <el-button v-if="scenarioForm.id" class="scenario-property-delete-button" :disabled="!canWriteScenario" @click="removeScenario">删除场景</el-button>
                       </div>
                       <div class="scenario-property-body">
                         <label class="scenario-property-field">
@@ -8323,6 +8362,7 @@ function formatTimeLabel(value?: string | null) {
                           <el-input v-model="scenarioForm.description" type="textarea" :rows="3" placeholder="请对该场景进行描述" />
                         </label>
                       </div>
+                      </div>
                     </aside>
                   </div>
                 </template>
@@ -8333,38 +8373,191 @@ function formatTimeLabel(value?: string | null) {
       </el-tab-pane>
 
       <el-tab-pane label="执行" name="execution">
-        <div class="execution-grid">
-          <section class="panel shell-card">
-            <div class="panel-header">
-              <div class="panel-title">可运行接口</div>
-              <div class="panel-subtitle">用当前环境和变量集直接调试接口。</div>
+        <div class="execution-workbench">
+          <aside class="execution-suite-pane">
+            <div class="execution-suite-tools">
+              <button type="button" class="execution-primary-button" @click="ElMessage.info('执行套件功能后续接入')">
+                <LucidePlus />
+                新建套件
+              </button>
+              <div class="execution-search-box">
+                <LucideSearch />
+                <input type="text" placeholder="搜索模块或套件名称">
+              </div>
             </div>
-            <div class="execution-list">
-              <div v-for="item in filteredDefinitions" :key="`run-def-${item.id}`" class="execution-item">
-                <div>
-                  <div class="execution-name">{{ item.name }}</div>
-                  <div class="execution-meta">{{ item.method }} {{ item.path }}</div>
+            <div class="execution-suite-tree">
+              <div class="execution-suite-title-row">
+                <span>测试套件</span>
+                <small>4</small>
+              </div>
+              <div v-for="workspace in executionSuiteTree" :key="workspace.id" class="execution-suite-group">
+                <div class="execution-suite-node is-workspace">
+                  <ChevronRight class="execution-suite-chevron is-open" />
+                  <LucideFolderOpen class="execution-suite-folder is-open" />
+                  <span>{{ workspace.label }}</span>
+                  <small>{{ workspace.count }}</small>
                 </div>
-                <div class="execution-actions">
-                  <el-button size="small" @click="fillFromDefinition(item)">查看</el-button>
-                  <el-button size="small" type="primary" @click="runDefinitionItem(item.id)">运行</el-button>
+                <div v-for="group in workspace.children" :key="group.id" class="execution-suite-branch">
+                  <div class="execution-suite-node">
+                    <ChevronRight class="execution-suite-chevron is-open" />
+                    <LucideFolderOpen class="execution-suite-folder is-open" />
+                    <span>{{ group.label }}</span>
+                    <small>{{ group.count }}</small>
+                  </div>
+                  <div v-for="suite in group.children" :key="suite.id" class="execution-suite-node is-leaf" :class="{ active: suite.id === 'suite-order-smoke' }">
+                    <ChevronRight class="execution-suite-chevron is-placeholder" />
+                    <LucideFolder class="execution-suite-folder" />
+                    <span>{{ suite.label }}</span>
+                    <small>{{ suite.count }}</small>
+                  </div>
                 </div>
               </div>
             </div>
-          </section>
+          </aside>
 
-          <section class="panel shell-card">
-            <div class="panel-header">
-              <div class="panel-title">最近执行任务</div>
-              <div class="panel-subtitle">API 自动化任务继续复用原有任务中心。</div>
+          <main class="execution-main-pane">
+            <div class="execution-suite-tab-strip">
+              <button type="button" class="execution-suite-tab active">
+                订单冒烟
+                <X />
+              </button>
+              <button type="button" class="execution-tab-icon" @click="ElMessage.info('新增执行套件后续接入')">
+                <LucidePlus />
+              </button>
+              <button type="button" class="execution-tab-icon">
+                <MoreHorizontal />
+              </button>
             </div>
-            <el-table :data="apiTasks" size="small">
-              <el-table-column prop="taskName" label="任务名称" min-width="220" />
-              <el-table-column prop="status" label="状态" width="120" />
-              <el-table-column prop="summary" label="摘要" min-width="220" />
-              <el-table-column prop="workspaceName" label="空间" width="160" />
-            </el-table>
-          </section>
+
+            <div class="execution-content-row">
+              <section class="execution-suite-content">
+                <div class="execution-sub-tab-row">
+                  <button
+                    v-for="(tab, index) in executionSubTabs"
+                    :key="tab.key"
+                    type="button"
+                    :class="['execution-sub-tab', { active: index === 0 }]"
+                  >
+                    <component :is="tab.icon" />
+                    {{ tab.label }}
+                  </button>
+                </div>
+
+                <div class="execution-suite-header">
+                  <div class="execution-suite-name-row">
+                    <span class="execution-priority-badge">P1</span>
+                    <strong>订单冒烟</strong>
+                  </div>
+                  <p>覆盖登录、下单、支付回调的核心链路。</p>
+                  <div class="execution-suite-meta">
+                    <Clock />
+                    <span>组织管理员</span>
+                    <span>更新于 2 分钟前</span>
+                    <span>·</span>
+                    <span>创建于 5 分钟前</span>
+                  </div>
+                </div>
+
+                <div class="execution-case-list">
+                  <div class="execution-case-toolbar">
+                    <span>共 {{ executionSuiteCases.length }} 个内容</span>
+                    <div>
+                      <button type="button" @click="ElMessage.info('添加接口用例后续接入')">
+                        <LucidePlus />
+                        接口用例
+                      </button>
+                      <button type="button" @click="ElMessage.info('添加场景用例后续接入')">
+                        <LucidePlus />
+                        场景用例
+                      </button>
+                    </div>
+                  </div>
+                  <div
+                    v-for="item in executionSuiteCases"
+                    :key="item.id"
+                    class="execution-case-row"
+                  >
+                    <GripVertical />
+                    <span :class="['execution-case-type', item.type === 'scene' ? 'is-scene' : 'is-api']">
+                      <component :is="item.type === 'scene' ? Zap : Link" />
+                      {{ item.type === 'scene' ? '场景' : '接口' }}
+                    </span>
+                    <strong>{{ item.name }}</strong>
+                    <template v-if="item.type === 'api'">
+                      <span :class="['scenario-step-method', requestMethodClass(item.method)]">{{ item.method }}</span>
+                      <code>{{ item.path }}</code>
+                    </template>
+                    <span v-else class="execution-case-desc">{{ item.description }}</span>
+                    <button type="button" class="execution-case-more">
+                      <MoreHorizontal />
+                    </button>
+                  </div>
+                </div>
+
+                <div class="execution-recent-panel">
+                  <div class="execution-recent-title">最近执行任务</div>
+                  <el-table :data="apiTasks.slice(0, 4)" size="small" class="execution-task-table">
+                    <el-table-column prop="taskName" label="任务名称" min-width="180" />
+                    <el-table-column prop="status" label="状态" width="110" />
+                    <el-table-column prop="summary" label="摘要" min-width="180" />
+                  </el-table>
+                </div>
+              </section>
+
+              <aside class="execution-config-panel">
+                <div class="execution-config-card">
+                  <div class="execution-config-head">
+                    <el-select v-model="executionVisualEnvironment" placeholder="开户-UAT" class="execution-config-select">
+                      <el-option label="开户-UAT" value="uat" />
+                      <el-option label="开户-PRD" value="prd" />
+                      <el-option label="个人-DEV" value="dev" />
+                    </el-select>
+                    <button type="button" class="execution-config-icon">
+                      <Settings2 />
+                    </button>
+                    <div class="execution-run-buttons">
+                      <button type="button" class="execution-run-button" @click="ElMessage.info('套件运行功能后续接入')">
+                        <Play />
+                        运行
+                      </button>
+                      <button type="button" class="execution-save-button" @click="ElMessage.info('保存套件配置后续接入')">
+                        <Save />
+                        保存
+                      </button>
+                    </div>
+                  </div>
+                  <div class="execution-config-body">
+                    <label>
+                      <span>运行模式</span>
+                      <el-select v-model="executionVisualRunMode">
+                        <el-option label="并行运行" value="parallel" />
+                        <el-option label="串行运行" value="serial" />
+                      </el-select>
+                    </label>
+                    <label>
+                      <span>运行于</span>
+                      <el-select v-model="executionVisualRunOn">
+                        <el-option label="本地执行机" value="local" />
+                        <el-option label="远程执行机" value="remote" />
+                      </el-select>
+                    </label>
+                    <div class="execution-config-switch">
+                      <div>
+                        <Bell />
+                        <span>通知</span>
+                      </div>
+                      <el-switch v-model="executionVisualNotify" />
+                    </div>
+                    <div class="execution-config-stats">
+                      <div><span>上次运行</span><strong class="is-success">全部通过</strong></div>
+                      <div><span>运行时长</span><strong>1m 23s</strong></div>
+                      <div><span>用例数</span><strong>{{ executionSuiteCases.length }} 个</strong></div>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </main>
         </div>
       </el-tab-pane>
 
@@ -9868,27 +10061,151 @@ function formatTimeLabel(value?: string | null) {
 
 .scenario-workbench {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  min-height: calc(100vh - 210px);
+  grid-template-columns: 256px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 
 .ms-scenario-workbench {
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 10px;
+  border: 0;
+  border-radius: 0;
   background: #fff;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+  box-shadow: none;
 }
 
 .scenario-module-pane {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
   min-width: 0;
   min-height: 0;
-  padding: 12px;
-  border-right: 1px solid var(--el-border-color-light);
+  padding: 0;
+  border-right: 1px solid #e5e7eb;
   background: #fff;
+}
+
+.scenario-module-pane .ms-like-sidebar-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  padding: 16px 16px 12px;
+}
+
+.scenario-sidebar-primary {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100% !important;
+  height: 36px;
+  min-height: 36px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 0;
+}
+
+.scenario-sidebar-primary :deep(.el-icon) {
+  margin-right: 0;
+}
+
+.scenario-sidebar-primary :deep(> span) {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scenario-sidebar-primary-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.scenario-sidebar-search {
+  display: block;
+  width: 100% !important;
+  height: 36px;
+}
+
+.scenario-sidebar-search :deep(.el-input) {
+  width: 100% !important;
+}
+
+.scenario-sidebar-search :deep(.el-input__wrapper) {
+  width: 100%;
+  height: 36px;
+  min-height: 36px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px #e5e7eb;
+}
+
+.scenario-sidebar-search :deep(.el-input__inner) {
+  height: 36px;
+  line-height: 36px;
+}
+
+.scenario-sidebar-search-icon {
+  width: 16px;
+  height: 16px;
+  color: #9ca3af;
+}
+
+.scenario-sidebar-search :deep(.el-input__wrapper.is-focus) {
+  box-shadow: inset 0 0 0 1px #3b82f6, 0 0 0 2px rgba(59, 130, 246, 0.14);
+}
+
+.scenario-module-pane .ms-like-directory-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0 12px 12px;
+  overflow: hidden;
+}
+
+.scenario-directory-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  margin: 0 -4px 8px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--ath-border);
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-semibold);
+  line-height: var(--ath-line-sm);
+}
+
+.scenario-directory-title-main,
+.scenario-directory-title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scenario-directory-title-main small {
+  color: var(--ath-text-subtle);
+  font-size: var(--ath-font-xs);
+  font-weight: var(--ath-weight-medium);
+  line-height: var(--ath-line-xs);
+}
+
+.scenario-directory-collapse-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ath-text-muted);
+  cursor: pointer;
+}
+
+.scenario-directory-collapse-button:hover {
+  background: var(--ath-bg-muted);
+  color: var(--ath-primary);
 }
 
 .ms-scenario-side-actions {
@@ -9972,12 +10289,18 @@ function formatTimeLabel(value?: string | null) {
 
 .scenario-module-tree :deep(.el-tree-node__content) {
   height: 32px;
-  border-radius: 4px;
+  border-radius: 8px;
+  color: #374151;
+  font-size: 14px;
 }
 
 .scenario-module-tree :deep(.el-tree-node.is-current > .el-tree-node__content) {
   background: #eff6ff;
   color: #2563eb;
+}
+
+.scenario-module-tree :deep(.el-tree-node__content:hover) {
+  background: #f3f4f6;
 }
 
 .scenario-module-node {
@@ -10083,7 +10406,48 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .scenario-editor-tab-strip {
-  padding: 8px 16px 0;
+  min-height: 40px;
+  padding: 0;
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.scenario-editor-tab-strip .ms-like-tab-strip-main {
+  min-height: 40px;
+}
+
+.scenario-editor-tab-strip .ms-like-editor-tab {
+  height: 40px;
+  padding: 0 16px;
+  border-right: 1px solid #e5e7eb;
+  border-radius: 0;
+  background: #f9fafb;
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.scenario-editor-tab-strip .ms-like-editor-tab.active {
+  background: #ffffff;
+  color: #111827;
+}
+
+.scenario-editor-tab-strip .ms-like-editor-tab.active::after {
+  height: 2px;
+  background: #3b82f6;
+}
+
+.scenario-editor-tab-strip .ms-like-tab-add,
+.scenario-editor-tab-strip .scenario-editor-more-button {
+  width: 32px;
+  height: 39px;
+  border-radius: 0;
+  color: #9ca3af;
+}
+
+.scenario-editor-tab-strip .ms-like-tab-add:hover,
+.scenario-editor-tab-strip .scenario-editor-more-button:hover {
+  background: #f3f4f6;
+  color: #4b5563;
 }
 
 .scenario-editor-tabs :deep(.el-tabs__header) {
@@ -10118,7 +10482,19 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-scenario-search {
-  width: 260px;
+  width: 223px;
+}
+
+.ms-scenario-search :deep(.el-input__wrapper) {
+  height: 36px;
+  min-height: 36px;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px #e5e7eb;
+}
+
+.ms-scenario-search :deep(.el-input__inner) {
+  height: 36px;
+  line-height: 36px;
 }
 
 .ms-scenario-view-select {
@@ -10284,8 +10660,9 @@ function formatTimeLabel(value?: string | null) {
 
 .scenario-edit-workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 362px;
-  min-height: calc(100vh - 300px);
+  grid-template-columns: minmax(0, 1fr) 288px;
+  height: 100%;
+  min-height: 0;
   background: #fff;
 }
 
@@ -10324,21 +10701,21 @@ function formatTimeLabel(value?: string | null) {
 .scenario-detail-tabs :deep(.el-tabs__nav) {
   display: flex;
   align-items: center;
-  gap: 28px;
-  height: 48px;
+  gap: 20px;
+  height: 40px;
 }
 
 .scenario-detail-tabs :deep(.el-tabs__item) {
   position: relative;
-  height: 48px;
+  height: 40px;
   padding: 0;
   min-width: auto;
   background: transparent !important;
   border: 0 !important;
   box-shadow: none !important;
-  color: #303640;
+  color: #4b5563;
   font-size: 14px;
-  line-height: 48px;
+  line-height: 40px;
   border-radius: 0;
   transition: color 0.18s ease;
 }
@@ -10375,30 +10752,115 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .scenario-detail-tabs :deep(.el-tabs__content) {
-  padding: 16px;
+  height: calc(100% - 40px);
+  padding: 0;
+  overflow: hidden;
+}
+
+.scenario-detail-tabs :deep(.el-tab-pane) {
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
 }
 
 .scenario-property-panel {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  background: #fff;
+  padding: 12px;
+  background: #ffffff;
 }
 
-.scenario-property-actions {
+.scenario-property-card {
   display: flex;
-  justify-content: flex-end;
-  gap: 10px;
+  flex: 1 1 auto;
   min-height: 0;
-  padding: 12px 16px;
-  border-bottom: 1px solid #e5e7eb;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #f9fafb;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.scenario-property-header {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.scenario-property-environment-select {
+  width: 100%;
+}
+
+.scenario-property-environment-select :deep(.el-select__wrapper),
+.scenario-property-field :deep(.el-input__wrapper),
+.scenario-property-field :deep(.el-select__wrapper),
+.scenario-property-field :deep(.el-textarea__inner) {
+  min-height: 36px;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: inset 0 0 0 1px #e5e7eb;
+}
+
+.scenario-property-field :deep(.el-textarea__inner) {
+  min-height: 92px;
+  padding: 8px 12px;
+}
+
+.scenario-property-run-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.scenario-property-run-button,
+.scenario-property-save-button,
+.scenario-property-delete-button {
+  height: 36px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.scenario-property-run-button {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.scenario-property-run-button:hover {
+  border-color: #1d4ed8;
+  background: #1d4ed8;
+  color: #ffffff;
+}
+
+.scenario-property-save-button {
+  border-color: #e5e7eb;
+  background: #ffffff;
+  color: #374151;
+}
+
+.scenario-property-save-button:hover {
+  border-color: #d1d5db;
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.scenario-property-delete-button {
+  width: 100%;
+  border-color: #fecaca;
+  background: #ffffff;
+  color: #dc2626;
 }
 
 .scenario-property-body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 18px 16px;
+  gap: 18px;
+  padding: 16px;
+  overflow: auto;
 }
 
 .scenario-property-field {
@@ -10406,8 +10868,9 @@ function formatTimeLabel(value?: string | null) {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
-  color: #303640;
-  font-size: 14px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .scenario-property-field b {
@@ -10423,8 +10886,42 @@ function formatTimeLabel(value?: string | null) {
 
 .scenario-step-toolbar {
   justify-content: space-between;
-  margin-bottom: 12px;
-  color: #303640;
+  min-height: 42px;
+  padding: 0 16px;
+  border-bottom: 1px solid #f3f4f6;
+  background: #f9fafb;
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.scenario-step-toolbar :deep(.el-button--primary) {
+  height: 30px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.scenario-detail-tabs .section-title {
+  min-height: 42px;
+  padding: 0 16px;
+  border-bottom: 1px solid #f3f4f6;
+  background: #f9fafb;
+  color: #6b7280;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.scenario-detail-tabs .section-title :deep(.el-button) {
+  color: #2563eb;
+}
+
+.scenario-detail-tabs .kv-row,
+.scenario-detail-tabs .scenario-assertion-row {
+  margin: 12px 16px 0;
+}
+
+.scenario-detail-tabs :deep(.el-table) {
+  padding: 12px 16px;
 }
 
 .scenario-step-empty {
@@ -10632,6 +11129,7 @@ function formatTimeLabel(value?: string | null) {
   display: flex;
   flex-direction: column;
   gap: 0;
+  height: calc(100% - 42px);
   overflow: auto;
 }
 
@@ -10639,11 +11137,11 @@ function formatTimeLabel(value?: string | null) {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  min-height: 44px;
-  padding: 6px 10px;
-  border: 1px solid #e5e7eb;
-  border-bottom: 0;
-  border-radius: 6px 6px 0 0;
+  min-height: 48px;
+  padding: 8px 16px;
+  border: 0;
+  border-bottom: 1px solid #f3f4f6;
+  border-radius: 0;
   background: #fff;
 }
 
@@ -10652,12 +11150,16 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .scenario-step-node:last-child {
-  border-bottom: 1px solid #e5e7eb;
-  border-radius: 0 0 6px 6px;
+  border-bottom: 1px solid #f3f4f6;
+  border-radius: 0;
 }
 
 .scenario-step-node.is-nested {
   background: #fbfcff;
+}
+
+.scenario-step-node:hover {
+  background: rgba(239, 246, 255, 0.42);
 }
 
 .scenario-step-node-left,
@@ -10679,8 +11181,8 @@ function formatTimeLabel(value?: string | null) {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #c5cbd3;
-  color: #fff;
+  background: #f3f4f6;
+  color: #6b7280;
   font-size: 12px;
   font-weight: 600;
 }
@@ -10794,8 +11296,9 @@ function formatTimeLabel(value?: string | null) {
   align-items: center;
   height: 24px;
   padding: 0 8px;
-  border: 1px solid #3b82f6;
+  border: 1px solid #bfdbfe;
   border-radius: 4px;
+  background: #eff6ff;
   color: #2563eb;
   font-size: 12px;
   line-height: 22px;
@@ -11304,8 +11807,7 @@ function formatTimeLabel(value?: string | null) {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  padding: 12px 16px;
-  border-bottom: 1px solid #e5e7eb;
+  padding: 16px 16px 0;
   background: #ffffff;
 }
 
@@ -11367,8 +11869,7 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-sidebar-search {
   position: relative;
-  padding: 12px 16px;
-  border-bottom: 1px solid #e5e7eb;
+  padding: 12px 16px 0;
   background: #ffffff;
 }
 
@@ -11377,7 +11878,8 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ms-like-sidebar-search :deep(.el-input__wrapper) {
-  min-height: 38px;
+  height: 36px;
+  min-height: 36px;
   border-radius: var(--ath-radius-md);
   background: var(--ath-bg-page);
   box-shadow: inset 0 0 0 1px var(--ath-input-border);
@@ -11413,7 +11915,10 @@ function formatTimeLabel(value?: string | null) {
   font-weight: var(--ath-weight-semibold);
   line-height: var(--ath-line-sm);
   min-height: 40px;
-  padding: 0 16px;
+  margin-top: 12px;
+  margin-right: 12px;
+  margin-left: 12px;
+  padding: 0 4px;
   border-bottom: 1px solid var(--ath-border);
   background: #ffffff;
 }
@@ -14318,6 +14823,648 @@ function formatTimeLabel(value?: string | null) {
   border: 1px solid var(--el-border-color);
   border-radius: 8px;
   padding: 12px;
+}
+
+.execution-workbench {
+  display: grid;
+  grid-template-columns: 256px minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.execution-suite-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-right: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.execution-suite-tools {
+  display: grid;
+  gap: 12px;
+  padding: 16px 16px 12px;
+}
+
+.execution-primary-button,
+.execution-search-box,
+.execution-case-toolbar button,
+.execution-run-button,
+.execution-save-button,
+.execution-config-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.execution-primary-button {
+  width: 100%;
+  height: 36px;
+  gap: 8px;
+  border: 1px solid #2563eb;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.execution-primary-button:hover {
+  border-color: #1d4ed8;
+  background: #1d4ed8;
+}
+
+.execution-primary-button svg,
+.execution-search-box svg,
+.execution-tab-icon svg,
+.execution-suite-tab svg,
+.execution-sub-tab svg,
+.execution-case-row svg,
+.execution-config-panel svg {
+  width: 16px;
+  height: 16px;
+}
+
+.execution-search-box {
+  position: relative;
+  height: 36px;
+  justify-content: flex-start;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #9ca3af;
+}
+
+.execution-search-box svg {
+  position: absolute;
+  left: 12px;
+}
+
+.execution-search-box input {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #111827;
+  font-size: 14px;
+  padding: 0 12px 0 36px;
+}
+
+.execution-suite-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 12px 12px;
+}
+
+.execution-suite-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 30px;
+  margin: 0 4px 8px;
+  border-bottom: 1px solid #f3f4f6;
+  color: #374151;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.execution-suite-title-row small,
+.execution-suite-node small {
+  border-radius: 4px;
+  background: #f3f4f6;
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 400;
+  padding: 1px 6px;
+}
+
+.execution-suite-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  border-radius: 8px;
+  color: #374151;
+  font-size: 14px;
+  padding: 0 6px;
+  cursor: default;
+}
+
+.execution-suite-node:hover {
+  background: #f3f4f6;
+}
+
+.execution-suite-node.active {
+  background: #eff6ff;
+  color: #2563eb;
+  font-weight: 500;
+}
+
+.execution-suite-node span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.execution-suite-branch {
+  margin-left: 14px;
+}
+
+.execution-suite-chevron {
+  width: 14px !important;
+  height: 14px !important;
+  color: #9ca3af;
+}
+
+.execution-suite-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.execution-suite-chevron.is-placeholder {
+  opacity: 0;
+}
+
+.execution-suite-folder {
+  color: #9ca3af;
+}
+
+.execution-suite-folder.is-open,
+.execution-suite-node.active .execution-suite-folder {
+  color: #3b82f6;
+}
+
+.execution-main-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.execution-suite-tab-strip {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.execution-suite-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  border: 0;
+  border-right: 1px solid #e5e7eb;
+  background: #ffffff;
+  color: #111827;
+  font-size: 14px;
+  padding: 0 16px;
+}
+
+.execution-suite-tab::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: #3b82f6;
+}
+
+.execution-suite-tab svg {
+  color: #9ca3af;
+}
+
+.execution-tab-icon {
+  width: 32px;
+  height: 39px;
+  border: 0;
+  background: #ffffff;
+  color: #9ca3af;
+  cursor: pointer;
+}
+
+.execution-tab-icon:hover {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.execution-content-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 288px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.execution-suite-content {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-right: 1px solid #e5e7eb;
+  overflow: hidden;
+}
+
+.execution-sub-tab-row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  min-height: 40px;
+  padding: 0 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.execution-sub-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  border: 0;
+  background: transparent;
+  color: #4b5563;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.execution-sub-tab.active {
+  color: #2563eb;
+  font-weight: 500;
+}
+
+.execution-sub-tab.active::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: #2563eb;
+}
+
+.execution-suite-header {
+  display: grid;
+  gap: 8px;
+  padding: 16px 24px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.execution-suite-name-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.execution-suite-name-row strong {
+  color: #111827;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.execution-priority-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid #fed7aa;
+  border-radius: 6px;
+  background: #ffedd5;
+  color: #c2410c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.execution-suite-header p {
+  margin: 0;
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.execution-suite-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.execution-suite-meta svg {
+  width: 13px;
+  height: 13px;
+}
+
+.execution-case-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.execution-case-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 42px;
+  padding: 0 16px;
+  border-bottom: 1px solid #f3f4f6;
+  background: #f9fafb;
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.execution-case-toolbar > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.execution-case-toolbar button {
+  gap: 6px;
+  height: 30px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #374151;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0 12px;
+}
+
+.execution-case-toolbar button:hover {
+  background: #f3f4f6;
+}
+
+.execution-case-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  border-bottom: 1px solid #f3f4f6;
+  padding: 0 16px;
+}
+
+.execution-case-row:hover {
+  background: rgba(239, 246, 255, 0.42);
+}
+
+.execution-case-row > svg {
+  flex: 0 0 auto;
+  color: #d1d5db;
+}
+
+.execution-case-row strong {
+  width: 140px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.execution-case-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid #bfdbfe;
+  border-radius: 4px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.execution-case-type.is-scene {
+  border-color: #e9d5ff;
+  background: #faf5ff;
+  color: #9333ea;
+}
+
+.execution-case-type svg {
+  width: 12px;
+  height: 12px;
+}
+
+.execution-case-row code,
+.execution-case-desc {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: #9ca3af;
+  font-family: Consolas, 'SFMono-Regular', Menlo, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.execution-case-desc {
+  font-family: inherit;
+}
+
+.execution-case-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #9ca3af;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.execution-case-row:hover .execution-case-more {
+  opacity: 1;
+}
+
+.execution-case-more:hover {
+  background: #e5e7eb;
+  color: #4b5563;
+}
+
+.execution-recent-panel {
+  border-top: 1px solid #e5e7eb;
+  padding: 12px 16px 16px;
+}
+
+.execution-recent-title {
+  margin-bottom: 10px;
+  color: #374151;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.execution-task-table :deep(.el-table__header th) {
+  height: 36px;
+  background: #f9fafb;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.execution-task-table :deep(.el-table__body td) {
+  height: 40px;
+  color: #374151;
+  font-size: 13px;
+}
+
+.execution-config-panel {
+  padding: 12px;
+  background: #ffffff;
+}
+
+.execution-config-card {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #f9fafb;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.execution-config-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  gap: 8px;
+  padding: 16px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.execution-config-select {
+  min-width: 0;
+}
+
+.execution-config-select :deep(.el-select__wrapper),
+.execution-config-body :deep(.el-select__wrapper) {
+  min-height: 36px;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: inset 0 0 0 1px #e5e7eb;
+}
+
+.execution-config-icon {
+  width: 36px;
+  height: 36px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #9ca3af;
+}
+
+.execution-run-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-column: 1 / -1;
+  gap: 8px;
+}
+
+.execution-run-button,
+.execution-save-button {
+  height: 36px;
+  gap: 6px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.execution-run-button {
+  border: 1px solid #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.execution-run-button:hover {
+  border-color: #1d4ed8;
+  background: #1d4ed8;
+}
+
+.execution-save-button {
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  color: #374151;
+}
+
+.execution-save-button:hover {
+  background: #f3f4f6;
+}
+
+.execution-config-body {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  padding: 16px;
+  overflow: auto;
+}
+
+.execution-config-body label {
+  display: grid;
+  gap: 8px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.execution-config-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.execution-config-switch > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #374151;
+  font-size: 14px;
+}
+
+.execution-config-switch svg {
+  color: #9ca3af;
+}
+
+.execution-config-stats {
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.execution-config-stats div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.execution-config-stats strong {
+  color: #374151;
+  font-weight: 500;
+}
+
+.execution-config-stats strong.is-success {
+  color: #16a34a;
 }
 
 .table-panel {

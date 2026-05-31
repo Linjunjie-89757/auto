@@ -1,4 +1,6 @@
 import type {
+  ApiAiCaseGenerationEvent,
+  ApiAiCaseGenerationPayload,
   ApiDebugCasePayload,
   ApiDebugDefinitionPayload,
   ApiDefinitionCaseDetail,
@@ -787,6 +789,67 @@ export const platformApi = {
       workspaceCode,
       body: JSON.stringify(payload),
     })
+  },
+  async streamGenerateApiDefinitionCases(
+    workspaceCode: string,
+    payload: ApiAiCaseGenerationPayload,
+    handlers: {
+      signal?: AbortSignal
+      onEvent: (event: ApiAiCaseGenerationEvent) => void
+    },
+  ) {
+    const response = await fetch(resolveApiUrl('/automation/api/ai-case-generation/stream'), {
+      method: 'POST',
+      credentials: 'include',
+      signal: handlers.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Workspace-Code': workspaceCode,
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!response.ok || !response.body) {
+      let message = 'AI 生成接口用例失败'
+      try {
+        const errorPayload = await response.json() as ApiResponse<null>
+        message = errorPayload.message || message
+      }
+      catch {
+        // ignore non-json streaming errors
+      }
+      throw buildError(message, response.status)
+    }
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) {
+        break
+      }
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split(/\r?\n/)
+      buffer = lines.pop() ?? ''
+      for (const line of lines) {
+        if (line.trim()) {
+          try {
+            handlers.onEvent(JSON.parse(line) as ApiAiCaseGenerationEvent)
+          }
+          catch {
+            // Ignore malformed stream fragments and keep consuming later events.
+          }
+        }
+      }
+    }
+    buffer += decoder.decode()
+    if (buffer.trim()) {
+      try {
+        handlers.onEvent(JSON.parse(buffer) as ApiAiCaseGenerationEvent)
+      }
+      catch {
+        // Ignore malformed trailing stream content.
+      }
+    }
   },
   getApiScenarios(workspaceCode: string, filters?: { moduleId?: number | null; keyword?: string; status?: string }) {
     const params = new URLSearchParams()

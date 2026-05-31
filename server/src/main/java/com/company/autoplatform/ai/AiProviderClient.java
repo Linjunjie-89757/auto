@@ -41,6 +41,10 @@ public class AiProviderClient {
         return parseReviewResult(content);
     }
 
+    public String requestStructuredContent(AiProviderRequestProfile profile, String apiKey, String prompt) {
+        return adapter(profile.protocolType()).requestStructuredContent(profile, apiKey, prompt, List.of());
+    }
+
     public void testConnection(AiProviderRequestProfile profile, String apiKey) {
         adapter(profile.protocolType()).testConnection(profile, apiKey);
     }

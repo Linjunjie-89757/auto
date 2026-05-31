@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.util.List;
 
@@ -24,9 +25,14 @@ import static com.company.autoplatform.apiautomation.ApiAutomationModels.*;
 public class ApiAutomationController {
 
     private final ApiAutomationService apiAutomationService;
+    private final ApiAiCaseGenerationService apiAiCaseGenerationService;
 
-    public ApiAutomationController(ApiAutomationService apiAutomationService) {
+    public ApiAutomationController(
+            ApiAutomationService apiAutomationService,
+            ApiAiCaseGenerationService apiAiCaseGenerationService
+    ) {
         this.apiAutomationService = apiAutomationService;
+        this.apiAiCaseGenerationService = apiAiCaseGenerationService;
     }
 
     @GetMapping("/definitions")
@@ -213,6 +219,18 @@ public class ApiAutomationController {
             @Valid @RequestBody ApiDebugCaseRequest request
     ) {
         return ApiResponse.ok(apiAutomationService.debugRunCaseDraft(workspaceCode, request));
+    }
+
+    @PostMapping(value = "/ai-case-generation/stream", produces = "application/x-ndjson")
+    public StreamingResponseBody streamGenerateApiCases(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestBody ApiAiCaseGenerationService.ApiAiCaseGenerationRequest request
+    ) {
+        return outputStream -> {
+            try (java.io.Writer writer = new java.io.OutputStreamWriter(outputStream, java.nio.charset.StandardCharsets.UTF_8)) {
+                apiAiCaseGenerationService.streamGenerate(workspaceCode, request, writer);
+            }
+        };
     }
 
     @GetMapping("/scenarios")

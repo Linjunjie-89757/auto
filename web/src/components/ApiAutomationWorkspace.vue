@@ -21,6 +21,7 @@ import {
 import {
   Check,
   Bell,
+  ChevronRight,
   Clock,
   FileJson,
   FileText,
@@ -50,6 +51,9 @@ import ApiProcessorEditor from './ApiProcessorEditor.vue'
 import MonacoCodeEditor from './MonacoCodeEditor.vue'
 import TableSettingsDrawer from './TableSettingsDrawer.vue'
 import type {
+  ApiAiCaseGenerationEvent,
+  ApiAiCaseGenerationPayload,
+  ApiAiGeneratedCaseDraft,
   ApiAssertionConfig,
   ApiAssertionResult,
   ApiAuthConfig,
@@ -114,7 +118,7 @@ type ScenarioScriptResultTab = 'console' | 'assertions'
 type DefinitionImportFormat = 'swagger' | 'postman' | 'har'
 type DefinitionImportMode = 'url' | 'file'
 type AiCaseGenerateGroup = 'positive' | 'negative' | 'boundary' | 'security'
-type AiCaseGenerateResultStatus = 'pending' | 'accepted' | 'discarded'
+type AiCaseGenerateResultStatus = 'generating' | 'pending' | 'failed' | 'accepted' | 'discarded'
 type AiCaseGenerateOption = {
   key: string
   group: AiCaseGenerateGroup
@@ -130,6 +134,7 @@ type AiCaseGenerateResult = {
   type: string
   expected: string
   status: AiCaseGenerateResultStatus
+  errorMessage?: string
   runResult?: string
   activeTab: Exclude<RequestContentTab, 'cases'>
   responseTab: ResponsePreviewTab
@@ -151,6 +156,8 @@ type AiCaseGenerateTabState = {
   method: string
   path: string
   results: AiCaseGenerateResult[]
+  generating: boolean
+  abortController?: AbortController | null
 }
 type RequestConfigHost = {
   requestConfig: ApiRequestConfig
@@ -520,6 +527,7 @@ const aiCaseGenerateProviderLoading = ref(false)
 const aiCaseGenerateNoDuplicate = ref(true)
 const aiCaseGenerateLoading = ref(false)
 const aiCaseGenerateResults = ref<AiCaseGenerateResult[]>([])
+const aiCaseGenerateAbortController = ref<AbortController | null>(null)
 const aiGenerationDetailKeyword = ref('')
 const aiGenerationDetailGroupFilter = ref<AiCaseGenerateGroup | ''>('')
 const aiGenerationDetailTypeFilter = ref('')
@@ -949,7 +957,12 @@ const visibleRequestEditorTabs = computed(() => requestEditorTabs.value.filter(i
 const showRequestEditorMoreAction = computed(() => visibleRequestEditorTabs.value.length > 0)
 const canCreateCaseForCurrentDefinition = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && !!definitionForm.id)
 const aiCaseGenerateSelectedCount = computed(() => aiCaseGenerateSelectedOptions.value.length)
-const activeAiCaseGenerationResults = computed(() => activeAiCaseGenerationState.value?.results ?? [])
+const activeAiCaseGenerationResults = computed(() => {
+  if (!activeAiCaseGenerationState.value) {
+    return []
+  }
+  return aiCaseGenerateResults.value
+})
 const aiGenerationDetailTypeOptions = computed(() => aiCaseGenerateOptions
   .filter(item => !aiGenerationDetailGroupFilter.value || item.group === aiGenerationDetailGroupFilter.value)
   .map(item => ({ value: item.label, label: item.label })))
@@ -969,7 +982,8 @@ const filteredAiCaseGenerationResults = computed(() => {
     return [item.name, item.type, item.group].some(value => value.toLowerCase().includes(keyword))
   })
 })
-const filteredAiCaseGenerationSelectedCount = computed(() => filteredAiCaseGenerationResults.value.filter(item => item.status !== 'discarded').length)
+const filteredAiCaseGenerationSelectedCount = computed(() =>
+  filteredAiCaseGenerationResults.value.filter(item => item.status !== 'discarded' && item.status !== 'accepted').length)
 const aiCaseGenerateModelOptions = computed(() =>
   aiCaseGenerateProviderConnections.value
     .filter(item => item.status !== 0 && !!item.modelName?.trim())
@@ -2623,6 +2637,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  aiCaseGenerateAbortController.value?.abort()
   document.removeEventListener('mousedown', handleScenarioStepNameOutsidePointerDown, true)
   tabStripCleanupFns.forEach(cleanup => cleanup())
   resizeObservers.forEach(observer => observer.disconnect())
@@ -3646,6 +3661,7 @@ function activateRequestEditorTab(key: string) {
   }
   activeRequestEditorKey.value = key
   if (target.resourceType === 'ai-case-generation') {
+    aiCaseGenerateResults.value = [...(target.aiGeneration?.results ?? [])]
     activeRequestTab.value = 'body'
     return
   }
@@ -3686,6 +3702,7 @@ async function closeRequestEditorTab(key: string, options?: { activateFallback?:
   if (!closing) {
     return
   }
+  closing.aiGeneration?.abortController?.abort()
   if (closing.isDirty) {
     await ElMessageBox.confirm('\u5f53\u524d\u8bf7\u6c42\u6709\u672a\u4fdd\u5b58\u4fee\u6539\uff0c\u786e\u8ba4\u5173\u95ed\u8fd9\u4e2a\u8bf7\u6c42\u9875\u7b7e\u5417\uff1f', '\u5173\u95ed\u8bf7\u6c42', { type: 'warning' })
   }
@@ -3768,6 +3785,36 @@ async function closeCaseDrawer() {
   aiCaseDrawerResultId.value = ''
   resetCaseDrawerDebugState()
   resetCaseDrawerRunHistoryState()
+}
+
+function createAiCaseGenerationPlaceholder(option: AiCaseGenerateOption, index: number): AiCaseGenerateResult {
+  const group = aiCaseGenerateGroups.find(groupItem => groupItem.key === option.group)?.label ?? '其他'
+  return {
+    id: `ai-case-loading-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+    name: `${option.label} - 生成中`,
+    directoryName: definitionForm.directoryName || '',
+    tags: [group, option.label],
+    description: 'AI 正在生成接口用例',
+    group,
+    type: option.label,
+    expected: '生成完成后展示预期结果',
+    status: 'generating',
+    activeTab: 'body',
+    responseTab: 'body',
+    requestConfig: cloneScenarioRequestConfig(definitionForm.requestConfig),
+    assertions: [],
+    preProcessors: [],
+    postProcessors: [],
+  }
+}
+
+function createAiCaseGenerationPlaceholderFromEvent(event: ApiAiCaseGenerationEvent, index: number): AiCaseGenerateResult {
+  const fallbackOption = aiCaseGenerateOptions.find(item => item.label === event.type)
+  return createAiCaseGenerationPlaceholder({
+    key: event.itemId || `stream-${index}`,
+    group: fallbackOption?.group ?? 'positive',
+    label: event.type || `用例 ${index + 1}`,
+  }, index)
 }
 
 function buildCaseDraftFromCurrentDefinition(options?: { fromSavedDefinition?: boolean }) {
@@ -3892,122 +3939,225 @@ function isAiCaseGroupAllSelected(group: AiCaseGenerateGroup) {
   return groupKeys.length > 0 && groupKeys.every(key => aiCaseGenerateSelectedOptions.value.includes(key))
 }
 
-function buildAiCasePreviewResults(): AiCaseGenerateResult[] {
-  const method = definitionForm.requestConfig.method || 'GET'
-  const path = definitionForm.requestConfig.path || definitionForm.path || ''
-  const selected = aiCaseGenerateOptions.filter(item => aiCaseGenerateSelectedOptions.value.includes(item.key))
-  return selected.slice(0, 12).map((item, index) => {
-    const group = aiCaseGenerateGroups.find(groupItem => groupItem.key === item.group)?.label ?? '其他'
-    const requestConfig = buildAiGeneratedCaseRequestConfig(item, index)
-    return {
-      id: `${Date.now()}-${index}`,
-      name: `${item.label} - ${method} ${path || '当前接口'}`,
-      directoryName: definitionForm.directoryName || '',
-      tags: [group, item.label],
-      description: item.group === 'positive' ? 'AI 生成的正向接口用例' : 'AI 生成的异常或安全接口用例',
-      group,
-      type: item.label,
-      expected: item.group === 'positive' ? '预期返回 2xx 或业务成功' : '预期返回错误提示或被安全策略拦截',
-      status: 'pending',
-      activeTab: 'body',
-      responseTab: 'body',
-      requestConfig,
-      assertions: buildAiGeneratedCaseAssertions(item),
-      preProcessors: [],
-      postProcessors: item.group === 'positive'
-        ? [emptyProcessor('EXTRACT', 'post')]
-        : [],
-    }
-  })
-}
-
-function buildAiGeneratedCaseRequestConfig(option: AiCaseGenerateOption, index: number): ApiRequestConfig {
-  const source = cloneScenarioRequestConfig(definitionForm.requestConfig)
-  source.method = source.method || definitionForm.method || 'GET'
-  source.path = source.path || definitionForm.path || ''
-  source.queryParams = (source.queryParams || []).filter(item => !isKeyValueRowEmpty(item))
-  source.headers = (source.headers || []).filter(item => !isKeyValueRowEmpty(item))
-  source.cookies = (source.cookies || []).filter(item => !isKeyValueRowEmpty(item))
-  source.body = {
-    type: 'RAW_JSON',
-    contentType: 'application/json',
-    rawText: buildAiGeneratedCaseBody(option, index),
-    jsonText: buildAiGeneratedCaseBody(option, index),
-    xmlText: '',
-    plainText: '',
-    formItems: [],
-    fileName: '',
-    binaryBase64: '',
-  }
-  if (!source.headers.some(item => item.key.toLowerCase() === 'content-type')) {
-    source.headers.push(emptyKeyValue({ key: 'Content-Type', value: 'application/json' }))
-  }
-  if (option.key === 'missing-required') {
-    source.body.jsonText = '{\n  "username": "test_user"\n}'
-    source.body.rawText = source.body.jsonText
-  }
-  if (option.group === 'security') {
-    source.headers.push(emptyKeyValue({ key: 'Authorization', value: 'Bearer ${token}' }))
-  }
-  syncKeyValueRows(source.queryParams, queryParamDefaults())
-  syncKeyValueRows(source.headers, headerParamDefaults())
-  syncKeyValueRows(source.cookies, headerParamDefaults())
-  syncKeyValueRows(source.body.formItems, bodyFormParamDefaults())
-  return source
-}
-
-function buildAiGeneratedCaseBody(option: AiCaseGenerateOption, index: number) {
-  const payload = {
-    username: option.group === 'negative' ? '' : `auto_user_${index + 1}`,
-    password: option.key === 'missing-required' ? undefined : (option.group === 'security' ? "' or '1'='1" : 'P@ssw0rd123'),
-    caseType: option.label,
-  }
-  return JSON.stringify(payload, null, 2)
-}
-
-function buildAiGeneratedCaseAssertions(option: AiCaseGenerateOption): ApiAssertionConfig[] {
-  const success = option.group === 'positive'
-  return [{
-    id: `ai-assert-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    assertionType: 'RESPONSE_CODE',
-    name: success ? '状态码为 2xx' : '返回业务错误',
-    enabled: true,
-    condition: success ? 'LT' : 'GT_OR_EQUALS',
-    expectedValue: success ? '300' : '400',
-  }]
-}
-
 function openAiCaseGenerationResultTab(results: AiCaseGenerateResult[]) {
   if (!definitionForm.id) {
     ElMessage.warning('请先保存接口，再生成用例')
     return
   }
-  const state: AiCaseGenerateTabState = {
+  const existing = requestEditorTabs.value.find(item => item.resourceType === 'ai-case-generation')
+  if (existing?.aiGeneration?.abortController) {
+    existing.aiGeneration.abortController.abort()
+  }
+  const state = reactive<AiCaseGenerateTabState>({
     definitionId: definitionForm.id,
     definitionName: definitionForm.name || '未命名接口',
     method: definitionForm.requestConfig.method || 'GET',
     path: definitionForm.requestConfig.path || definitionForm.path || '',
     results,
+    generating: true,
+    abortController: null,
+  })
+  const tab = existing ?? makeAiCaseGenerationTab(state)
+  tab.aiGeneration = state
+  tab.title = 'AI 生成单接口用例'
+  tab.isDirty = false
+  aiCaseGenerateResults.value = state.results
+  if (!existing) {
+    requestEditorTabs.value.push(tab)
   }
-  const tab = makeAiCaseGenerationTab(state)
-  requestEditorTabs.value.push(tab)
   aiCaseGenerateDrawerVisible.value = false
   activateRequestEditorTab(tab.key)
   activeAiGeneratedCaseId.value = results[0]?.id ?? ''
+  return state
 }
 
-function submitAiCaseGeneratePreview() {
+async function submitAiCaseGeneratePreview() {
   if (!aiCaseGenerateSelectedOptions.value.length) {
     ElMessage.warning('请至少选择一种生成类型')
     return
   }
+  if (!definitionForm.id) {
+    ElMessage.warning('请先保存接口，再生成用例')
+    return
+  }
+  const model = parseAiCaseGenerateModelSelection()
+  if (!model) {
+    ElMessage.warning('请选择 AI 连接池配置的模型')
+    return
+  }
+  aiCaseGenerateAbortController.value?.abort()
+  aiCaseGenerateResults.value = []
+  const state = openAiCaseGenerationResultTab([])
+  if (!state) {
+    return
+  }
+  const abortController = new AbortController()
+  aiCaseGenerateAbortController.value = abortController
+  state.abortController = abortController
   aiCaseGenerateLoading.value = true
-  window.setTimeout(() => {
-    aiCaseGenerateResults.value = buildAiCasePreviewResults()
+  try {
+    await platformApi.streamGenerateApiDefinitionCases(workspaceCode.value, buildAiCaseGenerationPayload(model), {
+      signal: abortController.signal,
+      onEvent: event => handleAiCaseGenerationEvent(state, event),
+    })
+  }
+  catch (error) {
+    if ((error as Error).name === 'AbortError') {
+      markRemainingAiCaseGenerationRowsFailed(state, '已停止生成')
+      return
+    }
+    markRemainingAiCaseGenerationRowsFailed(state, (error as Error).message || 'AI 生成失败')
+    ElMessage.error((error as Error).message || 'AI 生成失败')
+  }
+  finally {
+    state.generating = false
+    state.abortController = null
+    if (aiCaseGenerateAbortController.value === abortController) {
+      aiCaseGenerateAbortController.value = null
+    }
     aiCaseGenerateLoading.value = false
-    openAiCaseGenerationResultTab(aiCaseGenerateResults.value)
-    ElMessage.success('已打开 AI 生成单接口用例页，真实 AI 接口待后端接入')
-  }, 400)
+  }
+}
+
+function parseAiCaseGenerateModelSelection() {
+  const [connectionIdText, ...modelParts] = aiCaseGenerateModel.value.split(':')
+  const connectionId = Number(connectionIdText)
+  const modelName = modelParts.join(':')
+  if (!Number.isFinite(connectionId) || connectionId <= 0 || !modelName.trim()) {
+    return null
+  }
+  return { connectionId, modelName: modelName.trim() }
+}
+
+function buildAiCaseGenerationPayload(model: { connectionId: number, modelName: string }): ApiAiCaseGenerationPayload {
+  const selectedOptions = aiCaseGenerateOptions.filter(item => aiCaseGenerateSelectedOptions.value.includes(item.key))
+  return {
+    workspaceCode: definitionForm.workspaceCode || workspaceCode.value,
+    definitionId: definitionForm.id || 0,
+    definitionName: definitionForm.name || '',
+    name: definitionForm.name || '',
+    method: definitionForm.requestConfig.method || definitionForm.method || 'GET',
+    path: definitionForm.requestConfig.path || definitionForm.path || '',
+    description: definitionForm.description || '',
+    providerConnectionId: model.connectionId,
+    modelName: model.modelName,
+    caseCount: String(aiCaseGenerateCount.value),
+    noDuplicate: aiCaseGenerateNoDuplicate.value,
+    prompt: aiCaseGeneratePrompt.value,
+    options: selectedOptions.map(item => ({
+      key: item.key,
+      group: item.group,
+      label: item.label,
+      groupLabel: aiCaseGenerateGroups.find(group => group.key === item.group)?.label ?? item.group,
+    })),
+    requestConfig: cloneScenarioRequestConfig(definitionForm.requestConfig),
+    assertions: JSON.parse(JSON.stringify(definitionForm.assertions || [])) as ApiAssertionConfig[],
+    preProcessors: JSON.parse(JSON.stringify(definitionForm.preProcessors || [])) as ApiProcessorConfig[],
+    postProcessors: JSON.parse(JSON.stringify(definitionForm.postProcessors || [])) as ApiProcessorConfig[],
+    existingCases: currentDefinitionCases.value.map(item => ({
+      id: item.id,
+      name: item.name,
+      tags: item.tags || [],
+    })),
+  }
+}
+
+function handleAiCaseGenerationEvent(state: AiCaseGenerateTabState, event: ApiAiCaseGenerationEvent) {
+  const refreshResults = () => {
+    state.results = [...state.results]
+    aiCaseGenerateResults.value = state.results
+  }
+  if (event.event === 'completed') {
+    state.generating = false
+    return
+  }
+  if (event.event === 'failed') {
+    markRemainingAiCaseGenerationRowsFailed(state, event.message || 'AI 生成失败')
+    state.generating = false
+    return
+  }
+  if (event.event === 'item_generating') {
+    findOrCreateAiCaseGenerationPlaceholder(state, event)
+    refreshResults()
+    return
+  }
+  if (event.event === 'item_failed') {
+    const target = findOrCreateAiCaseGenerationPlaceholder(state, event)
+    if (target) {
+      target.status = 'failed'
+      target.errorMessage = event.message || '生成失败'
+      target.name = `${event.type || target.type} - 生成失败`
+      target.group = event.group || target.group
+      target.type = event.type || target.type
+      refreshResults()
+    }
+    return
+  }
+  if (event.event !== 'item_completed' || !event.item) {
+    return
+  }
+  const target = findOrCreateAiCaseGenerationPlaceholder(state, event)
+  if (!target) {
+    return
+  }
+  applyAiGeneratedDraftToResult(target, event.item)
+  refreshResults()
+}
+
+function findOrCreateAiCaseGenerationPlaceholder(state: AiCaseGenerateTabState, event: ApiAiCaseGenerationEvent) {
+  const existing = findFirstAiCaseGenerationPlaceholder(state, event.itemId || undefined)
+  if (existing) {
+    return existing
+  }
+  const placeholder = createAiCaseGenerationPlaceholderFromEvent(event, state.results.length)
+  if (event.itemId) {
+    placeholder.id = event.itemId
+  }
+  if (event.group) {
+    placeholder.group = event.group
+    placeholder.tags = [event.group, event.type || placeholder.type]
+  }
+  if (event.type) {
+    placeholder.type = event.type
+    placeholder.name = `${event.type} - 生成中`
+  }
+  state.results = [...state.results, placeholder]
+  return placeholder
+}
+
+function findFirstAiCaseGenerationPlaceholder(state: AiCaseGenerateTabState, itemId?: string) {
+  if (itemId) {
+    const byId = state.results.find(item => item.id === itemId)
+    if (byId) {
+      return byId
+    }
+  }
+  return state.results.find(item => item.status === 'generating')
+}
+
+function applyAiGeneratedDraftToResult(target: AiCaseGenerateResult, draft: ApiAiGeneratedCaseDraft) {
+  target.name = draft.name || target.name.replace(' - 生成中', '')
+  target.description = draft.description || target.description
+  target.tags = Array.isArray(draft.tags) ? [...draft.tags] : target.tags
+  target.group = draft.group || target.group
+  target.type = draft.type || target.type
+  target.expected = draft.expected || target.expected
+  target.requestConfig = cloneScenarioRequestConfig(draft.requestConfig || target.requestConfig)
+  target.assertions = JSON.parse(JSON.stringify(draft.assertions || [])) as ApiAssertionConfig[]
+  target.preProcessors = JSON.parse(JSON.stringify(draft.preProcessors || [])) as ApiProcessorConfig[]
+  target.postProcessors = JSON.parse(JSON.stringify(draft.postProcessors || [])) as ApiProcessorConfig[]
+  target.status = 'pending'
+  target.errorMessage = ''
+}
+
+function markRemainingAiCaseGenerationRowsFailed(state: AiCaseGenerateTabState, message: string) {
+  state.results
+    .filter(item => item.status === 'generating')
+    .forEach((item) => {
+      item.status = 'failed'
+      item.errorMessage = message
+      item.name = item.name.replace('生成中', '生成失败')
+    })
 }
 
 function updateAiCaseGenerateResultStatus(id: string, status: AiCaseGenerateResultStatus) {
@@ -4018,6 +4168,9 @@ function updateAiCaseGenerateResultStatus(id: string, status: AiCaseGenerateResu
 }
 
 function runAiCaseGenerateResult(item: AiCaseGenerateResult) {
+  if (!ensureAiGeneratedCaseReady(item)) {
+    return
+  }
   openAiGeneratedCaseInCaseDrawer(item)
   void debugCaseDrawer()
 }
@@ -4028,7 +4181,22 @@ function findAiCaseGenerateResult(id: string) {
 }
 
 function toggleAiGeneratedCaseDetail(item: AiCaseGenerateResult) {
+  if (!ensureAiGeneratedCaseReady(item)) {
+    return
+  }
   openAiGeneratedCaseInCaseDrawer(item)
+}
+
+function ensureAiGeneratedCaseReady(item: AiCaseGenerateResult) {
+  if (item.status === 'generating') {
+    ElMessage.info('生成中，请稍后')
+    return false
+  }
+  if (item.status === 'failed') {
+    ElMessage.warning(item.errorMessage || '该用例生成失败')
+    return false
+  }
+  return true
 }
 
 function buildCaseDraftFromAiGeneratedCase(item: AiCaseGenerateResult): ApiRequestEditorDetail {
@@ -4142,6 +4310,45 @@ function aiGeneratedCaseBodyText(item: AiCaseGenerateResult) {
 
 function setAiGeneratedCaseBodyText(item: AiCaseGenerateResult, value: string) {
   setModeBodyText(item.requestConfig.body.type, value, { requestConfig: item.requestConfig })
+}
+
+async function acceptAiCaseGenerateResult(item: AiCaseGenerateResult) {
+  if (!ensureAiGeneratedCaseReady(item)) {
+    return
+  }
+  if (!definitionForm.id) {
+    ElMessage.warning('请先保存接口')
+    return
+  }
+  try {
+    const payload = {
+      workspaceCode: definitionForm.workspaceCode || workspaceCode.value,
+      definitionId: definitionForm.id,
+      name: item.name,
+      description: item.description || '',
+      tags: item.tags || [],
+      requestConfig: cloneScenarioRequestConfig(item.requestConfig),
+      assertions: JSON.parse(JSON.stringify(item.assertions || [])) as ApiAssertionConfig[],
+      preProcessors: JSON.parse(JSON.stringify(item.preProcessors || [])) as ApiProcessorConfig[],
+      postProcessors: JSON.parse(JSON.stringify(item.postProcessors || [])) as ApiProcessorConfig[],
+    }
+    await platformApi.createApiDefinitionCase(workspaceCode.value, payload)
+    item.status = 'accepted'
+    ElMessage.success('AI 生成用例已采纳并保存')
+    await refreshData()
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message || '采纳失败')
+  }
+}
+
+function stopAiCaseGeneration() {
+  const state = activeAiCaseGenerationState.value
+  state?.abortController?.abort()
+  if (state) {
+    state.generating = false
+    markRemainingAiCaseGenerationRowsFailed(state, '已停止生成')
+  }
 }
 
 function aiGeneratedCaseBodyLanguage(item: AiCaseGenerateResult): 'json' | 'xml' | 'text' {
@@ -6942,7 +7149,14 @@ function formatTimeLabel(value?: string | null) {
                   <h3>AI 生成单接口用例</h3>
                   <p>{{ activeAiCaseGenerationState?.definitionName }} · {{ activeAiCaseGenerationState?.method }} {{ activeAiCaseGenerationState?.path }}</p>
                 </div>
-                <button type="button" class="ai-generation-stop-button">停止</button>
+                <button
+                  type="button"
+                  class="ai-generation-stop-button"
+                  :disabled="!activeAiCaseGenerationState?.generating"
+                  @click="stopAiCaseGeneration"
+                >
+                  停止
+                </button>
               </div>
 
               <div class="ai-generation-detail-workspace">
@@ -6999,17 +7213,26 @@ function formatTimeLabel(value?: string | null) {
                     <span></span>
                   </div>
                   <div class="ai-generation-detail-body">
+                    <div
+                      v-if="activeAiCaseGenerationState?.generating && !filteredAiCaseGenerationResults.length"
+                      class="ai-generation-empty-state"
+                    >
+                      <MagicStick />
+                      <span>正在连接 AI 模型，生成结果会逐条显示在这里</span>
+                    </div>
                     <template
                       v-for="item in filteredAiCaseGenerationResults"
                       :key="item.id"
                     >
                       <div
-                        :class="['ai-generation-detail-row', { active: activeAiGeneratedCaseId === item.id }]"
+                        :class="['ai-generation-detail-row', { active: false }]"
                         @click="toggleAiGeneratedCaseDetail(item)"
                       >
-                        <el-checkbox :model-value="item.status !== 'discarded'" @click.stop />
+                        <el-checkbox :model-value="item.status !== 'discarded'" :disabled="item.status === 'generating' || item.status === 'failed'" @click.stop />
                         <div class="ai-generation-detail-name">
                           <span>{{ item.name }}</span>
+                          <small v-if="item.status === 'generating'">生成中...</small>
+                          <small v-else-if="item.status === 'failed'">{{ item.errorMessage || '生成失败' }}</small>
                           <button type="button" class="ai-generation-inline-edit" aria-label="编辑" @click.stop>
                             <MoreHorizontal />
                           </button>
@@ -7018,15 +7241,15 @@ function formatTimeLabel(value?: string | null) {
                           <span class="ai-generation-case-tag">{{ item.type }}</span>
                         </div>
                         <span :class="['ai-generation-detail-group-type', item.group === '正向' ? 'is-positive' : 'is-negative']">{{ item.group }}</span>
-                        <span :class="['ai-generation-run-result', { 'is-success': item.runResult === '通过', 'is-failed': item.runResult === '失败' }]">
-                          {{ item.runResult || '-' }}
+                        <span :class="['ai-generation-run-result', { 'is-success': item.runResult === '通过', 'is-failed': item.runResult === '失败' || item.status === 'failed' }]">
+                          {{ item.status === 'generating' ? '生成中' : item.status === 'failed' ? '生成失败' : item.runResult || '-' }}
                         </span>
                         <div class="ai-generation-row-actions">
                           <button type="button" class="ai-generation-row-run" @click.stop="runAiCaseGenerateResult(item)">
                             <Play />
                             运行
                           </button>
-                          <button type="button" class="ai-generation-row-accept" @click.stop="updateAiCaseGenerateResultStatus(item.id, 'accepted')">采纳</button>
+                          <button type="button" class="ai-generation-row-accept" @click.stop="acceptAiCaseGenerateResult(item)">采纳</button>
                           <button type="button" class="ai-generation-row-discard" @click.stop="updateAiCaseGenerateResultStatus(item.id, 'discarded')">废弃</button>
                         </div>
                       </div>
@@ -10988,7 +11211,7 @@ function formatTimeLabel(value?: string | null) {
                 <el-checkbox
                   v-for="option in aiCaseGenerateOptions.filter(item => item.group === group.key)"
                   :key="option.key"
-                  :label="option.key"
+                  :value="option.key"
                 >
                   {{ option.label }}
                 </el-checkbox>
@@ -15831,6 +16054,22 @@ function formatTimeLabel(value?: string | null) {
   min-height: 0;
   flex: 1 1 auto;
   overflow: auto;
+}
+
+.ai-generation-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 180px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.ai-generation-empty-state svg {
+  width: 16px;
+  height: 16px;
+  color: #3b82f6;
 }
 
 .ai-generation-detail-head,

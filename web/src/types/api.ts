@@ -1055,6 +1055,65 @@ export interface SaveApiDefinitionCasePayload {
   postProcessors: ApiProcessorConfig[]
 }
 
+export interface ApiAiCaseGenerationOptionPayload {
+  key: string
+  group: string
+  label: string
+  groupLabel: string
+}
+
+export interface ApiAiExistingCaseSummary {
+  id: number
+  name: string
+  tags: string[]
+}
+
+export interface ApiAiGeneratedCaseDraft {
+  name: string
+  description?: string | null
+  tags: string[]
+  group: string
+  groupKey: string
+  type: string
+  typeKey: string
+  expected?: string | null
+  requestConfig: ApiRequestConfig
+  assertions: ApiAssertionConfig[]
+  preProcessors: ApiProcessorConfig[]
+  postProcessors: ApiProcessorConfig[]
+}
+
+export interface ApiAiCaseGenerationPayload {
+  workspaceCode?: string
+  definitionId: number
+  definitionName?: string
+  name?: string
+  method?: string
+  path?: string
+  description?: string | null
+  providerConnectionId: number
+  modelName: string
+  caseCount: string
+  noDuplicate: boolean
+  prompt?: string
+  options: ApiAiCaseGenerationOptionPayload[]
+  requestConfig: ApiRequestConfig
+  assertions: ApiAssertionConfig[]
+  preProcessors: ApiProcessorConfig[]
+  postProcessors: ApiProcessorConfig[]
+  existingCases: ApiAiExistingCaseSummary[]
+}
+
+export interface ApiAiCaseGenerationEvent {
+  event: 'started' | 'item_generating' | 'item_completed' | 'item_failed' | 'completed' | 'failed'
+  itemId?: string | null
+  group?: string | null
+  type?: string | null
+  total?: number | null
+  item?: ApiAiGeneratedCaseDraft | null
+  message?: string | null
+}
+
 export interface SaveApiScenarioPayload {
   workspaceCode?: string
   name: string

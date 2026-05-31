@@ -90,7 +90,7 @@ import type {
   WorkspaceItem,
 } from '../types/api'
 
-type RequestEditorResourceType = 'definition' | 'case'
+type RequestEditorResourceType = 'definition' | 'case' | 'ai-case-generation'
 type CaseDrawerMode = 'create' | 'edit' | 'run'
 type CaseDrawerViewTab = 'detail' | 'runHistory' | 'changeHistory'
 type CaseDrawerHistoryView = 'list' | 'detail'
@@ -126,6 +126,14 @@ type AiCaseGenerateResult = {
   type: string
   expected: string
   status: AiCaseGenerateResultStatus
+  runResult?: string
+}
+type AiCaseGenerateTabState = {
+  definitionId: number
+  definitionName: string
+  method: string
+  path: string
+  results: AiCaseGenerateResult[]
 }
 type RequestConfigHost = {
   requestConfig: ApiRequestConfig
@@ -152,6 +160,7 @@ type RequestEditorTab = {
   debugReportId: number | null
   debugFailureSummary: string
   debugStepResults: ApiRunStepResult[]
+  aiGeneration?: AiCaseGenerateTabState
 }
 
 type ScenarioEditorTab = {
@@ -490,10 +499,7 @@ const aiCaseGenerateCount = ref<'AUTO' | 10 | 20 | 40 | 80>('AUTO')
 const aiCaseGenerateModel = ref('')
 const aiCaseGenerateProviderConnections = ref<AiProviderConnection[]>([])
 const aiCaseGenerateProviderLoading = ref(false)
-const aiCaseGenerateStepByStep = ref(false)
-const aiCaseGenerateAutoComplete = ref(false)
 const aiCaseGenerateNoDuplicate = ref(true)
-const aiCaseGenerateRounds = ref(1)
 const aiCaseGenerateLoading = ref(false)
 const aiCaseGenerateResults = ref<AiCaseGenerateResult[]>([])
 const draggingParamGroup = ref<SortableParamGroup | null>(null)
@@ -911,18 +917,14 @@ const canDebugScenarioSystemRequest = computed(() => {
     && !!detail.requestConfig.path?.trim()
 })
 const showCaseListContent = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && activeRequestTab.value === 'cases')
-const visibleRequestEditorTabs = computed(() => requestEditorTabs.value.filter(item => item.resourceType === 'definition'))
+const isAiCaseGenerationTabActive = computed(() => activeRequestEditorTab.value?.resourceType === 'ai-case-generation')
+const activeAiCaseGenerationState = computed(() => activeRequestEditorTab.value?.aiGeneration ?? null)
+const visibleRequestEditorTabs = computed(() => requestEditorTabs.value.filter(item => item.resourceType === 'definition' || item.resourceType === 'ai-case-generation'))
 const showRequestEditorMoreAction = computed(() => visibleRequestEditorTabs.value.length > 0)
 const canCreateCaseForCurrentDefinition = computed(() => activeRequestEditorTab.value?.resourceType === 'definition' && !!definitionForm.id)
 const aiCaseGenerateSelectedCount = computed(() => aiCaseGenerateSelectedOptions.value.length)
-const aiCaseGeneratePendingResults = computed(() => aiCaseGenerateResults.value.filter(item => item.status === 'pending'))
-const aiCaseGenerateAcceptedResults = computed(() => aiCaseGenerateResults.value.filter(item => item.status === 'accepted'))
-const aiCaseGenerateDiscardedResults = computed(() => aiCaseGenerateResults.value.filter(item => item.status === 'discarded'))
-const aiCaseGenerateResultStats = computed(() => ({
-  pending: aiCaseGeneratePendingResults.value.length,
-  accepted: aiCaseGenerateAcceptedResults.value.length,
-  discarded: aiCaseGenerateDiscardedResults.value.length,
-}))
+const activeAiCaseGenerationResults = computed(() => activeAiCaseGenerationState.value?.results ?? [])
+const activeAiCaseGenerationSelectedCount = computed(() => activeAiCaseGenerationResults.value.filter(item => item.status !== 'discarded').length)
 const aiCaseGenerateModelOptions = computed(() =>
   aiCaseGenerateProviderConnections.value
     .filter(item => item.status !== 0 && !!item.modelName?.trim())
@@ -3005,9 +3007,41 @@ function makeRequestEditorTab(detail?: ApiRequestEditorDetail) {
   } satisfies RequestEditorTab
 }
 
+function makeAiCaseGenerationTab(state: AiCaseGenerateTabState): RequestEditorTab {
+  const draft = buildEmptyDefinitionDetail()
+  draft.resourceType = 'ai-case-generation'
+  draft.id = state.definitionId
+  draft.definitionId = state.definitionId
+  draft.definitionName = state.definitionName
+  draft.name = 'AI 生成单接口用例'
+  draft.method = state.method
+  draft.path = state.path
+  draft.requestConfig.method = state.method
+  draft.requestConfig.path = state.path
+  return {
+    key: `ai-case-generation-${state.definitionId}-${Date.now()}`,
+    resourceType: 'ai-case-generation',
+    resourceId: state.definitionId,
+    definitionId: state.definitionId,
+    title: 'AI 生成单接口用例',
+    method: 'AI',
+    activeTab: 'body',
+    draft,
+    savedFingerprint: '',
+    isDirty: false,
+    debugReportId: null,
+    debugFailureSummary: '',
+    debugStepResults: [],
+    aiGeneration: state,
+  }
+}
+
 function syncActiveRequestEditorTab() {
   const current = activeRequestEditorTab.value
   if (!current || requestEditorSyncing.value) {
+    return
+  }
+  if (current.resourceType === 'ai-case-generation') {
     return
   }
   const snapshot = cloneEditorDetail(definitionForm)
@@ -3559,6 +3593,10 @@ function activateRequestEditorTab(key: string) {
     return
   }
   activeRequestEditorKey.value = key
+  if (target.resourceType === 'ai-case-generation') {
+    activeRequestTab.value = 'body'
+    return
+  }
   activeRequestTab.value = target.activeTab || resolveDefaultRequestTab(target.draft)
   applyEditorDetailToForm(target.draft)
 }
@@ -3810,6 +3848,24 @@ function buildAiCasePreviewResults(): AiCaseGenerateResult[] {
   })
 }
 
+function openAiCaseGenerationResultTab(results: AiCaseGenerateResult[]) {
+  if (!definitionForm.id) {
+    ElMessage.warning('请先保存接口，再生成用例')
+    return
+  }
+  const state: AiCaseGenerateTabState = {
+    definitionId: definitionForm.id,
+    definitionName: definitionForm.name || '未命名接口',
+    method: definitionForm.requestConfig.method || 'GET',
+    path: definitionForm.requestConfig.path || definitionForm.path || '',
+    results,
+  }
+  const tab = makeAiCaseGenerationTab(state)
+  requestEditorTabs.value.push(tab)
+  aiCaseGenerateDrawerVisible.value = false
+  activateRequestEditorTab(tab.key)
+}
+
 function submitAiCaseGeneratePreview() {
   if (!aiCaseGenerateSelectedOptions.value.length) {
     ElMessage.warning('请至少选择一种生成类型')
@@ -3819,7 +3875,8 @@ function submitAiCaseGeneratePreview() {
   window.setTimeout(() => {
     aiCaseGenerateResults.value = buildAiCasePreviewResults()
     aiCaseGenerateLoading.value = false
-    ElMessage.success('已生成预览结果，真实 AI 接口待后端接入')
+    openAiCaseGenerationResultTab(aiCaseGenerateResults.value)
+    ElMessage.success('已打开 AI 生成单接口用例页，真实 AI 接口待后端接入')
   }, 400)
 }
 
@@ -3830,13 +3887,8 @@ function updateAiCaseGenerateResultStatus(id: string, status: AiCaseGenerateResu
   }
 }
 
-function acceptAllAiCaseGenerateResults() {
-  aiCaseGenerateResults.value.forEach((item) => {
-    if (item.status === 'pending') {
-      item.status = 'accepted'
-    }
-  })
-  ElMessage.info('采纳保存接口待接入，当前仅更新预览状态')
+function runAiCaseGenerateResult(item: AiCaseGenerateResult) {
+  item.runResult = item.group === '正向' ? '通过' : '失败'
 }
 
 async function runCaseItem(id: number) {
@@ -6524,7 +6576,8 @@ function formatTimeLabel(value?: string | null) {
                     :class="['ms-like-editor-tab', { active: item.key === activeRequestEditorKey }]"
                     @click="activateRequestEditorTab(item.key)"
                   >
-                    <span :class="['ms-like-method', `method-${item.method.toLowerCase()}`]">
+                    <MagicStick v-if="item.resourceType === 'ai-case-generation'" class="ai-generation-tab-icon" />
+                    <span v-else :class="['ms-like-method', `method-${item.method.toLowerCase()}`]">
                       {{ item.method }}
                     </span>
                     <span class="ms-like-editor-tab-label">{{ item.title }}</span>
@@ -6565,7 +6618,93 @@ function formatTimeLabel(value?: string | null) {
               </div>
             </div>
 
-            <div :class="['ms-like-editor-shell', { 'without-response': !shouldShowResponsePanel }]">
+            <div v-if="isAiCaseGenerationTabActive" class="ai-generation-workspace">
+              <div class="ai-generation-page-header">
+                <div>
+                  <h3>AI 生成单接口用例</h3>
+                  <p>{{ activeAiCaseGenerationState?.definitionName }} · {{ activeAiCaseGenerationState?.method }} {{ activeAiCaseGenerationState?.path }}</p>
+                </div>
+                <button type="button" class="ai-generation-stop-button">停止</button>
+              </div>
+
+              <div class="ai-generation-detail-workspace">
+                <div class="ai-generation-detail-status-row">
+                  <div class="ai-generation-detail-status-tabs">
+                    <button type="button" class="active">待处理 ({{ activeAiCaseGenerationSelectedCount }})</button>
+                    <button type="button">已采纳</button>
+                    <button type="button">废弃</button>
+                  </div>
+                  <button type="button" class="ai-generation-regenerate-button">
+                    <MagicStick />
+                    生成新用例
+                  </button>
+                </div>
+
+                <div class="ai-generation-detail-toolbar">
+                  <div class="ai-generation-detail-search">
+                    <LucideSearch />
+                    <input type="text" placeholder="搜索" />
+                  </div>
+                  <button type="button" class="ai-generation-filter-button">
+                    <Settings2 />
+                  </button>
+                  <div class="ai-generation-detail-actions">
+                    <button type="button" class="ai-generation-run-selected">
+                      <Play />
+                      运行选中
+                    </button>
+                    <button type="button" class="ai-generation-accept-selected">采纳选中</button>
+                    <button type="button" class="ai-generation-discard-selected">废弃选中</button>
+                  </div>
+                </div>
+
+                <div class="ai-generation-detail-table">
+                  <div class="ai-generation-detail-head">
+                    <el-checkbox :model-value="true" />
+                    <span>名称</span>
+                    <span></span>
+                    <span>分组</span>
+                    <span>运行结果</span>
+                    <span></span>
+                  </div>
+                  <div class="ai-generation-detail-body">
+                    <div
+                      v-for="(item, index) in activeAiCaseGenerationResults"
+                      :key="item.id"
+                      :class="['ai-generation-detail-row', { 'is-highlight': index === 5 }]"
+                    >
+                      <el-checkbox :model-value="item.status !== 'discarded'" />
+                      <div class="ai-generation-detail-name">
+                        <span>{{ item.name }}</span>
+                        <button v-if="index === 0" type="button" class="ai-generation-inline-edit" aria-label="编辑">
+                          <MoreHorizontal />
+                        </button>
+                      </div>
+                      <div class="ai-generation-detail-group-cell">
+                        <span class="ai-generation-case-tag">{{ item.type }}</span>
+                      </div>
+                      <span :class="['ai-generation-detail-group-type', item.group === '正向' ? 'is-positive' : 'is-negative']">{{ item.group }}</span>
+                      <span :class="['ai-generation-run-result', { 'is-success': item.runResult === '通过', 'is-failed': item.runResult === '失败' }]">
+                        {{ item.runResult || '-' }}
+                      </span>
+                      <div class="ai-generation-row-actions">
+                        <button v-if="index === 0" type="button" class="ai-generation-row-run" @click="runAiCaseGenerateResult(item)">
+                          <Play />
+                          运行
+                        </button>
+                        <button v-if="index === 0" type="button" class="ai-generation-row-accept" @click="updateAiCaseGenerateResultStatus(item.id, 'accepted')">采纳</button>
+                        <button v-if="index === 0" type="button" class="ai-generation-row-discard" @click="updateAiCaseGenerateResultStatus(item.id, 'discarded')">废弃</button>
+                        <button v-else type="button" class="ai-generation-row-more">
+                          <MoreHorizontal />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-else :class="['ms-like-editor-shell', { 'without-response': !shouldShowResponsePanel }]">
               <div class="ms-like-request-shell">
                 <div v-if="isAllScope && !definitionForm.workspaceCode" class="scope-hint">
                   &#24403;&#21069;&#22788;&#20110; ALL &#35270;&#35282;&#65292;&#35831;&#20808;&#22312;&#39030;&#37096;&#36873;&#25321;&#30446;&#26631;&#31354;&#38388;&#21518;&#20877;&#20445;&#23384;&#25110;&#35843;&#35797;&#12290;
@@ -8842,10 +8981,10 @@ function formatTimeLabel(value?: string | null) {
                   <p>覆盖登录、下单、支付回调的核心链路。</p>
                   <div class="execution-suite-meta">
                     <Clock />
-                    <span>组织管理员</span>
+                    <span>组织管理部</span>
                     <span>更新于 2 分钟前</span>
                     <span>·</span>
-                    <span>创建于 5 分钟前</span>
+                    <span>更新于 2 分钟前</span>
                   </div>
                 </div>
 
@@ -10327,48 +10466,6 @@ function formatTimeLabel(value?: string | null) {
             </el-select>
           </label>
           <div class="ai-case-form-switch">
-            <el-switch v-model="aiCaseGenerateStepByStep" />
-            <span>
-              <strong>分步生成</strong>
-              <small>先生成用例列表，可人工校对，确认无误再生成用例详情数据，生成更可控</small>
-            </span>
-          </div>
-          <div class="ai-case-form-switch">
-            <el-switch v-model="aiCaseGenerateAutoComplete" />
-            <span>
-              <strong>自动补充用例</strong>
-              <small>生成用例列表时，AI 将检测用例已生成用例的覆盖率，并自动补充用例以提升覆盖率</small>
-              <span class="ai-case-rounds-field">
-                <span class="ai-case-rounds-title">
-                  补充生成轮次
-                  <el-tooltip
-                    effect="light"
-                    placement="top-start"
-                    popper-class="ai-case-rounds-tooltip"
-                  >
-                    <template #content>
-                      <div>基于覆盖率补充生成：</div>
-                      <div>覆盖率 = 已生成用例 / 要求生成用例 * 100%</div>
-                    </template>
-                    <button type="button" class="ai-case-help-icon">?</button>
-                  </el-tooltip>
-                </span>
-                <span class="ai-case-rounds-options">
-                  <label v-for="round in [1, 2, 3]" :key="round" class="ai-case-round-option">
-                    <input
-                      v-model="aiCaseGenerateRounds"
-                      type="radio"
-                      name="ai-case-generate-rounds"
-                      :value="round"
-                      :disabled="!aiCaseGenerateAutoComplete"
-                    >
-                    <span>{{ round }} 轮</span>
-                  </label>
-                </span>
-              </span>
-            </span>
-          </div>
-          <div class="ai-case-form-switch">
             <el-switch v-model="aiCaseGenerateNoDuplicate" />
             <span>
               <strong>不重复生成用例</strong>
@@ -10388,43 +10485,6 @@ function formatTimeLabel(value?: string | null) {
             <MagicStick />
             生成
           </button>
-        </section>
-
-        <section v-if="aiCaseGenerateResults.length" class="ai-case-section">
-          <div class="ai-case-result-toolbar">
-            <div class="ai-case-result-tabs">
-              <span>待处理 {{ aiCaseGenerateResultStats.pending }}</span>
-              <span>已采纳 {{ aiCaseGenerateResultStats.accepted }}</span>
-              <span>废弃 {{ aiCaseGenerateResultStats.discarded }}</span>
-            </div>
-            <button type="button" class="ai-case-accept-all" @click="acceptAllAiCaseGenerateResults">采纳全部</button>
-          </div>
-          <div class="ai-case-result-list">
-            <div v-for="item in aiCaseGenerateResults" :key="item.id" class="ai-case-result-item">
-              <div class="ai-case-result-main">
-                <strong>{{ item.name }}</strong>
-                <small>{{ item.expected }}</small>
-              </div>
-              <span class="ai-case-result-tag">{{ item.type }}</span>
-              <span class="ai-case-result-group">{{ item.group }}</span>
-              <div class="ai-case-result-actions">
-                <button
-                  type="button"
-                  :disabled="item.status === 'accepted'"
-                  @click="updateAiCaseGenerateResultStatus(item.id, 'accepted')"
-                >
-                  采纳
-                </button>
-                <button
-                  type="button"
-                  :disabled="item.status === 'discarded'"
-                  @click="updateAiCaseGenerateResultStatus(item.id, 'discarded')"
-                >
-                  废弃
-                </button>
-              </div>
-            </div>
-          </div>
         </section>
       </div>
     </el-drawer>
@@ -14988,6 +15048,337 @@ function formatTimeLabel(value?: string | null) {
   border-top: 1px solid #f3f4f6;
 }
 
+.ai-generation-tab-icon {
+  width: 14px;
+  height: 14px;
+  color: #2563eb;
+}
+
+.ai-generation-workspace {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  overflow: auto;
+  background: #ffffff;
+  padding: 16px;
+}
+
+.ai-generation-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 2px 0 16px;
+}
+
+.ai-generation-page-header h3 {
+  margin: 0;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.ai-generation-page-header p {
+  margin: 6px 0 0;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.ai-generation-stop-button {
+  height: 30px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #374151;
+  cursor: pointer;
+  padding: 0 12px;
+}
+
+
+.ai-generation-detail-workspace {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  padding-bottom: 76px;
+}
+
+.ai-generation-detail-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 46px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.ai-generation-detail-status-tabs {
+  display: inline-flex;
+  overflow: hidden;
+  min-width: 360px;
+  border-radius: 8px;
+  background: #f5f7fb;
+  padding: 2px;
+}
+
+.ai-generation-detail-status-tabs button {
+  min-width: 112px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ai-generation-detail-status-tabs button.active {
+  background: #ffffff;
+  color: #334155;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+.ai-generation-regenerate-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #475569;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 10px;
+}
+
+.ai-generation-regenerate-button svg {
+  width: 13px;
+  height: 13px;
+  color: #64748b;
+}
+
+.ai-generation-detail-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  border-bottom: 1px solid #edf2f7;
+}
+
+.ai-generation-detail-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 132px;
+  height: 28px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 0 8px;
+}
+
+.ai-generation-detail-search svg,
+.ai-generation-filter-button svg {
+  width: 14px;
+  height: 14px;
+  color: #94a3b8;
+}
+
+.ai-generation-detail-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: #334155;
+  font-size: 12px;
+}
+
+.ai-generation-detail-search input::placeholder {
+  color: #cbd5e1;
+}
+
+.ai-generation-filter-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.ai-generation-detail-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.ai-generation-detail-actions button,
+.ai-generation-row-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 0 10px;
+}
+
+.ai-generation-detail-actions svg,
+.ai-generation-row-actions svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ai-generation-run-selected,
+.ai-generation-row-run {
+  border: 0;
+  background: #334155;
+  color: #ffffff;
+}
+
+.ai-generation-accept-selected,
+.ai-generation-row-accept {
+  border: 0;
+  background: #5b7cff;
+  color: #ffffff;
+}
+
+.ai-generation-discard-selected,
+.ai-generation-row-discard {
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  color: #475569;
+}
+
+.ai-generation-detail-table {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
+.ai-generation-detail-head,
+.ai-generation-detail-row {
+  display: grid;
+  grid-template-columns: 32px minmax(320px, 1fr) 170px 92px 110px 190px;
+  align-items: center;
+  column-gap: 12px;
+}
+
+.ai-generation-detail-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-height: 38px;
+  border-bottom: 1px solid #eef2f7;
+  background: #ffffff;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ai-generation-detail-head span {
+  text-align: left;
+}
+
+.ai-generation-detail-row {
+  min-height: 46px;
+  border-bottom: 1px solid #edf2f7;
+  color: #334155;
+  font-size: 13px;
+}
+
+.ai-generation-detail-row:hover,
+.ai-generation-detail-row.is-highlight {
+  background: #f4f7fb;
+}
+
+.ai-generation-detail-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ai-generation-detail-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-generation-inline-edit,
+.ai-generation-row-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.ai-generation-inline-edit svg,
+.ai-generation-row-more svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ai-generation-detail-group-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.ai-generation-detail-group-type {
+  color: #334155;
+  font-size: 12px;
+}
+
+.ai-generation-detail-group-type.is-negative {
+  color: #475569;
+}
+
+.ai-generation-run-result {
+  color: #94a3b8;
+}
+
+.ai-generation-run-result.is-success {
+  color: #16a34a;
+}
+
+.ai-generation-run-result.is-failed {
+  color: #dc2626;
+}
+
+.ai-generation-row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.ai-generation-row-actions button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+
+
 .ai-case-drawer-header {
   display: flex;
   align-items: center;
@@ -15035,8 +15426,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ai-case-section-title,
-.ai-case-option-group-title,
-.ai-case-result-toolbar {
+.ai-case-option-group-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -15121,126 +15511,6 @@ function formatTimeLabel(value?: string | null) {
   background-color: #2563eb;
 }
 
-.ai-case-result-tabs {
-  display: inline-flex;
-  gap: 4px;
-  padding: 3px;
-  border-radius: 9px;
-  background: #f3f4f6;
-}
-
-.ai-case-result-tabs span {
-  display: inline-flex;
-  align-items: center;
-  height: 26px;
-  border-radius: 7px;
-  padding: 0 12px;
-  color: #6b7280;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.ai-case-result-tabs span:first-child {
-  background: #ffffff;
-  color: #374151;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
-}
-
-.ai-case-accept-all {
-  height: 28px;
-  border: 0;
-  border-radius: 7px;
-  background: #2563eb;
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 0 12px;
-  cursor: pointer;
-}
-
-.ai-case-result-list {
-  display: grid;
-  overflow: hidden;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-}
-
-.ai-case-result-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 92px 64px 92px;
-  align-items: center;
-  gap: 12px;
-  min-height: 54px;
-  padding: 9px 12px;
-  border-bottom: 1px solid #f3f4f6;
-}
-
-.ai-case-result-item:last-child {
-  border-bottom: 0;
-}
-
-.ai-case-result-main {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-}
-
-.ai-case-result-main strong,
-.ai-case-result-main small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ai-case-result-main strong {
-  color: #111827;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.ai-case-result-main small {
-  color: #6b7280;
-  font-size: 12px;
-}
-
-.ai-case-result-tag {
-  justify-self: start;
-  max-width: 92px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #eff6ff;
-  color: #2563eb;
-  font-size: 12px;
-  padding: 2px 8px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ai-case-result-group {
-  color: #374151;
-  font-size: 12px;
-}
-
-.ai-case-result-actions {
-  display: inline-flex;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.ai-case-result-actions button {
-  height: 26px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #2563eb;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.ai-case-result-actions button:disabled {
-  color: #9ca3af;
-  cursor: default;
-}
 
 .ai-case-drawer-footer {
   display: grid;
@@ -15330,96 +15600,6 @@ function formatTimeLabel(value?: string | null) {
   line-height: 1.55;
 }
 
-.ai-case-rounds-field {
-  display: grid;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.ai-case-rounds-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: #6b7280;
-  font-size: 13px;
-  font-weight: 400;
-  line-height: 20px;
-}
-
-.ai-case-help-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  border: 1px solid #cbd5e1;
-  border-radius: 999px;
-  background: #ffffff;
-  color: #94a3b8;
-  cursor: help;
-  font-size: 10px;
-  line-height: 1;
-  padding: 0;
-}
-
-.ai-case-help-icon:hover {
-  border-color: #94a3b8;
-  color: #64748b;
-}
-
-:global(.ai-case-rounds-tooltip) {
-  max-width: 280px;
-  color: #374151;
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.ai-case-rounds-options {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-}
-
-.ai-case-round-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: #6b7280;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 400;
-}
-
-.ai-case-round-option input {
-  width: 16px;
-  height: 16px;
-  appearance: none;
-  border: 2px solid #d1d5db;
-  border-radius: 999px;
-  background: #ffffff;
-  cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.ai-case-round-option input:checked {
-  border: 5px solid #2563eb;
-}
-
-.ai-case-round-option input:focus {
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
-}
-
-.ai-case-round-option input:disabled {
-  border-color: #e5e7eb;
-  background: #f3f4f6;
-  cursor: not-allowed;
-}
-
-.ai-case-round-option:has(input:disabled) {
-  color: #9ca3af;
-  cursor: not-allowed;
-}
 
 .ai-case-generate-submit {
   display: inline-flex;

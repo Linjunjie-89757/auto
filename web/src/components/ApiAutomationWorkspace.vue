@@ -995,6 +995,15 @@ const filteredAiCaseGenerationResults = computed(() => {
     return [item.name, item.type, item.group].some(value => value.toLowerCase().includes(keyword))
   })
 })
+const aiGenerationEmptyStateText = computed(() => {
+  if (activeAiCaseGenerationState.value?.generating) {
+    return 'AI 正在生成用例，完整用例会逐条显示在这里'
+  }
+  if (activeAiCaseGenerationResults.value.length > 0) {
+    return '当前筛选条件下没有可展示的用例'
+  }
+  return '本次没有生成可展示的用例，请检查模型是否按要求返回结构化内容'
+})
 const aiCaseGenerationPendingCount = computed(() =>
   activeAiCaseGenerationResults.value.filter(item => item.status !== 'accepted' && item.status !== 'discarded').length)
 const aiCaseGenerationAcceptedCount = computed(() =>
@@ -3826,16 +3835,16 @@ async function closeCaseDrawer() {
 }
 
 function createAiCaseGenerationPlaceholder(option: AiCaseGenerateOption, index: number): AiCaseGenerateResult {
-  const group = aiCaseGenerateGroups.find(groupItem => groupItem.key === option.group)?.label ?? '其他'
+  const group = aiCaseGenerateGroups.find(groupItem => groupItem.key === option.group)?.label ?? '\u5176\u4ed6'
   return {
     id: createAiCaseGenerationItemId(index),
     name: option.label,
     directoryName: definitionForm.directoryName || '',
     tags: [group, option.label],
-    description: 'AI 正在生成接口用例',
+    description: 'AI \u6b63\u5728\u751f\u6210\u63a5\u53e3\u7528\u4f8b',
     group,
     type: option.label,
-    expected: '生成完成后展示预期结果',
+    expected: '\u751f\u6210\u5b8c\u6210\u540e\u5c55\u793a\u9884\u671f\u7ed3\u679c',
     status: 'generating',
     activeTab: 'body',
     responseTab: 'body',
@@ -3850,7 +3859,7 @@ function createAiCaseGenerationItemId(index: number) {
   return `ai-case-${Date.now()}-${index}`
 }
 
-function buildAiCaseGenerationPlaceholders(): AiCaseGenerateResult[] {
+function buildAiCaseGenerationRequestSlots(): AiCaseGenerateResult[] {
   const selected = aiCaseGenerateOptions.filter(item => aiCaseGenerateSelectedOptions.value.includes(item.key))
   const targetCount = resolveAiCaseGenerateTargetCount(selected.length)
   return Array.from({ length: targetCount }, (_, index) =>
@@ -3877,7 +3886,7 @@ function createAiCaseGenerationPlaceholderFromEvent(event: ApiAiCaseGenerationEv
   return createAiCaseGenerationPlaceholder({
     key: event.itemId || `stream-${index}`,
     group: fallbackOption?.group ?? 'positive',
-    label: event.type || `用例 ${index + 1}`,
+    label: event.type || `\u7528\u4f8b ${index + 1}`,
   }, index)
 }
 
@@ -4021,6 +4030,10 @@ function openAiCaseGenerationResultTab(results: AiCaseGenerateResult[]) {
     generating: true,
     abortController: null,
   })
+  aiGenerationStatusFilter.value = 'pending'
+  aiGenerationDetailGroupFilter.value = ''
+  aiGenerationDetailTypeFilter.value = ''
+  aiGenerationDetailKeyword.value = ''
   const tab = existing ?? makeAiCaseGenerationTab(state)
   tab.aiGeneration = state
   tab.title = 'AI 生成单接口用例'
@@ -4050,9 +4063,9 @@ async function submitAiCaseGeneratePreview() {
     return
   }
   aiCaseGenerateAbortController.value?.abort()
-  const placeholders = buildAiCaseGenerationPlaceholders()
-  aiCaseGenerateResults.value = placeholders
-  const state = openAiCaseGenerationResultTab(placeholders)
+  const requestSlots = buildAiCaseGenerationRequestSlots()
+  aiCaseGenerateResults.value = []
+  const state = openAiCaseGenerationResultTab([])
   if (!state) {
     return
   }
@@ -4061,7 +4074,7 @@ async function submitAiCaseGeneratePreview() {
   state.abortController = abortController
   aiCaseGenerateLoading.value = true
   try {
-    await platformApi.streamGenerateApiDefinitionCases(workspaceCode.value, buildAiCaseGenerationPayload(model, placeholders), {
+    await platformApi.streamGenerateApiDefinitionCases(workspaceCode.value, buildAiCaseGenerationPayload(model, requestSlots), {
       signal: abortController.signal,
       onEvent: event => handleAiCaseGenerationEvent(state, event),
     })
@@ -4138,30 +4151,26 @@ function handleAiCaseGenerationEvent(state: AiCaseGenerateTabState, event: ApiAi
     return
   }
   if (event.event === 'failed') {
-    markRemainingAiCaseGenerationRowsFailed(state, event.message || 'AI 生成失败')
+    markRemainingAiCaseGenerationRowsFailed(state, event.message || 'AI \u751f\u6210\u5931\u8d25')
     state.generating = false
     return
   }
   if (event.event === 'item_generating') {
-    findOrCreateAiCaseGenerationPlaceholder(state, event)
-    refreshResults()
     return
   }
   if (event.event === 'item_failed') {
-    const target = findOrCreateAiCaseGenerationPlaceholder(state, event)
-    if (target) {
-      target.status = 'failed'
-      target.errorMessage = event.message || '生成失败'
-      target.group = event.group || target.group
-      target.type = event.type || target.type
-      refreshResults()
-    }
+    const target = findOrCreateFailedAiCaseGenerationResult(state, event)
+    target.status = 'failed'
+    target.errorMessage = event.message || '\u751f\u6210\u5931\u8d25'
+    target.group = event.group || target.group
+    target.type = event.type || target.type
+    refreshResults()
     return
   }
   if (event.event !== 'item_completed' || !event.item) {
     return
   }
-  const target = findOrCreateAiCaseGenerationPlaceholder(state, event)
+  const target = findOrCreateCompletedAiCaseGenerationResult(state, event)
   if (!target) {
     return
   }
@@ -4169,25 +4178,32 @@ function handleAiCaseGenerationEvent(state: AiCaseGenerateTabState, event: ApiAi
   refreshResults()
 }
 
-function findOrCreateAiCaseGenerationPlaceholder(state: AiCaseGenerateTabState, event: ApiAiCaseGenerationEvent) {
+function findOrCreateCompletedAiCaseGenerationResult(state: AiCaseGenerateTabState, event: ApiAiCaseGenerationEvent) {
   const existing = findFirstAiCaseGenerationPlaceholder(state, event.itemId || undefined)
   if (existing) {
     return existing
   }
-  const placeholder = createAiCaseGenerationPlaceholderFromEvent(event, state.results.length)
+  const result = createAiCaseGenerationPlaceholderFromEvent(event, state.results.length)
   if (event.itemId) {
-    placeholder.id = event.itemId
+    result.id = event.itemId
   }
-  if (event.group) {
-    placeholder.group = event.group
-    placeholder.tags = [event.group, event.type || placeholder.type]
+  result.status = 'pending'
+  state.results = [...state.results, result]
+  return result
+}
+
+function findOrCreateFailedAiCaseGenerationResult(state: AiCaseGenerateTabState, event: ApiAiCaseGenerationEvent) {
+  const existing = findFirstAiCaseGenerationPlaceholder(state, event.itemId || undefined)
+  if (existing) {
+    return existing
   }
-  if (event.type) {
-    placeholder.type = event.type
-    placeholder.name = event.type
+  const result = createAiCaseGenerationPlaceholderFromEvent(event, state.results.length)
+  if (event.itemId) {
+    result.id = event.itemId
   }
-  state.results = [...state.results, placeholder]
-  return placeholder
+  result.status = 'failed'
+  state.results = [...state.results, result]
+  return result
 }
 
 function findFirstAiCaseGenerationPlaceholder(state: AiCaseGenerateTabState, itemId?: string) {
@@ -4216,19 +4232,19 @@ function applyAiGeneratedDraftToResult(target: AiCaseGenerateResult, draft: ApiA
 }
 
 function normalizeAiGeneratedCaseName(name: string, type: string, expected?: string | null) {
-  const cleanName = (name || type || 'AI 生成用例')
-    .replace(/^【[^】]+】\s*/, '')
+  const cleanName = (name || type || 'AI \u751f\u6210\u7528\u4f8b')
+    .replace(/^\u3010[^\u3011]+\u3011\s*/, '')
     .replace(/^\[[^\]]+]\s*/, '')
-    .replace(/^(正向|反向|负向|边界|安全性|安全)\s*[-–—:：]\s*/, '')
+    .replace(/^(\u6b63\u5411|\u53cd\u5411|\u8d1f\u5411|\u8fb9\u754c|\u5b89\u5168\u6027|\u5b89\u5168)\s*[-\u2013\u2014:\uff1a]\s*/, '')
     .trim()
   const cleanType = (type || '').trim()
-  if (!cleanType || cleanName.startsWith(`${cleanType} – `) || cleanName.startsWith(`${cleanType} - `)) {
+  if (!cleanType || cleanName.startsWith(`${cleanType} \u2013 `) || cleanName.startsWith(`${cleanType} - `)) {
     return cleanName
   }
   const cleanExpected = (expected || '').trim()
   return cleanExpected
-    ? `${cleanType} – ${cleanName} – ${cleanExpected}`
-    : `${cleanType} – ${cleanName}`
+    ? `${cleanType} \u2013 ${cleanName} \u2013 ${cleanExpected}`
+    : `${cleanType} \u2013 ${cleanName}`
 }
 
 function markRemainingAiCaseGenerationRowsFailed(state: AiCaseGenerateTabState, message: string) {
@@ -7401,12 +7417,9 @@ function formatTimeLabel(value?: string | null) {
                     <span></span>
                   </div>
                   <div class="ai-generation-detail-body">
-                    <div
-                      v-if="activeAiCaseGenerationState?.generating && !filteredAiCaseGenerationResults.length"
-                      class="ai-generation-empty-state"
-                    >
+                    <div v-if="!filteredAiCaseGenerationResults.length" class="ai-generation-empty-state">
                       <MagicStick />
-                      <span>正在连接 AI 模型，生成结果会逐条显示在这里</span>
+                      <span>{{ aiGenerationEmptyStateText }}</span>
                     </div>
                     <template
                       v-for="(item, index) in filteredAiCaseGenerationResults"

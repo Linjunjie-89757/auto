@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.function.Consumer;
 
 @Component
 class OpenAiCompatibleChatAdapter extends AbstractOpenAiCompatibleAdapter {
@@ -39,5 +40,16 @@ class OpenAiCompatibleChatAdapter extends AbstractOpenAiCompatibleAdapter {
     @Override
     public String requestStructuredContent(AiProviderRequestProfile profile, String apiKey, String prompt, List<AiProviderClient.ImageInput> images) {
         return requestStructuredContentWithChat(profile, apiKey, prompt, images, false);
+    }
+
+    @Override
+    public String streamStructuredContent(
+            AiProviderRequestProfile profile,
+            String apiKey,
+            String prompt,
+            List<AiProviderClient.ImageInput> images,
+            Consumer<String> deltaConsumer
+    ) {
+        return streamStructuredContentWithChat(profile, apiKey, prompt, images, deltaConsumer);
     }
 }

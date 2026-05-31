@@ -1,6 +1,7 @@
 package com.company.autoplatform.ai;
 
 import java.util.List;
+import java.util.function.Consumer;
 
 interface AiProtocolAdapter {
 
@@ -13,4 +14,18 @@ interface AiProtocolAdapter {
     AiModelCapabilities probeCapabilities(AiProviderRequestProfile profile, String apiKey);
 
     String requestStructuredContent(AiProviderRequestProfile profile, String apiKey, String prompt, List<AiProviderClient.ImageInput> images);
+
+    default String streamStructuredContent(
+            AiProviderRequestProfile profile,
+            String apiKey,
+            String prompt,
+            List<AiProviderClient.ImageInput> images,
+            Consumer<String> deltaConsumer
+    ) {
+        String content = requestStructuredContent(profile, apiKey, prompt, images);
+        if (deltaConsumer != null && content != null && !content.isBlank()) {
+            deltaConsumer.accept(content);
+        }
+        return content;
+    }
 }

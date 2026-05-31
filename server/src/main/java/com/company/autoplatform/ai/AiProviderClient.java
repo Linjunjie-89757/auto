@@ -11,6 +11,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 @Component
@@ -43,6 +44,20 @@ public class AiProviderClient {
 
     public String requestStructuredContent(AiProviderRequestProfile profile, String apiKey, String prompt) {
         return adapter(profile.protocolType()).requestStructuredContent(profile, apiKey, prompt, List.of());
+    }
+
+    public String streamStructuredContent(
+            AiProviderRequestProfile profile,
+            String apiKey,
+            String prompt,
+            Consumer<String> deltaConsumer
+    ) {
+        AiProtocolAdapter adapter = adapter(profile.protocolType());
+        try {
+            return adapter.streamStructuredContent(profile, apiKey, prompt, List.of(), deltaConsumer);
+        } catch (RuntimeException exception) {
+            return adapter.requestStructuredContent(profile, apiKey, prompt, List.of());
+        }
     }
 
     public void testConnection(AiProviderRequestProfile profile, String apiKey) {

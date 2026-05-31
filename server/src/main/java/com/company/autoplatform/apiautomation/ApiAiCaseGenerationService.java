@@ -27,6 +27,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.HashSet;
+import java.util.Set;
 
 import static com.company.autoplatform.apiautomation.ApiAutomationModels.*;
 
@@ -71,51 +73,162 @@ public class ApiAiCaseGenerationService {
                 writeEvent(writer, new ApiAiCaseGenerationEvent("item_generating", slot.id(), slot.group(), slot.type(), slots.size(), null, null));
             }
             try {
-                List<ApiAiGeneratedCaseDraft> drafts = generateBatchCases(workspace, provider, request, slots);
-                for (int index = 0; index < slots.size(); index++) {
-                    if (Thread.currentThread().isInterrupted()) {
-                        throw new BadRequestException("AI 生成已中断");
-                    }
-                    ApiAiCaseGenerationSlot slot = slots.get(index);
-                    ApiAiGeneratedCaseDraft draft = index < drafts.size() ? drafts.get(index) : null;
-                    if (draft == null) {
-                        writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, "AI 未返回该用例"));
-                        continue;
-                    }
-                    completed += 1;
-                    writeEvent(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slots.size(), draft, null));
-                }
+                completed = streamGenerateBatchCases(workspace, provider, request, slots, writer);
             } catch (Exception exception) {
                 for (ApiAiCaseGenerationSlot slot : slots) {
                     writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, exception.getMessage()));
                 }
             }
             writeEvent(writer, new ApiAiCaseGenerationEvent("completed", null, null, null, slots.size(), null,
-                    completed == slots.size() ? null : "部分用例生成失败"));
+                    completed == slots.size() ? null : "\u90e8\u5206\u7528\u4f8b\u751f\u6210\u5931\u8d25"));
         } catch (Exception exception) {
             writeEvent(writer, new ApiAiCaseGenerationEvent("failed", null, null, null, null, null, exception.getMessage()));
         }
     }
 
-    private List<ApiAiGeneratedCaseDraft> generateBatchCases(
+    private int streamGenerateBatchCases(
             WorkspaceEntity workspace,
             ResolvedAiProvider provider,
             ApiAiCaseGenerationRequest request,
-            List<ApiAiCaseGenerationSlot> slots
+            List<ApiAiCaseGenerationSlot> slots,
+            Writer writer
     ) {
-        String prompt = buildBatchPrompt(workspace, request, slots);
-        String content = aiProviderClient.requestStructuredContent(provider.profile(), provider.apiKey(), prompt);
-        List<ApiAiGeneratedCaseDraft> drafts = parseDrafts(content);
-        List<ApiAiGeneratedCaseDraft> normalized = new ArrayList<>();
+        String prompt = buildStreamingBatchPrompt(workspace, request, slots);
+        Map<String, ApiAiCaseGenerationSlot> slotById = new LinkedHashMap<>();
+        for (ApiAiCaseGenerationSlot slot : slots) {
+            slotById.put(slot.id(), slot);
+        }
+        Set<String> completedIds = new HashSet<>();
+        StringBuilder lineBuffer = new StringBuilder();
+        String content = aiProviderClient.streamStructuredContent(provider.profile(), provider.apiKey(), prompt, delta -> {
+            appendAndEmitCompletedLines(delta, lineBuffer, slotById, completedIds, request, writer);
+        });
+        appendAndEmitCompletedLines("\n", lineBuffer, slotById, completedIds, request, writer);
+        emitRemainingDrafts(content, slots, completedIds, request, writer);
+        for (ApiAiCaseGenerationSlot slot : slots) {
+            if (!completedIds.contains(slot.id())) {
+                writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, "AI \u672a\u8fd4\u56de\u8be5\u7528\u4f8b"));
+            }
+        }
+        return completedIds.size();
+    }
+
+    private void appendAndEmitCompletedLines(
+            String delta,
+            StringBuilder lineBuffer,
+            Map<String, ApiAiCaseGenerationSlot> slotById,
+            Set<String> completedIds,
+            ApiAiCaseGenerationRequest request,
+            Writer writer
+    ) {
+        if (delta == null || delta.isEmpty()) {
+            return;
+        }
+        lineBuffer.append(delta);
+        int lineBreakIndex;
+        while ((lineBreakIndex = indexOfLineBreak(lineBuffer)) >= 0) {
+            String line = lineBuffer.substring(0, lineBreakIndex).trim();
+            int removeEnd = lineBreakIndex + 1;
+            if (removeEnd < lineBuffer.length() && lineBuffer.charAt(lineBreakIndex) == '\r' && lineBuffer.charAt(removeEnd) == '\n') {
+                removeEnd += 1;
+            }
+            lineBuffer.delete(0, removeEnd);
+            emitDraftLine(line, slotById, completedIds, request, writer);
+        }
+    }
+
+    private int indexOfLineBreak(StringBuilder builder) {
+        for (int index = 0; index < builder.length(); index++) {
+            char value = builder.charAt(index);
+            if (value == '\n' || value == '\r') {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private void emitDraftLine(
+            String line,
+            Map<String, ApiAiCaseGenerationSlot> slotById,
+            Set<String> completedIds,
+            ApiAiCaseGenerationRequest request,
+            Writer writer
+    ) {
+        if (line == null || line.isBlank() || line.startsWith("```")) {
+            return;
+        }
+        try {
+            ApiAiGeneratedCaseLine parsed = parseGeneratedCaseLine(line);
+            ApiAiCaseGenerationSlot slot = slotById.get(parsed.id());
+            if (slot == null || completedIds.contains(slot.id()) || parsed.draft() == null) {
+                return;
+            }
+            ApiAiGeneratedCaseDraft normalized = normalizeDraft(parsed.draft(), request, slot, completedIds.size() + 1);
+            completedIds.add(slot.id());
+            writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slotById.size(), normalized, null));
+        } catch (RuntimeException exception) {
+            // Ignore partial or non-NDJSON lines here. Final full-content parsing below is the fallback.
+        }
+    }
+
+    private ApiAiGeneratedCaseLine parseGeneratedCaseLine(String line) {
+        try {
+            JsonNode parsed = objectMapper.readTree(line);
+            String id = optionalText(parsed, "id");
+            JsonNode draftNode = parsed.has("case") ? parsed.path("case") : parsed;
+            ApiAiGeneratedCaseDraft draft = objectMapper.treeToValue(draftNode, ApiAiGeneratedCaseDraft.class);
+            return new ApiAiGeneratedCaseLine(id, draft);
+        } catch (IOException exception) {
+            throw new BadRequestException("AI \u8fd4\u56de\u7684\u5355\u6761\u7528\u4f8b\u65e0\u6cd5\u89e3\u6790");
+        }
+    }
+
+    private String optionalText(JsonNode item, String field) {
+        JsonNode fieldNode = item == null ? null : item.path(field);
+        if (fieldNode == null || fieldNode.isMissingNode() || fieldNode.isNull()) {
+            return null;
+        }
+        String value = fieldNode.asText();
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private void emitRemainingDrafts(
+            String content,
+            List<ApiAiCaseGenerationSlot> slots,
+            Set<String> completedIds,
+            ApiAiCaseGenerationRequest request,
+            Writer writer
+    ) {
+        if (content == null || content.isBlank() || completedIds.size() >= slots.size()) {
+            return;
+        }
+        List<ApiAiGeneratedCaseDraft> drafts;
+        try {
+            drafts = parseDrafts(content);
+        } catch (RuntimeException exception) {
+            return;
+        }
         for (int index = 0; index < slots.size(); index++) {
-            ApiAiGeneratedCaseDraft draft = index < drafts.size() ? drafts.get(index) : null;
-            if (draft == null) {
-                normalized.add(null);
+            ApiAiCaseGenerationSlot slot = slots.get(index);
+            if (completedIds.contains(slot.id())) {
                 continue;
             }
-            normalized.add(normalizeDraft(draft, request, slots.get(index), index + 1));
+            ApiAiGeneratedCaseDraft draft = index < drafts.size() ? drafts.get(index) : null;
+            if (draft == null) {
+                continue;
+            }
+            ApiAiGeneratedCaseDraft normalized = normalizeDraft(draft, request, slot, index + 1);
+            completedIds.add(slot.id());
+            writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slots.size(), normalized, null));
         }
-        return normalized;
+    }
+
+    private void writeUnchecked(Writer writer, ApiAiCaseGenerationEvent event) {
+        try {
+            writeEvent(writer, event);
+        } catch (IOException exception) {
+            throw new UncheckedIOException(exception);
+        }
     }
 
     private ApiAiGeneratedCaseDraft generateOneCase(
@@ -136,7 +249,11 @@ public class ApiAiCaseGenerationService {
             JsonNode parsed = objectMapper.readTree(content);
             JsonNode casesNode = parsed.isArray() ? parsed : parsed.path("cases");
             if (!casesNode.isArray()) {
-                throw new BadRequestException("AI 返回内容无法解析为接口用例列表 JSON");
+                List<ApiAiGeneratedCaseDraft> ndjsonDrafts = parseDraftsFromNdjson(content);
+                if (!ndjsonDrafts.isEmpty()) {
+                    return ndjsonDrafts;
+                }
+                throw new BadRequestException("AI \u8fd4\u56de\u5185\u5bb9\u65e0\u6cd5\u89e3\u6790\u4e3a\u63a5\u53e3\u7528\u4f8b JSON \u5217\u8868");
             }
             List<ApiAiGeneratedCaseDraft> drafts = new ArrayList<>();
             for (JsonNode itemNode : casesNode) {
@@ -148,8 +265,34 @@ public class ApiAiCaseGenerationService {
             }
             return drafts;
         } catch (IOException exception) {
-            throw new BadRequestException("AI 返回内容无法解析为接口用例列表 JSON");
+            List<ApiAiGeneratedCaseDraft> ndjsonDrafts = parseDraftsFromNdjson(content);
+            if (!ndjsonDrafts.isEmpty()) {
+                return ndjsonDrafts;
+            }
+            throw new BadRequestException("AI \u8fd4\u56de\u5185\u5bb9\u65e0\u6cd5\u89e3\u6790\u4e3a\u63a5\u53e3\u7528\u4f8b JSON \u5217\u8868");
         }
+    }
+
+    private List<ApiAiGeneratedCaseDraft> parseDraftsFromNdjson(String content) {
+        List<ApiAiGeneratedCaseDraft> drafts = new ArrayList<>();
+        if (content == null || content.isBlank()) {
+            return drafts;
+        }
+        for (String rawLine : content.split("\\r?\\n")) {
+            String line = rawLine.trim();
+            if (line.isEmpty() || line.startsWith("```")) {
+                continue;
+            }
+            try {
+                ApiAiGeneratedCaseLine parsed = parseGeneratedCaseLine(line);
+                if (parsed.draft() != null) {
+                    drafts.add(parsed.draft());
+                }
+            } catch (RuntimeException exception) {
+                // Keep parsing later lines; one malformed line should not discard a whole batch.
+            }
+        }
+        return drafts;
     }
 
     private ApiAiGeneratedCaseDraft parseDraft(String content) {
@@ -158,11 +301,11 @@ public class ApiAiCaseGenerationService {
             JsonNode draftNode = parsed.has("case") ? parsed.path("case") : parsed;
             ApiAiGeneratedCaseDraft draft = objectMapper.treeToValue(draftNode, ApiAiGeneratedCaseDraft.class);
             if (draft == null) {
-                throw new BadRequestException("AI 返回内容为空");
+                throw new BadRequestException("AI \u8fd4\u56de\u5185\u5bb9\u4e3a\u7a7a");
             }
             return draft;
         } catch (IOException exception) {
-            throw new BadRequestException("AI 返回内容无法解析为接口用例 JSON");
+            throw new BadRequestException("AI \u8fd4\u56de\u5185\u5bb9\u65e0\u6cd5\u89e3\u6790\u4e3a\u63a5\u53e3\u7528\u4f8b JSON");
         }
     }
 
@@ -231,7 +374,7 @@ public class ApiAiCaseGenerationService {
         payload.put("workspaceName", workspace.getWorkspaceName());
         payload.put("definition", Map.of(
                 "id", request.definitionId(),
-                "name", firstNonBlank(request.definitionName(), request.name(), "未命名接口"),
+                "name", firstNonBlank(request.definitionName(), request.name(), "\u672a\u547d\u540d\u63a5\u53e3"),
                 "method", firstNonBlank(request.method(), request.requestConfig() == null ? null : request.requestConfig().method(), "GET"),
                 "path", firstNonBlank(request.path(), request.requestConfig() == null ? null : request.requestConfig().path(), "/"),
                 "description", Optional.ofNullable(request.description()).orElse("")
@@ -245,22 +388,24 @@ public class ApiAiCaseGenerationService {
                 "index", index,
                 "total", total,
                 "group", slot.group(),
+                "groupKey", slot.groupKey(),
                 "type", slot.type(),
+                "typeKey", slot.typeKey(),
                 "noDuplicate", Boolean.TRUE.equals(request.noDuplicate()),
                 "extraRequirement", Optional.ofNullable(request.prompt()).orElse("")
         ));
         return """
-                你是接口自动化测试专家。请基于下面的接口定义，生成 1 条接口自动化用例。
-                必须只返回 JSON，不要 Markdown，不要解释。
-                返回结构必须是：
+                \u4f60\u662f\u63a5\u53e3\u81ea\u52a8\u5316\u6d4b\u8bd5\u7528\u4f8b\u751f\u6210\u52a9\u624b\u3002\u8bf7\u57fa\u4e8e\u8f93\u5165\u7684\u63a5\u53e3\u5b9a\u4e49\u548c\u76ee\u6807\u7c7b\u578b\uff0c\u53ea\u751f\u6210 1 \u6761\u9ad8\u8d28\u91cf\u63a5\u53e3\u7528\u4f8b\u3002
+                \u53ea\u8fd4\u56de\u4e25\u683c JSON\uff0c\u4e0d\u8981\u8fd4\u56de Markdown\u3001\u89e3\u91ca\u6587\u5b57\u6216\u4ee3\u7801\u5757\u3002
+                \u8fd4\u56de\u7ed3\u6784\u5fc5\u987b\u5339\u914d\u4e0b\u9762\u793a\u4f8b\uff1a
                 {
-                  "name": "用例名称",
-                  "description": "用例说明",
-                  "tags": ["标签"],
-                  "expected": "预期结果",
+                  "name": "\u7528\u4f8b\u7c7b\u578b \u2013 \u7528\u4f8b\u573a\u666f \u2013 \u671f\u671b\u7ed3\u679c",
+                  "description": "\u7528\u4f8b\u8bf4\u660e",
+                  "tags": ["\u6807\u7b7e"],
+                  "expected": "\u9884\u671f\u7ed3\u679c",
                   "requestConfig": {
                     "method": "GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS/TRACE",
-                    "path": "接口路径",
+                    "path": "\u63a5\u53e3\u8def\u5f84",
                     "timeoutMs": 10000,
                     "queryParams": [{"key":"","value":"","description":"","enabled":true,"paramType":"STRING","required":false,"encode":true,"minLength":null,"maxLength":null}],
                     "headers": [{"key":"","value":"","description":"","enabled":true,"paramType":"STRING","required":false,"encode":true,"minLength":null,"maxLength":null}],
@@ -272,17 +417,15 @@ public class ApiAiCaseGenerationService {
                   "preProcessors": [],
                   "postProcessors": []
                 }
-                规则：
-                1. 保持接口 method/path 不变，除非生成项明确需要改参数或请求体。
-                2. 根据字段 required、paramType、minLength、maxLength 生成合理参数。
-                3. 不要生成与 existingCases 明显重复的用例。
-                4. assertions 使用系统已有字段，至少包含一个状态码断言。
-                5. name 必须使用“类型 – 场景描述 – 期望结果”格式，例如“仅传必要字段 – 使用真实有效的必填字段 – 期望返回200成功”。
-                6. name 不要包含分组，不要使用“【正向】”“【反向】”“【边界】”“【安全性】”这类前缀。
-                7. expected 是给人看的预期/断言说明，assertions 是真正可执行断言配置。
-                8. 只返回单个 JSON 对象。
-
-                输入：
+                \u89c4\u5219\uff1a
+                1. \u4fdd\u7559\u539f\u63a5\u53e3 method/path\uff0c\u9664\u975e\u76ee\u6807\u7528\u4f8b\u660e\u786e\u9700\u8981\u4fee\u6539\u53c2\u6570\u3001\u8bf7\u6c42\u5934\u3001\u8bf7\u6c42\u4f53\u6216\u8ba4\u8bc1\u4fe1\u606f\u3002
+                2. \u53c2\u6570\u5b57\u6bb5\u5c3d\u91cf\u8865\u5168 required\u3001paramType\u3001minLength\u3001maxLength\u3001description\u3001enabled\u3002
+                3. \u5982\u679c noDuplicate \u4e3a true\uff0c\u8bf7\u907f\u5f00 existingCases \u4e2d\u5df2\u6709\u573a\u666f\u3002
+                4. assertions \u8981\u80fd\u9a8c\u8bc1 expected\uff0c\u6b63\u5411\u7528\u4f8b\u901a\u5e38\u65ad\u8a00 2xx/3xx\uff0c\u53cd\u5411\u6216\u5b89\u5168\u7528\u4f8b\u901a\u5e38\u65ad\u8a00\u5408\u7406\u9519\u8bef\u7801\u6216\u9519\u8bef\u4fe1\u606f\u3002
+                5. name \u4e0d\u8981\u5305\u542b\u5206\u7ec4\u524d\u7f00\uff0c\u4f8b\u5982\u4e0d\u8981\u5199\u3010\u6b63\u5411\u3011\u3002\u63a8\u8350\u683c\u5f0f\uff1a\u7c7b\u578b \u2013 \u573a\u666f\u63cf\u8ff0 \u2013 \u671f\u671b\u8fd4\u56de\u7ed3\u679c\u3002
+                6. expected \u7528\u4e00\u53e5\u8bdd\u63cf\u8ff0\u65ad\u8a00\u610f\u56fe\uff0c\u4e0d\u8981\u4e3a\u7a7a\u3002
+                7. \u6240\u6709\u8f93\u51fa\u5fc5\u987b\u662f\u5408\u6cd5 JSON\u3002
+                \u8f93\u5165\u6570\u636e\uff1a
                 %s
                 """.formatted(toJson(payload));
     }
@@ -296,7 +439,7 @@ public class ApiAiCaseGenerationService {
         payload.put("workspaceName", workspace.getWorkspaceName());
         payload.put("definition", Map.of(
                 "id", request.definitionId(),
-                "name", firstNonBlank(request.definitionName(), request.name(), "未命名接口"),
+                "name", firstNonBlank(request.definitionName(), request.name(), "\u672a\u547d\u540d\u63a5\u53e3"),
                 "method", firstNonBlank(request.method(), request.requestConfig() == null ? null : request.requestConfig().method(), "GET"),
                 "path", firstNonBlank(request.path(), request.requestConfig() == null ? null : request.requestConfig().path(), "/"),
                 "description", Optional.ofNullable(request.description()).orElse("")
@@ -322,68 +465,98 @@ public class ApiAiCaseGenerationService {
         }
         payload.put("targets", targets);
         return """
-                你是接口自动化测试专家。请基于下面的接口定义，一次性生成 targets 中要求的所有接口自动化用例。
-                必须只返回 JSON，不要 Markdown，不要解释。
-                返回结构必须是：
-                {
-                  "cases": [
-                    {
-                      "name": "类型 – 场景描述 – 期望结果",
-                      "description": "用例说明",
-                      "tags": ["标签"],
-                      "expected": "预期结果",
-                      "requestConfig": {
-                        "method": "GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS/TRACE",
-                        "path": "接口路径",
-                        "timeoutMs": 10000,
-                        "queryParams": [{"key":"","value":"","description":"","enabled":true,"paramType":"STRING","required":false,"encode":true,"minLength":null,"maxLength":null}],
-                        "headers": [{"key":"","value":"","description":"","enabled":true,"paramType":"STRING","required":false,"encode":true,"minLength":null,"maxLength":null}],
-                        "cookies": [],
-                        "body": {"type":"NONE|FORM_DATA|X_WWW_FORM_URLENCODED|RAW_JSON|RAW_XML|RAW_TEXT|BINARY","rawText":"","formItems":[],"contentType":"","fileName":"","binaryBase64":""},
-                        "authConfig": {"authType":"NONE|BASIC|DIGEST","basicAuth":{"userName":"","password":""},"digestAuth":{"userName":"","password":""}}
-                      },
-                      "assertions": [{"type":"STATUS_CODE","subject":"STATUS_CODE","operator":"LT","expectedValue":"400","enabled":true}],
-                      "preProcessors": [],
-                      "postProcessors": []
-                    }
-                  ]
-                }
-                规则：
-                1. cases 数量必须等于 targets 数量，并且顺序必须和 targets 完全一致。
-                2. 每个 case 必须围绕对应 target.type 生成。
-                3. 保持接口 method/path 不变，除非生成项明确需要改参数或请求体。
-                4. 根据字段 required、paramType、minLength、maxLength 生成合理参数。
-                5. 不要生成与 existingCases 或同批 cases 明显重复的用例。
-                6. name 必须使用“类型 – 场景描述 – 期望结果”格式，例如“仅传必要字段 – 使用真实有效的必填字段 – 期望返回200成功”。
-                7. name 不要包含分组，不要使用“【正向】”“【反向】”“【边界】”“【安全性】”这类前缀。
-                8. expected 是给人看的预期/断言说明，assertions 是真正可执行断言配置。
-                9. 只返回单个 JSON 对象。
+                \u4f60\u662f\u63a5\u53e3\u81ea\u52a8\u5316\u6d4b\u8bd5\u7528\u4f8b\u751f\u6210\u52a9\u624b\u3002\u8bf7\u57fa\u4e8e\u8f93\u5165\u7684\u63a5\u53e3\u5b9a\u4e49\uff0c\u4e3a targets \u4e2d\u7684\u6bcf\u4e2a\u76ee\u6807\u5404\u751f\u6210 1 \u6761\u63a5\u53e3\u7528\u4f8b\u3002
+                \u53ea\u8fd4\u56de\u4e25\u683c JSON\uff0c\u4e0d\u8981\u8fd4\u56de Markdown\u3001\u89e3\u91ca\u6587\u5b57\u6216\u4ee3\u7801\u5757\u3002
+                \u8fd4\u56de\u683c\u5f0f\uff1a{"cases":[case, case]}
+                \u6bcf\u4e2a case \u5b57\u6bb5\u8981\u5305\u542b name\u3001description\u3001tags\u3001expected\u3001requestConfig\u3001assertions\u3001preProcessors\u3001postProcessors\u3002
+                \u89c4\u5219\uff1a
+                1. cases \u6570\u91cf\u5fc5\u987b\u7b49\u4e8e targets \u6570\u91cf\uff0c\u5e76\u4e14\u987a\u5e8f\u5fc5\u987b\u548c targets \u4e00\u81f4\u3002
+                2. \u6bcf\u6761 case \u7684\u573a\u666f\u5fc5\u987b\u8d34\u5408\u5bf9\u5e94 target.type\u3002
+                3. \u4fdd\u7559\u539f\u63a5\u53e3 method/path\uff0c\u9664\u975e\u76ee\u6807\u7528\u4f8b\u660e\u786e\u9700\u8981\u4fee\u6539\u53c2\u6570\u3001\u8bf7\u6c42\u5934\u3001\u8bf7\u6c42\u4f53\u6216\u8ba4\u8bc1\u4fe1\u606f\u3002
+                4. \u53c2\u6570\u5b57\u6bb5\u5c3d\u91cf\u8865\u5168 required\u3001paramType\u3001minLength\u3001maxLength\u3001description\u3001enabled\u3002
+                5. \u5982\u679c noDuplicate \u4e3a true\uff0c\u8bf7\u907f\u5f00 existingCases \u4e2d\u5df2\u6709\u573a\u666f\u3002
+                6. name \u4e0d\u8981\u5305\u542b\u5206\u7ec4\u524d\u7f00\uff0c\u63a8\u8350\u683c\u5f0f\uff1a\u7c7b\u578b \u2013 \u573a\u666f\u63cf\u8ff0 \u2013 \u671f\u671b\u8fd4\u56de\u7ed3\u679c\u3002
+                7. expected \u7528\u4e00\u53e5\u8bdd\u63cf\u8ff0\u65ad\u8a00\u610f\u56fe\uff0c\u4e0d\u8981\u4e3a\u7a7a\u3002
+                8. \u6240\u6709\u8f93\u51fa\u5fc5\u987b\u662f\u5408\u6cd5 JSON\u3002
+                \u8f93\u5165\u6570\u636e\uff1a
+                %s
+                """.formatted(toJson(payload));
+    }
 
-                输入：
+    private String buildStreamingBatchPrompt(
+            WorkspaceEntity workspace,
+            ApiAiCaseGenerationRequest request,
+            List<ApiAiCaseGenerationSlot> slots
+    ) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("workspaceName", workspace.getWorkspaceName());
+        payload.put("definition", Map.of(
+                "id", request.definitionId(),
+                "name", firstNonBlank(request.definitionName(), request.name(), "\u672a\u547d\u540d\u63a5\u53e3"),
+                "method", firstNonBlank(request.method(), request.requestConfig() == null ? null : request.requestConfig().method(), "GET"),
+                "path", firstNonBlank(request.path(), request.requestConfig() == null ? null : request.requestConfig().path(), "/"),
+                "description", Optional.ofNullable(request.description()).orElse("")
+        ));
+        payload.put("sourceRequestConfig", request.requestConfig());
+        payload.put("sourceAssertions", defaultList(request.assertions(), List.of()));
+        payload.put("sourcePreProcessors", defaultList(request.preProcessors(), List.of()));
+        payload.put("sourcePostProcessors", defaultList(request.postProcessors(), List.of()));
+        payload.put("existingCases", defaultList(request.existingCases(), List.of()));
+        List<Map<String, Object>> targets = new ArrayList<>();
+        for (int index = 0; index < slots.size(); index++) {
+            ApiAiCaseGenerationSlot slot = slots.get(index);
+            targets.add(Map.of(
+                    "index", index + 1,
+                    "id", slot.id(),
+                    "group", slot.group(),
+                    "groupKey", slot.groupKey(),
+                    "type", slot.type(),
+                    "typeKey", slot.typeKey(),
+                    "noDuplicate", Boolean.TRUE.equals(request.noDuplicate()),
+                    "extraRequirement", Optional.ofNullable(request.prompt()).orElse("")
+            ));
+        }
+        payload.put("targets", targets);
+        return """
+                \u4f60\u662f\u63a5\u53e3\u81ea\u52a8\u5316\u6d4b\u8bd5\u7528\u4f8b\u751f\u6210\u52a9\u624b\u3002\u8bf7\u57fa\u4e8e\u8f93\u5165\u7684\u63a5\u53e3\u5b9a\u4e49\uff0c\u4e3a targets \u4e2d\u7684\u6bcf\u4e2a\u76ee\u6807\u5404\u751f\u6210 1 \u6761\u63a5\u53e3\u7528\u4f8b\u3002
+                \u5fc5\u987b\u4f7f\u7528 NDJSON \u8f93\u51fa\uff1a\u4e00\u884c\u4e00\u6761\u5b8c\u6574 JSON\uff0c\u6bcf\u884c\u5bf9\u5e94\u4e00\u4e2a target\u3002\u4e0d\u8981\u8f93\u51fa Markdown\u3001\u4ee3\u7801\u5757\u3001\u89e3\u91ca\u6587\u5b57\u6216 JSON \u6570\u7ec4\u3002
+                \u6bcf\u4e00\u884c\u5fc5\u987b\u662f\u5408\u6cd5 JSON\uff0c\u7ed3\u6784\u5982\u4e0b\uff1a
+                {"id":"target id","case":{"name":"\u7528\u4f8b\u7c7b\u578b \u2013 \u7528\u4f8b\u573a\u666f \u2013 \u671f\u671b\u7ed3\u679c","description":"\u7528\u4f8b\u8bf4\u660e","tags":["\u6807\u7b7e"],"expected":"\u9884\u671f\u7ed3\u679c","requestConfig":{"method":"GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS/TRACE","path":"\u63a5\u53e3\u8def\u5f84","timeoutMs":10000,"queryParams":[{"key":"","value":"","description":"","enabled":true,"paramType":"STRING","required":false,"encode":true,"minLength":null,"maxLength":null}],"headers":[{"key":"","value":"","description":"","enabled":true,"paramType":"STRING","required":false,"encode":true,"minLength":null,"maxLength":null}],"cookies":[],"body":{"type":"NONE|FORM_DATA|X_WWW_FORM_URLENCODED|RAW_JSON|RAW_XML|RAW_TEXT|BINARY","rawText":"","formItems":[],"contentType":"","fileName":"","binaryBase64":""},"authConfig":{"authType":"NONE|BASIC|DIGEST","basicAuth":{"userName":"","password":""},"digestAuth":{"userName":"","password":""}}},"assertions":[{"type":"STATUS_CODE","subject":"STATUS_CODE","operator":"LT","expectedValue":"400","enabled":true}],"preProcessors":[],"postProcessors":[]}}
+                \u89c4\u5219\uff1a
+                1. \u6bcf\u4e2a target \u5fc5\u987b\u8f93\u51fa\u4e00\u884c\uff0c\u8f93\u51fa\u987a\u5e8f\u5c3d\u91cf\u548c targets \u4e00\u81f4\u3002
+                2. \u6bcf\u884c\u7684 id \u5fc5\u987b\u7b49\u4e8e\u5bf9\u5e94 target.id\u3002
+                3. \u6bcf\u6761 case \u7684\u573a\u666f\u5fc5\u987b\u8d34\u5408\u5bf9\u5e94 target.type\u3002
+                4. \u4fdd\u7559\u539f\u63a5\u53e3 method/path\uff0c\u9664\u975e\u76ee\u6807\u7528\u4f8b\u660e\u786e\u9700\u8981\u4fee\u6539\u53c2\u6570\u3001\u8bf7\u6c42\u5934\u3001\u8bf7\u6c42\u4f53\u6216\u8ba4\u8bc1\u4fe1\u606f\u3002
+                5. \u53c2\u6570\u5b57\u6bb5\u5c3d\u91cf\u8865\u5168 required\u3001paramType\u3001minLength\u3001maxLength\u3001description\u3001enabled\u3002
+                6. \u5982\u679c noDuplicate \u4e3a true\uff0c\u8bf7\u907f\u5f00 existingCases \u4e2d\u5df2\u6709\u573a\u666f\u3002
+                7. name \u4e0d\u8981\u5305\u542b\u5206\u7ec4\u524d\u7f00\uff0c\u4f8b\u5982\u4e0d\u8981\u5199\u3010\u6b63\u5411\u3011\u3002\u63a8\u8350\u683c\u5f0f\uff1a\u7c7b\u578b \u2013 \u573a\u666f\u63cf\u8ff0 \u2013 \u671f\u671b\u8fd4\u56de\u7ed3\u679c\u3002
+                8. expected \u7528\u4e00\u53e5\u8bdd\u63cf\u8ff0\u65ad\u8a00\u610f\u56fe\uff0c\u4e0d\u8981\u4e3a\u7a7a\uff0cassertions \u8981\u80fd\u9a8c\u8bc1 expected\u3002
+                9. \u8f93\u51fa\u8fc7\u7a0b\u4e2d\u4e0d\u8981\u8fd4\u56de {"cases":[...]}\uff0c\u53ea\u8fd4\u56de\u4e00\u884c\u4e00\u6761 JSON\u3002
+                \u8f93\u5165\u6570\u636e\uff1a
                 %s
                 """.formatted(toJson(payload));
     }
 
     private ResolvedAiProvider resolveProvider(Long providerConnectionId, String modelName) {
         if (providerConnectionId == null) {
-            throw new BadRequestException("请选择 AI 连接池模型");
+            throw new BadRequestException("\u8bf7\u9009\u62e9 AI \u8fde\u63a5\u6c60\u6a21\u578b");
         }
         AiProviderConnectionEntity connection = aiProviderConnectionMapper.selectOne(new LambdaQueryWrapper<AiProviderConnectionEntity>()
                 .eq(AiProviderConnectionEntity::getId, providerConnectionId)
                 .eq(AiProviderConnectionEntity::getOwnerUserId, CurrentUserContext.get()));
         if (connection == null) {
-            throw new BadRequestException("AI 连接池配置不存在或无权访问");
+            throw new BadRequestException("AI \u8fde\u63a5\u6c60\u914d\u7f6e\u4e0d\u5b58\u5728\u6216\u65e0\u6743\u8bbf\u95ee");
         }
         if (connection.getStatus() != null && connection.getStatus() == 0) {
-            throw new BadRequestException("AI 连接池配置已停用");
+            throw new BadRequestException("AI \u8fde\u63a5\u6c60\u914d\u7f6e\u5df2\u505c\u7528");
         }
         String resolvedModel = firstNonBlank(modelName, connection.getSelectedModelName(), null);
         if (resolvedModel == null) {
-            throw new BadRequestException("请选择 AI 模型");
+            throw new BadRequestException("\u8bf7\u9009\u62e9 AI \u6a21\u578b");
         }
         String apiKey = aiSecretCodec.decrypt(connection.getApiKeyCipherText());
         if (apiKey == null || apiKey.isBlank()) {
-            throw new BadRequestException("AI 连接池未配置 API Key");
+            throw new BadRequestException("AI \u8fde\u63a5\u6c60\u672a\u914d\u7f6e API Key");
         }
         String protocolType = firstNonBlank(connection.getProtocolType(), AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_CHAT);
         return new ResolvedAiProvider(new AiProviderRequestProfile(
@@ -416,11 +589,11 @@ public class ApiAiCaseGenerationService {
                     option.key().trim(),
                     firstNonBlank(option.group(), "other"),
                     option.label().trim(),
-                    firstNonBlank(option.groupLabel(), option.group(), "其他")
+                    firstNonBlank(option.groupLabel(), option.group(), "\u5176\u4ed6")
             ));
         }
         if (normalized.isEmpty()) {
-            throw new BadRequestException("请至少选择一种生成类型");
+            throw new BadRequestException("\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u79cd\u751f\u6210\u7c7b\u578b");
         }
         return normalized;
     }
@@ -506,22 +679,24 @@ public class ApiAiCaseGenerationService {
     }
 
     private String defaultDescription(ApiAiCaseGenerationSlot slot) {
-        return "AI 生成的" + slot.group() + "接口用例";
+        return "AI \u751f\u6210\u7684" + slot.group() + "\u63a5\u53e3\u7528\u4f8b";
     }
 
     private String defaultExpected(ApiAiCaseGenerationSlot slot) {
-        return "positive".equals(slot.groupKey()) ? "预期接口返回成功响应" : "预期接口返回合理错误或被规则拦截";
+        return "positive".equals(slot.groupKey())
+                ? "\u9884\u671f\u63a5\u53e3\u8fd4\u56de\u6210\u529f\u54cd\u5e94"
+                : "\u9884\u671f\u63a5\u53e3\u8fd4\u56de\u5408\u7406\u9519\u8bef\u6216\u88ab\u89c4\u5219\u62e6\u622a";
     }
 
     private String normalizeCaseName(String rawName, ApiAiCaseGenerationSlot slot, String method, String path, String expected) {
-        String name = firstNonBlank(rawName, slot.type() + " – " + method + " " + path + " – " + expected);
+        String name = firstNonBlank(rawName, slot.type() + " \u2013 " + method + " " + path + " \u2013 " + expected);
         name = name
-                .replaceFirst("^【[^】]+】\\s*", "")
+                .replaceFirst("^\\u3010[^\\u3011]+\\u3011\\s*", "")
                 .replaceFirst("^\\[[^\\]]+]\\s*", "")
-                .replaceFirst("^(正向|反向|负向|边界|安全性|安全)\\s*[-–—:：]\\s*", "")
+                .replaceFirst("^(\\u6b63\\u5411|\\u53cd\\u5411|\\u8d1f\\u5411|\\u8fb9\\u754c|\\u5b89\\u5168\\u6027|\\u5b89\\u5168)\\s*[-\\u2013\\u2014:\\uff1a]\\s*", "")
                 .trim();
-        if (!name.startsWith(slot.type() + " – ") && !name.startsWith(slot.type() + " - ")) {
-            name = slot.type() + " – " + name;
+        if (!name.startsWith(slot.type() + " \u2013 ") && !name.startsWith(slot.type() + " - ")) {
+            name = slot.type() + " \u2013 " + name;
         }
         return name;
     }
@@ -631,6 +806,12 @@ public class ApiAiCaseGenerationService {
             String groupKey,
             String type,
             String typeKey
+    ) {
+    }
+
+    private record ApiAiGeneratedCaseLine(
+            String id,
+            ApiAiGeneratedCaseDraft draft
     ) {
     }
 

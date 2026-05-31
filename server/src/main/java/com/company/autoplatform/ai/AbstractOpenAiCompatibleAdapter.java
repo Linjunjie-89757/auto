@@ -17,6 +17,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Consumer;
 
 abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
 
@@ -168,6 +169,44 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
         }
     }
 
+    protected String streamStructuredContentWithChat(
+            AiProviderRequestProfile profile,
+            String apiKey,
+            String prompt,
+            List<AiProviderClient.ImageInput> images,
+            Consumer<String> deltaConsumer
+    ) {
+        String endpoint = resolveChatEndpoint(profile.baseUrl());
+        try {
+            String requestBody = buildChatCompletionsRequestBody(profile, prompt, images, true);
+            HttpResponse<java.util.stream.Stream<String>> response = sendStreamingRequest(
+                    endpoint,
+                    apiKey,
+                    requestBody,
+                    profile.requestTimeoutSeconds()
+            );
+            if (response.statusCode() >= 400) {
+                String errorBody = readResponseBody(response.body());
+                if (requiresImageCapability(errorBody, images)) {
+                    throw new BadRequestException("当前模型或服务不支持图片输入");
+                }
+                throw new BadRequestException("AI 提供方流式请求失败: " + abbreviate(errorBody));
+            }
+            String merged = consumeChatStreamingLines(response.body(), deltaConsumer);
+            if (merged.isBlank()) {
+                throw new BadRequestException("AI 提供方返回了空的流式内容");
+            }
+            return stripJsonFence(merged);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            log.error("AI provider streaming request interrupted", exception);
+            throw new BadRequestException("AI 提供方流式请求被中断");
+        } catch (IOException exception) {
+            log.error("AI provider streaming request failed", exception);
+            throw new BadRequestException("AI 提供方流式请求失败");
+        }
+    }
+
     protected String requestStructuredContentWithResponses(
             AiProviderRequestProfile profile,
             String apiKey,
@@ -269,6 +308,24 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
         return httpClient.send(
                 builder.POST(HttpRequest.BodyPublishers.ofString(requestBody == null ? "" : requestBody)).build(),
                 HttpResponse.BodyHandlers.ofString()
+        );
+    }
+
+    protected HttpResponse<java.util.stream.Stream<String>> sendStreamingRequest(
+            String endpoint,
+            String apiKey,
+            String requestBody,
+            Integer requestTimeoutSeconds
+    ) throws IOException, InterruptedException {
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
+                .uri(URI.create(endpoint))
+                .timeout(Duration.ofSeconds(resolveRequestTimeoutSeconds(requestTimeoutSeconds)))
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream");
+        applyAuthHeader(builder, apiKey);
+        return httpClient.send(
+                builder.POST(HttpRequest.BodyPublishers.ofString(requestBody == null ? "" : requestBody)).build(),
+                HttpResponse.BodyHandlers.ofLines()
         );
     }
 
@@ -426,6 +483,58 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
             builder.append(extractContent(contentNode));
         }
         return builder.toString();
+    }
+
+    protected String consumeChatStreamingLines(
+            java.util.stream.Stream<String> lines,
+            Consumer<String> deltaConsumer
+    ) throws IOException {
+        StringBuilder builder = new StringBuilder();
+        try (lines) {
+            var iterator = lines.iterator();
+            while (iterator.hasNext()) {
+                String rawLine = iterator.next();
+                String delta = extractChatStreamingDelta(rawLine);
+                if (delta == null || delta.isEmpty()) {
+                    continue;
+                }
+                builder.append(delta);
+                if (deltaConsumer != null) {
+                    deltaConsumer.accept(delta);
+                }
+            }
+        }
+        return builder.toString();
+    }
+
+    protected String extractChatStreamingDelta(String rawLine) throws IOException {
+        String line = rawLine == null ? "" : rawLine.trim();
+        if (line.isEmpty() || !line.startsWith("data:")) {
+            return null;
+        }
+        String payload = line.substring(5).trim();
+        if (payload.isEmpty() || "[DONE]".equals(payload)) {
+            return null;
+        }
+        JsonNode root = objectMapper.readTree(payload);
+        JsonNode delta = root.path("choices").path(0).path("delta");
+        if (delta.isMissingNode() || delta.isNull()) {
+            return null;
+        }
+        JsonNode contentNode = delta.path("content");
+        if (contentNode.isMissingNode() || contentNode.isNull()) {
+            return null;
+        }
+        return extractContent(contentNode);
+    }
+
+    protected String readResponseBody(java.util.stream.Stream<String> lines) {
+        if (lines == null) {
+            return "";
+        }
+        try (lines) {
+            return String.join("\n", lines.toList());
+        }
     }
 
     protected String abbreviate(String value) {

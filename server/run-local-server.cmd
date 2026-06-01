@@ -12,7 +12,7 @@ if not defined JAVA_EXE set "JAVA_EXE=java"
 set "APP_JAR=%SCRIPT_DIR%target\auto-platform-0.0.1-SNAPSHOT.jar"
 
 if not defined SPRING_PROFILES_ACTIVE set "SPRING_PROFILES_ACTIVE=local-mysql"
-if not defined DB_URL set "DB_URL=jdbc:mysql://127.0.0.1:3307/auto_platform?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai"
+if not defined DB_URL set "DB_URL=jdbc:mysql://127.0.0.1:3306/auto_platform?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai"
 if not defined DB_USERNAME set "DB_USERNAME=auto_user"
 if not defined DB_PASSWORD set "DB_PASSWORD=auto123456"
 if not defined DB_DRIVER set "DB_DRIVER=com.mysql.cj.jdbc.Driver"

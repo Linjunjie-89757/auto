@@ -54,6 +54,7 @@ import type {
   ApiAiCaseGenerationEvent,
   ApiAiCaseGenerationPayload,
   ApiAiGeneratedCaseDraft,
+  ApiAiGeneratedCaseOutline,
   ApiAssertionConfig,
   ApiAssertionResult,
   ApiAuthConfig,
@@ -526,9 +527,7 @@ const aiCaseGenerateModel = ref('')
 const aiCaseGenerateProviderConnections = ref<AiProviderConnection[]>([])
 const aiCaseGenerateProviderLoading = ref(false)
 const aiCaseGenerateNoDuplicate = ref(true)
-const aiCaseGenerateLoading = ref(false)
 const aiCaseGenerateResults = ref<AiCaseGenerateResult[]>([])
-const aiCaseGenerateAbortController = ref<AbortController | null>(null)
 const aiCaseGenerationFinishedIcon = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTQiIGhlaWdodD0iMTQiIHZpZXdCb3g9IjAgMCAxNCAxNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMu b3JnLzIwMDAvc3ZnIj4KICA8ZyBjbGlwLXBhdGg9InVybCgjY2xpcDBfMTA2NV8yMTk5MDQpIj4KICAgIDxwYXRoCiAgICAgIGQ9Ik01LjI0MTIxIDMuMDYxNTJDNS40MjgyOCAyLjE0NjI4IDYuNzM1NzggMi4xNDYyOCA2LjkyMjg1IDMuMDYxNTJDNy4zMzYxIDUuMDgyODEgOC45MTYxNyA2LjY2MzAzIDEwLjkzNzUgNy4wNzYxN0MxMS44NTI3IDcuMjYzMjcgMTEuODUyNyA4LjU3MDc1IDEwLjkzNzUgOC43NTc4MUM4LjkxNjI0IDkuMTcxMDMgNy4zMzYwNiAxMC43NTAyIDYuOTIyODUgMTIuNzcxNUM2LjczNTY4IDEzLjY4NjUgNS40MjgzOCAxMy42ODY1IDUuMjQxMjEgMTIuNzcxNUM0LjgyNzk4IDEwLjc1MDQgMy4yNDg2MiA5LjE3MTEgMS4yMjc1NCA4Ljc1NzgxQzAuMzEyMzA1IDguNTcwNzUgMC4zMTIzMzQgNy4yNjMyNyAxLjIyNzU0IDcuMDc2MTdDMy4yNDg2OSA2LjY2Mjk1IDQuODI3OTQgNS4wODI2NSA1LjI0MTIxIDMuMDYxNTJaTTEwLjY2MTEgMS4yMzkyNkMxMC43MzAxIDAuOTAyMDYxIDExLjIxMjMgMC45MDIwNjEgMTEuMjgxMiAxLjIzOTI2QzExLjQzMzYgMS45ODM3MSAxMi4wMTUzIDIuNTY1NDcgMTIuNzU5OCAyLjcxNzc3QzEzLjA5NyAyLjc4NjY5IDEzLjA5NyAzLjI2ODk3IDEyLjc1OTggMy4zMzc4OUMxMi4wMTUzIDMuNDkwMjQgMTEuNDMzNSA0LjA3MTg0IDExLjI4MTIgNC44MTY0MUMxMS4yMTIzIDUuMTUzNiAxMC43MzAxIDUuMTUzNiAxMC42NjExIDQuODE2NDFDMTAuNTA4OSA0LjA3MTggOS45MjcyMSAzLjQ5MDE2IDkuMTgyNjIgMy4zMzc4OUM4Ljg0NTU0IDMuMjY4OTEgOC44NDU1NCAyLjc4Njc1IDkuMTgyNjIgMi43MTc3N0M5LjkyNzE1IDIuNTY1NTQgMTAuNTA4OCAxLjk4Mzc1IDEwLjY2MTEgMS4yMzkyNloiCiAgICAgIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl8xMDY1XzIxOTkwNCkiIC8+CiAgPC9nPgogIDxkZWZzPgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJwYWludDBfbGluZWFyXzEwNjVfMjE5OTA0IiB4MT0iMC41NDEwMTYiIHkxPSIzLjUzMTQ2IiB4Mj0iMTMuMTEwNSIgeTI9IjMuNzAxNzUiCiAgICAgIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj4KICAgICAgPHN0b3Agc3RvcC1jb2xvcj0iI0U5NTZFOSIgLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIwLjcyIiBzdG9wLWNvbG9yPSIjRkY1ODVFIiAvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNGRkEzMDAiIC8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogICAgPGNsaXBQYXRoIGlkPSJjbGlwMF8xMDY1XzIxOTkwNCI+CiAgICAgIDxyZWN0IHdpZHRoPSIxNCIgaGVpZ2h0PSIxNCIgZmlsbD0id2hpdGUiIC8+CiAgICA8L2NsaXBQYXRoPgogIDwvZGVmcz4KPC9zdmc+Cg=='.replace(/\s/g, '')
 const aiGenerationStatusFilter = ref<AiCaseGenerationStatusFilter>('pending')
 const selectedAiCaseGenerateResultIds = ref<string[]>([])
@@ -997,7 +996,7 @@ const filteredAiCaseGenerationResults = computed(() => {
 })
 const aiGenerationEmptyStateText = computed(() => {
   if (activeAiCaseGenerationState.value?.generating) {
-    return 'AI 正在生成用例，完整用例会逐条显示在这里'
+    return 'AI 正在生成用例大纲，生成后的用例会逐条显示'
   }
   if (activeAiCaseGenerationResults.value.length > 0) {
     return '当前筛选条件下没有可展示的用例'
@@ -1027,6 +1026,19 @@ const aiCaseGenerateModelOptions = computed(() =>
       label: `${item.connectionName} / ${item.modelName}`,
     })),
 )
+
+function displayRequestPath(rawPath?: string | null) {
+  if (!rawPath) {
+    return ''
+  }
+  try {
+    const url = new URL(rawPath)
+    return `${url.pathname}${url.search}${url.hash}` || rawPath
+  } catch {
+    return rawPath
+  }
+}
+
 const requestTabNavRef = ref<HTMLElement | null>(null)
 const scenarioTabNavRef = ref<HTMLElement | null>(null)
 const requestTabOverflow = reactive<TabStripOverflowState>({
@@ -2677,7 +2689,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  aiCaseGenerateAbortController.value?.abort()
+  requestEditorTabs.value.forEach(tab => tab.aiGeneration?.abortController?.abort())
   document.removeEventListener('mousedown', handleScenarioStepNameOutsidePointerDown, true)
   tabStripCleanupFns.forEach(cleanup => cleanup())
   resizeObservers.forEach(observer => observer.disconnect())
@@ -4017,10 +4029,6 @@ function openAiCaseGenerationResultTab(results: AiCaseGenerateResult[]) {
     ElMessage.warning('请先保存接口，再生成用例')
     return
   }
-  const existing = requestEditorTabs.value.find(item => item.resourceType === 'ai-case-generation')
-  if (existing?.aiGeneration?.abortController) {
-    existing.aiGeneration.abortController.abort()
-  }
   const state = reactive<AiCaseGenerateTabState>({
     definitionId: definitionForm.id,
     definitionName: definitionForm.name || '未命名接口',
@@ -4034,14 +4042,12 @@ function openAiCaseGenerationResultTab(results: AiCaseGenerateResult[]) {
   aiGenerationDetailGroupFilter.value = ''
   aiGenerationDetailTypeFilter.value = ''
   aiGenerationDetailKeyword.value = ''
-  const tab = existing ?? makeAiCaseGenerationTab(state)
+  const tab = makeAiCaseGenerationTab(state)
   tab.aiGeneration = state
-  tab.title = 'AI 生成单接口用例'
+  tab.title = state.definitionName ? `AI 用例 - ${state.definitionName}` : 'AI 生成接口用例'
   tab.isDirty = false
   aiCaseGenerateResults.value = state.results
-  if (!existing) {
-    requestEditorTabs.value.push(tab)
-  }
+  requestEditorTabs.value.push(tab)
   aiCaseGenerateDrawerVisible.value = false
   activateRequestEditorTab(tab.key)
   activeAiGeneratedCaseId.value = results[0]?.id ?? ''
@@ -4062,7 +4068,6 @@ async function submitAiCaseGeneratePreview() {
     ElMessage.warning('请选择 AI 连接池配置的模型')
     return
   }
-  aiCaseGenerateAbortController.value?.abort()
   const requestSlots = buildAiCaseGenerationRequestSlots()
   aiCaseGenerateResults.value = []
   const state = openAiCaseGenerationResultTab([])
@@ -4070,9 +4075,7 @@ async function submitAiCaseGeneratePreview() {
     return
   }
   const abortController = new AbortController()
-  aiCaseGenerateAbortController.value = abortController
   state.abortController = abortController
-  aiCaseGenerateLoading.value = true
   try {
     await platformApi.streamGenerateApiDefinitionCases(workspaceCode.value, buildAiCaseGenerationPayload(model, requestSlots), {
       signal: abortController.signal,
@@ -4090,10 +4093,6 @@ async function submitAiCaseGeneratePreview() {
   finally {
     state.generating = false
     state.abortController = null
-    if (aiCaseGenerateAbortController.value === abortController) {
-      aiCaseGenerateAbortController.value = null
-    }
-    aiCaseGenerateLoading.value = false
   }
 }
 
@@ -4141,25 +4140,43 @@ function buildAiCaseGenerationPayload(model: { connectionId: number, modelName: 
   }
 }
 
+function isActiveAiGenerationState(state: AiCaseGenerateTabState) {
+  return activeRequestEditorTab.value?.resourceType === 'ai-case-generation'
+    && activeRequestEditorTab.value.aiGeneration === state
+}
+
 function handleAiCaseGenerationEvent(state: AiCaseGenerateTabState, event: ApiAiCaseGenerationEvent) {
   const refreshResults = () => {
     state.results = [...state.results]
-    aiCaseGenerateResults.value = state.results
+    if (isActiveAiGenerationState(state)) {
+      aiCaseGenerateResults.value = state.results
+    }
   }
   if (event.event === 'completed') {
     state.generating = false
+    refreshResults()
     return
   }
   if (event.event === 'failed') {
     markRemainingAiCaseGenerationRowsFailed(state, event.message || 'AI \u751f\u6210\u5931\u8d25')
     state.generating = false
+    refreshResults()
     return
   }
   if (event.event === 'item_generating') {
     return
   }
+  if (event.event === 'item_outline' && event.outline) {
+    const target = findOrCreateOutlineAiCaseGenerationResult(state, event)
+    applyAiGeneratedOutlineToResult(target, event.outline)
+    refreshResults()
+    return
+  }
   if (event.event === 'item_failed') {
     const target = findOrCreateFailedAiCaseGenerationResult(state, event)
+    if (event.outline) {
+      applyAiGeneratedOutlineToResult(target, event.outline)
+    }
     target.status = 'failed'
     target.errorMessage = event.message || '\u751f\u6210\u5931\u8d25'
     target.group = event.group || target.group
@@ -4192,6 +4209,20 @@ function findOrCreateCompletedAiCaseGenerationResult(state: AiCaseGenerateTabSta
   return result
 }
 
+function findOrCreateOutlineAiCaseGenerationResult(state: AiCaseGenerateTabState, event: ApiAiCaseGenerationEvent) {
+  const existing = findFirstAiCaseGenerationPlaceholder(state, event.itemId || undefined)
+  if (existing) {
+    return existing
+  }
+  const result = createAiCaseGenerationPlaceholderFromEvent(event, state.results.length)
+  if (event.itemId) {
+    result.id = event.itemId
+  }
+  result.status = 'generating'
+  state.results = [...state.results, result]
+  return result
+}
+
 function findOrCreateFailedAiCaseGenerationResult(state: AiCaseGenerateTabState, event: ApiAiCaseGenerationEvent) {
   const existing = findFirstAiCaseGenerationPlaceholder(state, event.itemId || undefined)
   if (existing) {
@@ -4212,8 +4243,20 @@ function findFirstAiCaseGenerationPlaceholder(state: AiCaseGenerateTabState, ite
     if (byId) {
       return byId
     }
+    return undefined
   }
   return state.results.find(item => item.status === 'generating')
+}
+
+function applyAiGeneratedOutlineToResult(target: AiCaseGenerateResult, outline: ApiAiGeneratedCaseOutline) {
+  target.name = normalizeAiGeneratedCaseName(outline.name || target.name, outline.type || target.type, outline.expected || target.expected)
+  target.description = outline.description || target.description
+  target.tags = Array.isArray(outline.tags) ? [...outline.tags] : target.tags
+  target.group = outline.group || target.group
+  target.type = outline.type || target.type
+  target.expected = outline.expected || target.expected
+  target.status = 'generating'
+  target.errorMessage = ''
 }
 
 function applyAiGeneratedDraftToResult(target: AiCaseGenerateResult, draft: ApiAiGeneratedCaseDraft) {
@@ -7326,16 +7369,24 @@ function formatTimeLabel(value?: string | null) {
             <div v-if="isAiCaseGenerationTabActive" class="ai-generation-workspace">
               <div class="ai-generation-page-header">
                 <div>
-                  <h3>AI 生成单接口用例</h3>
-                  <p>{{ activeAiCaseGenerationState?.definitionName }} · {{ activeAiCaseGenerationState?.method }} {{ activeAiCaseGenerationState?.path }}</p>
+                  <h3 class="ai-generation-title-line">
+                    <span>AI 生成单接口用例</span>
+                    <span class="ai-generation-title-source">
+                      <span class="ai-generation-source-name">{{ activeAiCaseGenerationState?.definitionName }}</span>
+                      <span :class="['ms-like-method', `method-${(activeAiCaseGenerationState?.method || 'GET').toLowerCase()}`]">
+                        {{ activeAiCaseGenerationState?.method }}
+                      </span>
+                      <span class="ai-generation-source-path">{{ displayRequestPath(activeAiCaseGenerationState?.path) }}</span>
+                    </span>
+                  </h3>
                 </div>
                 <button
                   type="button"
-                  class="ai-generation-stop-button"
-                  :disabled="!activeAiCaseGenerationState?.generating"
-                  @click="stopAiCaseGeneration"
+                  :class="['ai-generation-header-action', { 'is-stop': activeAiCaseGenerationState?.generating }]"
+                  @click="activeAiCaseGenerationState?.generating ? stopAiCaseGeneration() : openAiCaseGenerateDrawer()"
                 >
-                  停止
+                  <MagicStick v-if="!activeAiCaseGenerationState?.generating" />
+                  {{ activeAiCaseGenerationState?.generating ? '停止' : '生成新用例' }}
                 </button>
               </div>
 
@@ -7364,10 +7415,6 @@ function formatTimeLabel(value?: string | null) {
                       废弃 ({{ aiCaseGenerationDiscardedCount }})
                     </button>
                   </div>
-                  <button type="button" class="ai-generation-regenerate-button">
-                    <MagicStick />
-                    生成新用例
-                  </button>
                 </div>
 
                 <div class="ai-generation-detail-toolbar">
@@ -7470,12 +7517,12 @@ function formatTimeLabel(value?: string | null) {
                           {{ item.runResult || '-' }}
                         </span>
                         <div class="ai-generation-row-actions">
-                          <button type="button" class="ai-generation-row-run" @click.stop="runAiCaseGenerateResult(item)">
+                          <button type="button" class="ai-generation-row-run" :disabled="item.status === 'generating' || item.status === 'failed'" @click.stop="runAiCaseGenerateResult(item)">
                             <Play />
                             运行
                           </button>
-                          <button type="button" class="ai-generation-row-accept" @click.stop="acceptAiCaseGenerateResult(item)">采纳</button>
-                          <button type="button" class="ai-generation-row-discard" @click.stop="updateAiCaseGenerateResultStatus(item.id, 'discarded')">废弃</button>
+                          <button type="button" class="ai-generation-row-accept" :disabled="item.status === 'generating' || item.status === 'failed'" @click.stop="acceptAiCaseGenerateResult(item)">采纳</button>
+                          <button type="button" class="ai-generation-row-discard" :disabled="item.status === 'generating'" @click.stop="updateAiCaseGenerateResultStatus(item.id, 'discarded')">废弃</button>
                         </div>
                       </div>
 
@@ -11414,7 +11461,7 @@ function formatTimeLabel(value?: string | null) {
         </div>
       </template>
 
-      <div class="ai-case-drawer-body" v-loading="aiCaseGenerateLoading">
+      <div class="ai-case-drawer-body">
         <section class="ai-case-section">
           <div class="ai-case-section-title">
             <span>选择生成的用例类型</span>
@@ -11731,7 +11778,7 @@ function formatTimeLabel(value?: string | null) {
 
 .ms-like-layout {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: 290px minmax(0, 1fr);
   min-height: 0;
   height: 100%;
   background: #ffffff;
@@ -16094,9 +16141,9 @@ function formatTimeLabel(value?: string | null) {
   flex: 1 1 auto;
   min-height: 0;
   flex-direction: column;
-  overflow: auto;
+  overflow: hidden;
   background: #ffffff;
-  padding: 16px;
+  padding: 14px 16px 0;
 }
 
 .ai-generation-page-header {
@@ -16104,7 +16151,7 @@ function formatTimeLabel(value?: string | null) {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 2px 0 16px;
+  padding: 2px 0 12px;
 }
 
 .ai-generation-page-header h3 {
@@ -16114,20 +16161,70 @@ function formatTimeLabel(value?: string | null) {
   font-weight: 700;
 }
 
-.ai-generation-page-header p {
-  margin: 6px 0 0;
-  color: #6b7280;
-  font-size: 12px;
+.ai-generation-title-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 
-.ai-generation-stop-button {
+.ai-generation-title-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 12px;
+  border-left: 1px solid #e5e7eb;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: var(--ath-line-sm);
+}
+
+.ai-generation-source-name,
+.ai-generation-source-path {
+  display: inline-block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-generation-source-name {
+  max-width: 160px;
+  color: #475569;
+}
+
+.ai-generation-source-path {
+  max-width: 360px;
+  color: #344054;
+}
+
+.ai-generation-header-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 86px;
   height: 30px;
-  border: 1px solid #d1d5db;
+  border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #ffffff;
-  color: #374151;
+  color: #475569;
   cursor: pointer;
+  font-size: 12px;
   padding: 0 12px;
+}
+
+.ai-generation-header-action.is-stop {
+  border-color: #d1d5db;
+  color: #374151;
+}
+
+.ai-generation-header-action svg {
+  width: 13px;
+  height: 13px;
+  color: #64748b;
 }
 
 
@@ -16136,14 +16233,15 @@ function formatTimeLabel(value?: string | null) {
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
-  padding-bottom: 76px;
+  overflow: hidden;
+  padding-bottom: 0;
 }
 
 .ai-generation-detail-status-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 46px;
+  min-height: 40px;
   border-bottom: 1px solid #f1f5f9;
 }
 
@@ -16174,31 +16272,11 @@ function formatTimeLabel(value?: string | null) {
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
 }
 
-.ai-generation-regenerate-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 28px;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #475569;
-  cursor: pointer;
-  font-size: 12px;
-  padding: 0 10px;
-}
-
-.ai-generation-regenerate-button svg {
-  width: 13px;
-  height: 13px;
-  color: #64748b;
-}
-
 .ai-generation-detail-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 52px;
+  min-height: 44px;
   border-bottom: 1px solid #edf2f7;
 }
 
@@ -16274,6 +16352,12 @@ function formatTimeLabel(value?: string | null) {
   padding: 0 10px;
 }
 
+.ai-generation-detail-actions button:disabled,
+.ai-generation-row-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .ai-generation-detail-actions svg,
 .ai-generation-row-actions svg {
   width: 13px;
@@ -16305,6 +16389,24 @@ function formatTimeLabel(value?: string | null) {
   min-height: 0;
   flex: 1 1 auto;
   overflow: auto;
+  scrollbar-color: rgba(148, 163, 184, 0.64) transparent;
+  scrollbar-width: thin;
+}
+
+.ai-generation-detail-table::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.ai-generation-detail-table::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.64);
+  background-clip: padding-box;
+}
+
+.ai-generation-detail-table::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .ai-generation-empty-state {
@@ -16335,7 +16437,7 @@ function formatTimeLabel(value?: string | null) {
   position: sticky;
   top: 0;
   z-index: 1;
-  min-height: 38px;
+  min-height: 34px;
   border-bottom: 1px solid #eef2f7;
   background: #ffffff;
   color: #64748b;
@@ -16348,7 +16450,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .ai-generation-detail-row {
-  min-height: 46px;
+  min-height: 42px;
   border-bottom: 1px solid #edf2f7;
   color: #334155;
   cursor: pointer;

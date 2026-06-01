@@ -62,7 +62,7 @@ class ApiProcessorCoreTests extends IntegrationTestSupport {
                 WORKSPACE_CODE,
                 null,
                 "processor sql json regex",
-                request("GET", baseUrl + "/json", List.of(new ApiKeyValueInput("X-SQL-Token", "{{token_1}}", null, true, null, null, null, null, null))),
+                request("GET", baseUrl + "/json", List.of(new ApiKeyValueInput("X-SQL-Token", "{{token_1}}", null, true, null, null, null, null, null, null, null, null))),
                 List.of(new ApiAssertionInput("STATUS_CODE", null, "EQUALS", "200")),
                 List.of(),
                 List.of(new ApiProcessorInput(
@@ -78,7 +78,7 @@ class ApiProcessorCoreTests extends IntegrationTestSupport {
                         null,
                         5000,
                         "token,id",
-                        List.of(new ApiKeyValueInput("firstToken", "token", null, true, null, null, null, null, null)),
+                        List.of(new ApiKeyValueInput("firstToken", "token", null, true, null, null, null, null, null, null, null, null)),
                         "sqlRows",
                         List.of()
                 )),
@@ -263,7 +263,7 @@ class ApiProcessorCoreTests extends IntegrationTestSupport {
                         null,
                         5000,
                         "id",
-                        List.of(new ApiKeyValueInput("firstToken", "token", null, true, null, null, null, null, null)),
+                        List.of(new ApiKeyValueInput("firstToken", "token", null, true, null, null, null, null, null, null, null, null)),
                         "sqlRows",
                         List.of()
                 )),

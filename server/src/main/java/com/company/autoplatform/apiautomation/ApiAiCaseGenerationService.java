@@ -14,6 +14,8 @@ import com.company.autoplatform.workspace.WorkspaceService;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -36,6 +38,7 @@ import static com.company.autoplatform.apiautomation.ApiAutomationModels.*;
 public class ApiAiCaseGenerationService {
 
     private static final int MAX_GENERATED_CASES = 80;
+    private static final Logger log = LoggerFactory.getLogger(ApiAiCaseGenerationService.class);
 
     private final AiProviderConnectionMapper aiProviderConnectionMapper;
     private final WorkspaceService workspaceService;
@@ -67,23 +70,90 @@ public class ApiAiCaseGenerationService {
             List<ApiAiCaseGenerationOption> options = normalizeOptions(request.options());
             int targetCount = resolveTargetCount(request.caseCount(), options.size());
             List<ApiAiCaseGenerationSlot> slots = buildSlots(options, targetCount);
-            writeEvent(writer, new ApiAiCaseGenerationEvent("started", null, null, null, slots.size(), null, null));
+            writeEvent(writer, new ApiAiCaseGenerationEvent("started", null, null, null, slots.size(), null, null, null));
             int completed = 0;
-            for (ApiAiCaseGenerationSlot slot : slots) {
-                writeEvent(writer, new ApiAiCaseGenerationEvent("item_generating", slot.id(), slot.group(), slot.type(), slots.size(), null, null));
-            }
             try {
-                completed = streamGenerateBatchCases(workspace, provider, request, slots, writer);
+                Map<String, ApiAiGeneratedCaseOutline> outlines;
+                try {
+                    outlines = streamGenerateOutlines(workspace, provider, request, slots, writer);
+                } catch (Exception exception) {
+                    log.warn("API AI case outline generation failed, definitionId={}, definitionName={}, model={}, targetCount={}",
+                            request.definitionId(), request.definitionName(), provider.profile().model(), slots.size(), exception);
+                    String message = stageFailureMessage("\u5927\u7eb2\u751f\u6210\u9636\u6bb5\u5931\u8d25", exception);
+                    for (ApiAiCaseGenerationSlot slot : slots) {
+                        writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, null, message));
+                    }
+                    writeEvent(writer, new ApiAiCaseGenerationEvent("completed", null, null, null, slots.size(), null, null, "\u5927\u7eb2\u751f\u6210\u5931\u8d25"));
+                    return;
+                }
+                completed = generateCasesFromOutlines(workspace, provider, request, slots, outlines, writer);
             } catch (Exception exception) {
+                log.warn("API AI case generation failed, definitionId={}, definitionName={}, model={}, targetCount={}",
+                        request.definitionId(), request.definitionName(), provider.profile().model(), slots.size(), exception);
                 for (ApiAiCaseGenerationSlot slot : slots) {
-                    writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, exception.getMessage()));
+                    writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, null,
+                            stageFailureMessage("\u7528\u4f8b\u751f\u6210\u9636\u6bb5\u5931\u8d25", exception)));
                 }
             }
-            writeEvent(writer, new ApiAiCaseGenerationEvent("completed", null, null, null, slots.size(), null,
+            writeEvent(writer, new ApiAiCaseGenerationEvent("completed", null, null, null, slots.size(), null, null,
                     completed == slots.size() ? null : "\u90e8\u5206\u7528\u4f8b\u751f\u6210\u5931\u8d25"));
         } catch (Exception exception) {
-            writeEvent(writer, new ApiAiCaseGenerationEvent("failed", null, null, null, null, null, exception.getMessage()));
+            writeEvent(writer, new ApiAiCaseGenerationEvent("failed", null, null, null, null, null, null, exception.getMessage()));
         }
+    }
+
+    private Map<String, ApiAiGeneratedCaseOutline> streamGenerateOutlines(
+            WorkspaceEntity workspace,
+            ResolvedAiProvider provider,
+            ApiAiCaseGenerationRequest request,
+            List<ApiAiCaseGenerationSlot> slots,
+            Writer writer
+    ) {
+        String prompt = buildOutlinePrompt(workspace, request, slots);
+        Map<String, ApiAiCaseGenerationSlot> slotById = new LinkedHashMap<>();
+        for (ApiAiCaseGenerationSlot slot : slots) {
+            slotById.put(slot.id(), slot);
+        }
+        Map<String, ApiAiGeneratedCaseOutline> outlines = new LinkedHashMap<>();
+        StringBuilder lineBuffer = new StringBuilder();
+        String content = aiProviderClient.streamStructuredContent(provider.profile(), provider.apiKey(), prompt, delta -> {
+            appendAndEmitOutlineLines(delta, lineBuffer, slotById, outlines, writer);
+        });
+        appendAndEmitOutlineLines("\n", lineBuffer, slotById, outlines, writer);
+        emitRemainingOutlines(content, slots, outlines, writer);
+        return outlines;
+    }
+
+    private int generateCasesFromOutlines(
+            WorkspaceEntity workspace,
+            ResolvedAiProvider provider,
+            ApiAiCaseGenerationRequest request,
+            List<ApiAiCaseGenerationSlot> slots,
+            Map<String, ApiAiGeneratedCaseOutline> outlines,
+            Writer writer
+    ) throws IOException {
+        int completed = 0;
+        for (int index = 0; index < slots.size(); index++) {
+            ApiAiCaseGenerationSlot slot = slots.get(index);
+            ApiAiGeneratedCaseOutline outline = outlines.get(slot.id());
+            if (outline == null) {
+                writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, null,
+                        "AI \u672a\u8fd4\u56de\u8be5\u7528\u4f8b\u5927\u7eb2"));
+                continue;
+            }
+            try {
+                ApiAiGeneratedCaseDraft draft = generateOneCaseFromOutline(workspace, provider, request, slot, outline, index + 1, slots.size());
+                writeEvent(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slots.size(), draft, outline, null));
+                completed += 1;
+            } catch (RuntimeException exception) {
+                log.warn("API AI case detail generation failed, definitionId={}, itemId={}, itemIndex={}, total={}, type={}, model={}",
+                        request.definitionId(), slot.id(), index + 1, slots.size(), slot.type(), provider.profile().model(), exception);
+                writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, outline,
+                        "\u7b2c " + (index + 1) + "/" + slots.size() + " \u6761\u8be6\u60c5\u751f\u6210\u5931\u8d25\uff08" + slot.type() + "\uff09\uff1a"
+                                + exceptionMessage(exception)));
+            }
+        }
+        return completed;
     }
 
     private int streamGenerateBatchCases(
@@ -107,10 +177,34 @@ public class ApiAiCaseGenerationService {
         emitRemainingDrafts(content, slots, completedIds, request, writer);
         for (ApiAiCaseGenerationSlot slot : slots) {
             if (!completedIds.contains(slot.id())) {
-                writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, "AI \u672a\u8fd4\u56de\u8be5\u7528\u4f8b"));
+                writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, null,
+                        "AI \u672a\u8fd4\u56de\u8be5\u7528\u4f8b"));
             }
         }
         return completedIds.size();
+    }
+
+    private void appendAndEmitOutlineLines(
+            String delta,
+            StringBuilder lineBuffer,
+            Map<String, ApiAiCaseGenerationSlot> slotById,
+            Map<String, ApiAiGeneratedCaseOutline> outlines,
+            Writer writer
+    ) {
+        if (delta == null || delta.isEmpty()) {
+            return;
+        }
+        lineBuffer.append(delta);
+        int lineBreakIndex;
+        while ((lineBreakIndex = indexOfLineBreak(lineBuffer)) >= 0) {
+            String line = lineBuffer.substring(0, lineBreakIndex).trim();
+            int removeEnd = lineBreakIndex + 1;
+            if (removeEnd < lineBuffer.length() && lineBuffer.charAt(lineBreakIndex) == '\r' && lineBuffer.charAt(removeEnd) == '\n') {
+                removeEnd += 1;
+            }
+            lineBuffer.delete(0, removeEnd);
+            emitOutlineLine(line, slotById, outlines, writer);
+        }
     }
 
     private void appendAndEmitCompletedLines(
@@ -165,9 +259,32 @@ public class ApiAiCaseGenerationService {
             }
             ApiAiGeneratedCaseDraft normalized = normalizeDraft(parsed.draft(), request, slot, completedIds.size() + 1);
             completedIds.add(slot.id());
-            writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slotById.size(), normalized, null));
+            writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slotById.size(), normalized, null, null));
         } catch (RuntimeException exception) {
             // Ignore partial or non-NDJSON lines here. Final full-content parsing below is the fallback.
+        }
+    }
+
+    private void emitOutlineLine(
+            String line,
+            Map<String, ApiAiCaseGenerationSlot> slotById,
+            Map<String, ApiAiGeneratedCaseOutline> outlines,
+            Writer writer
+    ) {
+        if (line == null || line.isBlank() || line.startsWith("```")) {
+            return;
+        }
+        try {
+            ApiAiGeneratedCaseOutlineLine parsed = parseGeneratedCaseOutlineLine(line);
+            ApiAiCaseGenerationSlot slot = slotById.get(parsed.id());
+            if (slot == null || outlines.containsKey(slot.id()) || parsed.outline() == null) {
+                return;
+            }
+            ApiAiGeneratedCaseOutline normalized = normalizeOutline(parsed.outline(), slot);
+            outlines.put(slot.id(), normalized);
+            writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_outline", slot.id(), slot.group(), slot.type(), slotById.size(), null, normalized, null));
+        } catch (RuntimeException exception) {
+            // Ignore partial or non-NDJSON lines. Full-content parsing below is the fallback.
         }
     }
 
@@ -180,6 +297,18 @@ public class ApiAiCaseGenerationService {
             return new ApiAiGeneratedCaseLine(id, draft);
         } catch (IOException exception) {
             throw new BadRequestException("AI \u8fd4\u56de\u7684\u5355\u6761\u7528\u4f8b\u65e0\u6cd5\u89e3\u6790");
+        }
+    }
+
+    private ApiAiGeneratedCaseOutlineLine parseGeneratedCaseOutlineLine(String line) {
+        try {
+            JsonNode parsed = objectMapper.readTree(line);
+            String id = optionalText(parsed, "id");
+            JsonNode outlineNode = parsed.has("outline") ? parsed.path("outline") : parsed;
+            ApiAiGeneratedCaseOutline outline = objectMapper.treeToValue(outlineNode, ApiAiGeneratedCaseOutline.class);
+            return new ApiAiGeneratedCaseOutlineLine(id, outline);
+        } catch (IOException exception) {
+            throw new BadRequestException("AI \u8fd4\u56de\u7684\u5355\u6761\u7528\u4f8b\u5927\u7eb2\u65e0\u6cd5\u89e3\u6790");
         }
     }
 
@@ -219,8 +348,52 @@ public class ApiAiCaseGenerationService {
             }
             ApiAiGeneratedCaseDraft normalized = normalizeDraft(draft, request, slot, index + 1);
             completedIds.add(slot.id());
-            writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slots.size(), normalized, null));
+            writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slots.size(), normalized, null, null));
         }
+    }
+
+    private void emitRemainingOutlines(
+            String content,
+            List<ApiAiCaseGenerationSlot> slots,
+            Map<String, ApiAiGeneratedCaseOutline> outlines,
+            Writer writer
+    ) {
+        if (content == null || content.isBlank() || outlines.size() >= slots.size()) {
+            return;
+        }
+        List<ApiAiGeneratedCaseOutlineLine> parsedLines = parseOutlinesFromNdjson(content);
+        Map<String, ApiAiCaseGenerationSlot> slotById = new LinkedHashMap<>();
+        for (ApiAiCaseGenerationSlot slot : slots) {
+            slotById.put(slot.id(), slot);
+        }
+        for (ApiAiGeneratedCaseOutlineLine parsed : parsedLines) {
+            ApiAiCaseGenerationSlot slot = slotById.get(parsed.id());
+            if (slot == null || outlines.containsKey(slot.id()) || parsed.outline() == null) {
+                continue;
+            }
+            ApiAiGeneratedCaseOutline normalized = normalizeOutline(parsed.outline(), slot);
+            outlines.put(slot.id(), normalized);
+            writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_outline", slot.id(), slot.group(), slot.type(), slots.size(), null, normalized, null));
+        }
+    }
+
+    private List<ApiAiGeneratedCaseOutlineLine> parseOutlinesFromNdjson(String content) {
+        List<ApiAiGeneratedCaseOutlineLine> outlines = new ArrayList<>();
+        if (content == null || content.isBlank()) {
+            return outlines;
+        }
+        for (String rawLine : content.split("\\r?\\n")) {
+            String line = rawLine.trim();
+            if (line.isEmpty() || line.startsWith("```")) {
+                continue;
+            }
+            try {
+                outlines.add(parseGeneratedCaseOutlineLine(line));
+            } catch (RuntimeException exception) {
+                // Keep parsing later lines; one malformed line should not discard a whole batch.
+            }
+        }
+        return outlines;
     }
 
     private void writeUnchecked(Writer writer, ApiAiCaseGenerationEvent event) {
@@ -240,6 +413,20 @@ public class ApiAiCaseGenerationService {
             int total
     ) {
         String prompt = buildPrompt(workspace, request, slot, index, total);
+        String content = aiProviderClient.requestStructuredContent(provider.profile(), provider.apiKey(), prompt);
+        return normalizeDraft(parseDraft(content), request, slot, index);
+    }
+
+    private ApiAiGeneratedCaseDraft generateOneCaseFromOutline(
+            WorkspaceEntity workspace,
+            ResolvedAiProvider provider,
+            ApiAiCaseGenerationRequest request,
+            ApiAiCaseGenerationSlot slot,
+            ApiAiGeneratedCaseOutline outline,
+            int index,
+            int total
+    ) {
+        String prompt = buildPrompt(workspace, request, slot, outline, index, total);
         String content = aiProviderClient.requestStructuredContent(provider.profile(), provider.apiKey(), prompt);
         return normalizeDraft(parseDraft(content), request, slot, index);
     }
@@ -363,6 +550,22 @@ public class ApiAiCaseGenerationService {
         );
     }
 
+    private ApiAiGeneratedCaseOutline normalizeOutline(ApiAiGeneratedCaseOutline outline, ApiAiCaseGenerationSlot slot) {
+        String expected = firstNonBlank(outline.expected(), defaultExpected(slot));
+        String name = normalizeCaseName(firstNonBlank(outline.name(), slot.type() + " \u2013 " + expected), slot, "", "", expected);
+        String description = blankToNull(outline.description()) == null ? defaultDescription(slot) : outline.description().trim();
+        return new ApiAiGeneratedCaseOutline(
+                name,
+                description,
+                normalizeTags(outline.tags(), slot),
+                slot.group(),
+                slot.groupKey(),
+                slot.type(),
+                slot.typeKey(),
+                expected
+        );
+    }
+
     private String buildPrompt(
             WorkspaceEntity workspace,
             ApiAiCaseGenerationRequest request,
@@ -425,6 +628,133 @@ public class ApiAiCaseGenerationService {
                 5. name \u4e0d\u8981\u5305\u542b\u5206\u7ec4\u524d\u7f00\uff0c\u4f8b\u5982\u4e0d\u8981\u5199\u3010\u6b63\u5411\u3011\u3002\u63a8\u8350\u683c\u5f0f\uff1a\u7c7b\u578b \u2013 \u573a\u666f\u63cf\u8ff0 \u2013 \u671f\u671b\u8fd4\u56de\u7ed3\u679c\u3002
                 6. expected \u7528\u4e00\u53e5\u8bdd\u63cf\u8ff0\u65ad\u8a00\u610f\u56fe\uff0c\u4e0d\u8981\u4e3a\u7a7a\u3002
                 7. \u6240\u6709\u8f93\u51fa\u5fc5\u987b\u662f\u5408\u6cd5 JSON\u3002
+                \u8f93\u5165\u6570\u636e\uff1a
+                %s
+                """.formatted(toJson(payload));
+    }
+
+    private String buildPrompt(
+            WorkspaceEntity workspace,
+            ApiAiCaseGenerationRequest request,
+            ApiAiCaseGenerationSlot slot,
+            ApiAiGeneratedCaseOutline outline,
+            int index,
+            int total
+    ) {
+        Map<String, Object> payload = buildSingleCasePayload(workspace, request, slot, index, total);
+        payload.put("outline", outline);
+        return """
+                \u4f60\u662f\u63a5\u53e3\u81ea\u52a8\u5316\u6d4b\u8bd5\u7528\u4f8b\u751f\u6210\u52a9\u624b\u3002\u8bf7\u57fa\u4e8e\u8f93\u5165\u7684\u63a5\u53e3\u5b9a\u4e49\u548c\u5df2\u786e\u5b9a\u7684\u7528\u4f8b\u5927\u7eb2\uff0c\u53ea\u751f\u6210 1 \u6761\u5b8c\u6574\u63a5\u53e3\u7528\u4f8b\u8be6\u60c5\u3002
+                \u53ea\u8fd4\u56de\u4e25\u683c JSON\uff0c\u4e0d\u8981\u8fd4\u56de Markdown\u3001\u89e3\u91ca\u6587\u5b57\u6216\u4ee3\u7801\u5757\u3002
+                \u8fd4\u56de\u7ed3\u6784\u5fc5\u987b\u5339\u914d\u4e0b\u9762\u793a\u4f8b\uff1a
+                {
+                  "name": "\u5927\u7eb2\u4e2d\u7684 name",
+                  "description": "\u7528\u4f8b\u8bf4\u660e",
+                  "tags": ["\u6807\u7b7e"],
+                  "expected": "\u9884\u671f\u7ed3\u679c",
+                  "requestConfig": {
+                    "method": "GET/POST/PUT/DELETE/PATCH/HEAD/OPTIONS/TRACE",
+                    "path": "\u63a5\u53e3\u8def\u5f84",
+                    "timeoutMs": 10000,
+                    "queryParams": [{"key":"","value":"","description":"","enabled":true,"paramType":"STRING","required":false,"encode":true,"minLength":null,"maxLength":null}],
+                    "headers": [{"key":"","value":"","description":"","enabled":true,"paramType":"STRING","required":false,"encode":true,"minLength":null,"maxLength":null}],
+                    "cookies": [],
+                    "body": {"type":"NONE|FORM_DATA|X_WWW_FORM_URLENCODED|RAW_JSON|RAW_XML|RAW_TEXT|BINARY","rawText":"","formItems":[],"contentType":"","fileName":"","binaryBase64":""},
+                    "authConfig": {"authType":"NONE|BASIC|DIGEST","basicAuth":{"userName":"","password":""},"digestAuth":{"userName":"","password":""}}
+                  },
+                  "assertions": [{"type":"STATUS_CODE","subject":"STATUS_CODE","operator":"LT","expectedValue":"400","enabled":true}],
+                  "preProcessors": [],
+                  "postProcessors": []
+                }
+                \u89c4\u5219\uff1a
+                1. name\u3001description\u3001tags\u3001expected \u8981\u4e0e outline \u4fdd\u6301\u4e00\u81f4\uff0c\u4e0d\u8981\u66f4\u6362\u6210\u5176\u4ed6\u573a\u666f\u3002
+                2. \u4fdd\u7559\u539f\u63a5\u53e3 method/path\uff0c\u9664\u975e\u76ee\u6807\u7528\u4f8b\u660e\u786e\u9700\u8981\u4fee\u6539\u53c2\u6570\u3001\u8bf7\u6c42\u5934\u3001\u8bf7\u6c42\u4f53\u6216\u8ba4\u8bc1\u4fe1\u606f\u3002
+                3. requestConfig \u8981\u4f53\u73b0 outline.type \u5bf9\u5e94\u7684\u7528\u4f8b\u5dee\u5f02\uff0c\u4f8b\u5982\u5fc5\u586b\u7f3a\u5931\u3001\u8fb9\u754c\u503c\u3001\u5f02\u5e38\u503c\u6216\u5b89\u5168\u8f93\u5165\u3002
+                4. assertions \u8981\u80fd\u9a8c\u8bc1 expected\uff0c\u6b63\u5411\u7528\u4f8b\u901a\u5e38\u65ad\u8a00 2xx/3xx\uff0c\u53cd\u5411\u6216\u5b89\u5168\u7528\u4f8b\u901a\u5e38\u65ad\u8a00\u5408\u7406\u9519\u8bef\u7801\u6216\u9519\u8bef\u4fe1\u606f\u3002
+                5. \u6240\u6709\u8f93\u51fa\u5fc5\u987b\u662f\u5408\u6cd5 JSON\u3002
+                \u8f93\u5165\u6570\u636e\uff1a
+                %s
+                """.formatted(toJson(payload));
+    }
+
+    private Map<String, Object> buildSingleCasePayload(
+            WorkspaceEntity workspace,
+            ApiAiCaseGenerationRequest request,
+            ApiAiCaseGenerationSlot slot,
+            int index,
+            int total
+    ) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("workspaceName", workspace.getWorkspaceName());
+        payload.put("definition", Map.of(
+                "id", request.definitionId(),
+                "name", firstNonBlank(request.definitionName(), request.name(), "\u672a\u547d\u540d\u63a5\u53e3"),
+                "method", firstNonBlank(request.method(), request.requestConfig() == null ? null : request.requestConfig().method(), "GET"),
+                "path", firstNonBlank(request.path(), request.requestConfig() == null ? null : request.requestConfig().path(), "/"),
+                "description", Optional.ofNullable(request.description()).orElse("")
+        ));
+        payload.put("sourceRequestConfig", request.requestConfig());
+        payload.put("sourceAssertions", defaultList(request.assertions(), List.of()));
+        payload.put("sourcePreProcessors", defaultList(request.preProcessors(), List.of()));
+        payload.put("sourcePostProcessors", defaultList(request.postProcessors(), List.of()));
+        payload.put("existingCases", defaultList(request.existingCases(), List.of()));
+        payload.put("target", Map.of(
+                "index", index,
+                "total", total,
+                "group", slot.group(),
+                "groupKey", slot.groupKey(),
+                "type", slot.type(),
+                "typeKey", slot.typeKey(),
+                "noDuplicate", Boolean.TRUE.equals(request.noDuplicate()),
+                "extraRequirement", Optional.ofNullable(request.prompt()).orElse("")
+        ));
+        return payload;
+    }
+
+    private String buildOutlinePrompt(
+            WorkspaceEntity workspace,
+            ApiAiCaseGenerationRequest request,
+            List<ApiAiCaseGenerationSlot> slots
+    ) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("workspaceName", workspace.getWorkspaceName());
+        payload.put("definition", Map.of(
+                "id", request.definitionId(),
+                "name", firstNonBlank(request.definitionName(), request.name(), "\u672a\u547d\u540d\u63a5\u53e3"),
+                "method", firstNonBlank(request.method(), request.requestConfig() == null ? null : request.requestConfig().method(), "GET"),
+                "path", firstNonBlank(request.path(), request.requestConfig() == null ? null : request.requestConfig().path(), "/"),
+                "description", Optional.ofNullable(request.description()).orElse("")
+        ));
+        payload.put("sourceRequestConfig", request.requestConfig());
+        payload.put("sourceAssertions", defaultList(request.assertions(), List.of()));
+        payload.put("existingCases", defaultList(request.existingCases(), List.of()));
+        List<Map<String, Object>> targets = new ArrayList<>();
+        for (int index = 0; index < slots.size(); index++) {
+            ApiAiCaseGenerationSlot slot = slots.get(index);
+            targets.add(Map.of(
+                    "index", index + 1,
+                    "id", slot.id(),
+                    "group", slot.group(),
+                    "groupKey", slot.groupKey(),
+                    "type", slot.type(),
+                    "typeKey", slot.typeKey(),
+                    "noDuplicate", Boolean.TRUE.equals(request.noDuplicate()),
+                    "extraRequirement", Optional.ofNullable(request.prompt()).orElse("")
+            ));
+        }
+        payload.put("targets", targets);
+        return """
+                \u4f60\u662f\u63a5\u53e3\u81ea\u52a8\u5316\u6d4b\u8bd5\u7528\u4f8b\u8bbe\u8ba1\u52a9\u624b\u3002\u8bf7\u5148\u4e3a targets \u4e2d\u7684\u6bcf\u4e2a\u76ee\u6807\u8bbe\u8ba1 1 \u6761\u7528\u4f8b\u5927\u7eb2\uff0c\u4e0d\u8981\u751f\u6210\u5b8c\u6574\u8bf7\u6c42\u914d\u7f6e\u3002
+                \u5fc5\u987b\u4f7f\u7528 NDJSON \u8f93\u51fa\uff1a\u4e00\u884c\u4e00\u6761\u5b8c\u6574 JSON\uff0c\u6bcf\u884c\u5bf9\u5e94\u4e00\u4e2a target\u3002\u4e0d\u8981\u8f93\u51fa Markdown\u3001\u4ee3\u7801\u5757\u3001\u89e3\u91ca\u6587\u5b57\u6216 JSON \u6570\u7ec4\u3002
+                \u6bcf\u4e00\u884c\u5fc5\u987b\u662f\u5408\u6cd5 JSON\uff0c\u7ed3\u6784\u5982\u4e0b\uff1a
+                {"id":"target id","outline":{"name":"\u7c7b\u578b \u2013 \u540d\u79f0 \u2013 \u671f\u671b","description":"\u8bf4\u660e","group":"\u6b63\u5411","groupKey":"positive","type":"\u4ec5\u4f20\u5fc5\u8981\u5b57\u6bb5","typeKey":"required-only","expected":"\u671f\u671b\u8fd4\u56de200\u6210\u529f","tags":["\u4ec5\u4f20\u5fc5\u8981\u5b57\u6bb5"]}}
+                \u89c4\u5219\uff1a
+                1. \u6bcf\u4e2a target \u5fc5\u987b\u8f93\u51fa\u4e00\u884c\uff0c\u8f93\u51fa\u987a\u5e8f\u5c3d\u91cf\u548c targets \u4e00\u81f4\u3002
+                2. \u6bcf\u884c id \u5fc5\u987b\u7b49\u4e8e\u5bf9\u5e94 target.id\u3002
+                3. outline.name \u5fc5\u987b\u4f7f\u7528\u201c\u7c7b\u578b \u2013 \u540d\u79f0 \u2013 \u671f\u671b\u201d\u683c\u5f0f\uff0c\u7c7b\u578b\u4f7f\u7528 target.type\u3002
+                4. outline.group/groupKey/type/typeKey \u5fc5\u987b\u4e0e\u5bf9\u5e94 target \u4fdd\u6301\u4e00\u81f4\u3002
+                5. \u5982\u679c noDuplicate \u4e3a true\uff0c\u8bf7\u907f\u5f00 existingCases \u4e2d\u5df2\u6709\u573a\u666f\u3002
+                6. \u5927\u7eb2\u53ea\u63cf\u8ff0\u8981\u751f\u6210\u7684\u7528\u4f8b\u610f\u56fe\uff0c\u4e0d\u8981\u8f93\u51fa requestConfig\u3001assertions\u3001preProcessors\u3001postProcessors\u3002
                 \u8f93\u5165\u6570\u636e\uff1a
                 %s
                 """.formatted(toJson(payload));
@@ -709,6 +1039,20 @@ public class ApiAiCaseGenerationService {
         }
     }
 
+    private String stageFailureMessage(String stage, Exception exception) {
+        return stage + "\uff1a" + exceptionMessage(exception);
+    }
+
+    private String exceptionMessage(Exception exception) {
+        if (exception == null) {
+            return "\u672a\u77e5\u9519\u8bef";
+        }
+        String message = firstNonBlank(exception.getMessage(),
+                exception.getCause() == null ? null : exception.getCause().getMessage(),
+                exception.getClass().getSimpleName());
+        return message == null ? "\u672a\u77e5\u9519\u8bef" : message;
+    }
+
     private <T> List<T> defaultList(List<T> primary, List<T> fallback) {
         return primary == null ? (fallback == null ? List.of() : fallback) : primary;
     }
@@ -779,6 +1123,7 @@ public class ApiAiCaseGenerationService {
             String type,
             Integer total,
             ApiAiGeneratedCaseDraft item,
+            ApiAiGeneratedCaseOutline outline,
             String message
     ) {
     }
@@ -800,6 +1145,19 @@ public class ApiAiCaseGenerationService {
     ) {
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ApiAiGeneratedCaseOutline(
+            String name,
+            String description,
+            List<String> tags,
+            String group,
+            String groupKey,
+            String type,
+            String typeKey,
+            String expected
+    ) {
+    }
+
     private record ApiAiCaseGenerationSlot(
             String id,
             String group,
@@ -812,6 +1170,12 @@ public class ApiAiCaseGenerationService {
     private record ApiAiGeneratedCaseLine(
             String id,
             ApiAiGeneratedCaseDraft draft
+    ) {
+    }
+
+    private record ApiAiGeneratedCaseOutlineLine(
+            String id,
+            ApiAiGeneratedCaseOutline outline
     ) {
     }
 

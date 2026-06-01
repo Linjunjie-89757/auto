@@ -1084,6 +1084,17 @@ export interface ApiAiGeneratedCaseDraft {
   postProcessors: ApiProcessorConfig[]
 }
 
+export interface ApiAiGeneratedCaseOutline {
+  name: string
+  description?: string | null
+  tags: string[]
+  group: string
+  groupKey: string
+  type: string
+  typeKey: string
+  expected?: string | null
+}
+
 export interface ApiAiCaseGenerationPayload {
   workspaceCode?: string
   definitionId: number
@@ -1106,12 +1117,13 @@ export interface ApiAiCaseGenerationPayload {
 }
 
 export interface ApiAiCaseGenerationEvent {
-  event: 'started' | 'item_generating' | 'item_completed' | 'item_failed' | 'completed' | 'failed'
+  event: 'started' | 'item_generating' | 'item_outline' | 'item_completed' | 'item_failed' | 'completed' | 'failed'
   itemId?: string | null
   group?: string | null
   type?: string | null
   total?: number | null
   item?: ApiAiGeneratedCaseDraft | null
+  outline?: ApiAiGeneratedCaseOutline | null
   message?: string | null
 }
 

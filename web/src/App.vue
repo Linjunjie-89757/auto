@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { SwitchButton } from '@element-plus/icons-vue'
-import { Bell, Bug, ChevronDown, ChevronLeft, ClipboardCheck, Layers, LayoutDashboard, Monitor, Network, Settings, Smartphone } from '@lucide/vue'
+import { Bell, Bug, ChevronDown, ChevronLeft, FileText, Home, Layers, Monitor, Network, Settings, Smartphone } from '@lucide/vue'
 import { ElMessage } from 'element-plus'
 import { platformApi } from './api/platform'
 import { navigationItems } from './data/platform'
@@ -18,8 +18,8 @@ const workspaceReady = ref(false)
 const isMenuCollapsed = ref(localStorage.getItem('app-menu-collapsed') === '1')
 
 const iconMap = {
-  dashboard: LayoutDashboard,
-  cases: ClipboardCheck,
+  dashboard: Home,
+  cases: FileText,
   bugs: Bug,
   api: Network,
   web: Monitor,
@@ -35,10 +35,13 @@ const activeMenu = computed(() => {
 })
 
 const isPublicRoute = computed(() => route.meta.public === true)
-const asideWidth = computed(() => (isMenuCollapsed.value ? '80px' : '256px'))
+const asideWidth = computed(() => (isMenuCollapsed.value ? '60px' : '240px'))
 const mainClass = computed(() => [
   'app-main',
-  { 'app-main-workbench': route.path.startsWith('/automation/api') },
+  {
+    'app-main-workbench': route.path.startsWith('/automation/api'),
+    'app-main-cases': route.path.startsWith('/cases'),
+  },
 ])
 
 function resolveWorkspaceFallback() {
@@ -85,11 +88,7 @@ const currentUserInitials = computed(() =>
 )
 const currentPageTitle = computed(() => {
   const path = route.path
-  if (path.startsWith('/cases/manage/execute')) return '用例执行'
-  if (path.startsWith('/cases/manage')) return '用例管理'
-  if (path.startsWith('/cases/ai-generate')) return 'AI 用例生成'
-  if (path.startsWith('/cases/ai-config')) return 'AI 配置'
-  if (path.startsWith('/cases/ai-records')) return 'AI 生成记录'
+  if (path.startsWith('/cases')) return '用例中心'
   if (path.startsWith('/bugs')) return '缺陷管理'
   if (path.startsWith('/automation/api')) return '接口自动化'
   if (path.startsWith('/automation/web')) return 'Web UI 自动化'

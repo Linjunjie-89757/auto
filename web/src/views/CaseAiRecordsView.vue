@@ -536,6 +536,27 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="ai-record-page">
+    <div v-if="records.length" class="panel-card record-stats-card">
+      <div class="stats-row">
+        <div class="stats-item">
+          <div class="stats-value">{{ stats.total }}</div>
+          <div class="stats-label">任务总数</div>
+        </div>
+        <div class="stats-item">
+          <div class="stats-value">{{ stats.completed }}</div>
+          <div class="stats-label">已完成</div>
+        </div>
+        <div class="stats-item">
+          <div class="stats-value">{{ stats.running }}</div>
+          <div class="stats-label">进行中</div>
+        </div>
+        <div class="stats-item">
+          <div class="stats-value">{{ stats.failed }}</div>
+          <div class="stats-label">失败</div>
+        </div>
+      </div>
+    </div>
+
     <div class="panel-card record-filter-card">
       <div class="record-filter-row">
         <div class="record-filter-item">
@@ -553,27 +574,6 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-if="records.length">
-      <div class="panel-card record-stats-card">
-        <div class="stats-row">
-          <div class="stats-item">
-            <div class="stats-value">{{ stats.total }}</div>
-            <div class="stats-label">任务总数</div>
-          </div>
-          <div class="stats-item">
-            <div class="stats-value">{{ stats.completed }}</div>
-            <div class="stats-label">已完成</div>
-          </div>
-          <div class="stats-item">
-            <div class="stats-value">{{ stats.running }}</div>
-            <div class="stats-label">进行中</div>
-          </div>
-          <div class="stats-item">
-            <div class="stats-value">{{ stats.failed }}</div>
-            <div class="stats-label">失败</div>
-          </div>
-        </div>
-      </div>
-
       <div class="panel-card record-table-card">
         <div class="record-table-wrap">
           <el-table :data="pagedRecords" class="record-table" border stripe>

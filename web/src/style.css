@@ -176,11 +176,11 @@ a {
   flex-direction: column;
   position: relative;
   min-height: 0;
-  border-right: 1px solid #1e293b;
+  border-right: 0;
   background: #0f172a;
   color: #f8fafc;
-  transition: width 0.18s ease;
-  overflow: visible;
+  transition: width 0.2s ease-in-out;
+  overflow: hidden;
 }
 
 .app-aside * {
@@ -196,15 +196,15 @@ a {
   display: flex;
   align-items: center;
   width: 100%;
-  flex: 0 0 64px;
+  flex: 0 0 56px;
   gap: 12px;
-  height: 64px;
+  height: 56px;
   border-bottom: 1px solid #1e293b;
   border-left: 0;
   border-right: 0;
   border-top: 0;
   background: transparent;
-  padding: 0 16px;
+  padding: 0 12px;
   color: inherit;
   cursor: pointer;
   text-align: left;
@@ -218,14 +218,14 @@ a {
 .brand-block-collapsed {
   justify-content: center;
   gap: 0;
-  padding: 0 24px;
+  padding: 0 14px;
 }
 
 .brand-mark {
   display: grid;
-  flex: 0 0 36px;
-  width: 36px;
-  height: 36px;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
   place-items: center;
   border-radius: 8px;
   background: #3b82f6;
@@ -237,9 +237,9 @@ a {
 .brand-title {
   overflow: hidden;
   color: #ffffff;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
-  line-height: 1.25;
+  line-height: 20px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -249,7 +249,7 @@ a {
   margin-top: 0;
   color: #94a3b8;
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -273,9 +273,10 @@ a {
   width: 16px;
   height: 16px;
   flex: 0 0 auto;
+  margin-left: 4px;
   color: #94a3b8;
   opacity: 0;
-  transition: opacity 0.15s ease, transform 0.18s ease;
+  transition: opacity 0.15s ease, transform 0.2s ease;
 }
 
 .brand-block:hover .brand-collapse-icon {
@@ -289,9 +290,9 @@ a {
 .app-menu {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-x: visible;
+  overflow-x: hidden;
   overflow-y: auto;
-  padding: 16px 12px;
+  padding: 12px 8px;
 }
 
 .app-menu-item-wrap {
@@ -306,8 +307,8 @@ a {
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #cbd5e1;
-  padding: 10px 12px;
+  color: #94a3b8;
+  padding: 10px 8px;
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -331,12 +332,12 @@ a {
 
 .app-menu-item:hover {
   background: #1e293b;
-  color: #fff;
+  color: #f1f5f9;
 }
 
 .app-menu-icon {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   flex: 0 0 auto;
   color: currentColor;
   stroke-width: 2;
@@ -360,8 +361,8 @@ a {
 
 .app-menu-separator {
   height: 1px;
-  margin: 12px 8px;
-  background: rgba(51, 65, 85, 0.72);
+  margin: 8px 0;
+  background: rgba(51, 65, 85, 0.6);
 }
 
 .app-menu-tooltip,
@@ -405,7 +406,7 @@ a {
   margin-top: auto;
   flex: 0 0 auto;
   border-top: 1px solid #1e293b;
-  padding: 12px;
+  padding: 8px;
 }
 
 .footer-card {
@@ -425,20 +426,20 @@ a {
 .footer-user-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .footer-user-avatar,
 .footer-user-avatar-collapsed {
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   place-items: center;
   border-radius: 999px;
   background: linear-gradient(135deg, #3b82f6 0%, #9333ea 100%);
   color: #fff;
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .footer-user-copy {
@@ -466,19 +467,18 @@ a {
 .footer-user-name {
   overflow: hidden;
   color: #ffffff;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
-  line-height: 1.3;
+  line-height: 20px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .footer-user-role {
   overflow: hidden;
-  margin-top: 2px;
   color: #94a3b8;
-  font-size: 11px;
-  line-height: 1.35;
+  font-size: 12px;
+  line-height: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -669,6 +669,12 @@ a {
 .app-main-workbench {
   padding: 24px;
   overflow: hidden;
+}
+
+.app-main-cases {
+  padding: 0;
+  overflow: hidden;
+  background: #f9fafb;
 }
 
 .page-shell {

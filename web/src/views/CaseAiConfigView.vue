@@ -1,21 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { MagicStick, RefreshRight, Setting } from '@element-plus/icons-vue'
+import { Check, ChevronDown, ClipboardCheck, Info, RotateCcw, Save, Sparkles, Zap } from '@lucide/vue'
 import { ElMessage } from 'element-plus'
 import { platformApi } from '../api/platform'
 import type {
   AiCapabilityOverride,
-  AiCapabilitySource,
   AiCaseConfig,
   AiModelCapabilities,
   AiProviderConnection,
-  AiProviderModel,
   SaveAiCaseConfigPayload,
 } from '../types/api'
 
 type RoleType = 'CASE_GENERATOR' | 'CASE_REVIEWER'
-type GenerationStyle = 'stable' | 'balanced' | 'creative' | 'custom'
 type CapabilityKey =
   | 'textChat'
   | 'streamOutput'
@@ -39,23 +36,53 @@ type RoleForm = {
   supportsImageInput: boolean
 }
 
+type RoleCardMeta = {
+  roleType: RoleType
+  title: string
+  subtitle: string
+  iconClass: string
+  iconType: 'generator' | 'reviewer'
+}
+
+type ModelPoolOption = {
+  key: string
+  providerId: number
+  providerName: string
+  modelName: string
+  displayName: string
+}
+
 const router = useRouter()
 
-const DEFAULT_GENERATOR_PROMPT = `你是测试用例生成模型。请根据需求内容输出结构化测试用例，只返回 JSON，不要返回 markdown 或解释说明。`
+const DEFAULT_GENERATOR_PROMPT = `你是一名资深测试工程师，擅长接口自动化测试用例的设计。
+请根据接口信息生成完整的测试用例，包括正向用例、边界值用例和异常用例。
+要求：
+1. 用例描述清晰，步骤明确
+2. 断言覆盖响应状态码、响应数据结构和业务逻辑
+3. 优先考虑高频业务场景`
 const DEFAULT_GENERATOR_CHECKLIST = '优先覆盖主流程、边界条件、异常分支和高风险回归点，避免重复或低价值用例。'
-const DEFAULT_REVIEW_PROMPT = `你是测试用例评审模型。请对候选测试用例做完整性与覆盖性评审，只返回结构化 JSON。`
+const DEFAULT_REVIEW_PROMPT = `你是一名资深 QA 评审专家，负责对测试用例进行质量评审。
+请从以下维度评审用例：
+1. 覆盖度：是否覆盖核心业务场景和边界条件
+2. 可执行性：步骤是否清晰、断言是否合理
+3. 冗余度：是否存在重复或低价值用例
+请给出评审结论和改进建议。`
 const DEFAULT_REVIEW_CHECKLIST = '优先检查主流程、边界、异常、重复场景，以及步骤与预期结果是否清晰可验证。'
 
-const roleMeta: Array<{ roleType: RoleType; title: string; subtitle: string }> = [
+const roleMeta: RoleCardMeta[] = [
   {
     roleType: 'CASE_GENERATOR',
-    title: '用例生成模型',
-    subtitle: '负责根据需求内容生成候选测试用例。',
+    title: '用例生成',
+    subtitle: '根据接口信息或需求描述自动生成测试用例',
+    iconClass: 'role-icon-blue',
+    iconType: 'generator',
   },
   {
     roleType: 'CASE_REVIEWER',
-    title: '用例评审模型',
-    subtitle: '负责评估生成结果的覆盖性、完整性和可执行性。',
+    title: '用例评审',
+    subtitle: '对现有测试用例进行质量评审并给出改进建议',
+    iconClass: 'role-icon-green',
+    iconType: 'reviewer',
   },
 ]
 
@@ -68,28 +95,15 @@ const capabilityMeta: Array<{ key: CapabilityKey; label: string; hint: string }>
   { key: 'stableAvailable', label: '最近可用', hint: '最近一次探测或测试是否成功。' },
 ]
 
-const capabilitySourceText: Record<AiCapabilitySource, string> = {
-  DECLARED: '接口声明',
-  INFERRED: '规则推断',
-  PROBED: '主动探测',
-  MANUAL: '人工修正',
-  UNKNOWN: '未知',
-}
-
 const loading = ref(false)
-const providerLoading = ref(false)
 const savingRole = ref<RoleType | null>(null)
-const probingRole = ref<RoleType | null>(null)
-const providerFetchingId = ref<number | null>(null)
-const bootstrappingLegacy = ref(false)
-const hasLegacyConfig = ref(false)
-const canBootstrapFromLegacy = ref(false)
+const testingRole = ref<RoleType | null>(null)
+const openModelRole = ref<RoleType | null>(null)
 
 const providers = ref<AiProviderConnection[]>([])
-const providerModels = reactive<Record<number, AiProviderModel[]>>({})
-const generationStyle = ref<Record<RoleType, GenerationStyle>>({
-  CASE_GENERATOR: 'balanced',
-  CASE_REVIEWER: 'balanced',
+const topPValues = ref<Record<RoleType, number>>({
+  CASE_GENERATOR: 0.9,
+  CASE_REVIEWER: 0.7,
 })
 
 const forms = reactive<Record<RoleType, RoleForm>>({
@@ -147,31 +161,6 @@ function createDefaultForm(roleType: RoleType): RoleForm {
 
 function resetRoleForm(roleType: RoleType) {
   Object.assign(forms[roleType], createDefaultForm(roleType))
-  syncStyleFromTemperature(roleType)
-}
-
-function syncStyleFromTemperature(roleType: RoleType) {
-  const temperature = Number(forms[roleType].temperature.toFixed(1))
-  if (temperature === 0.2) {
-    generationStyle.value[roleType] = 'stable'
-  } else if (temperature === 0.3) {
-    generationStyle.value[roleType] = 'balanced'
-  } else if (temperature === 0.5) {
-    generationStyle.value[roleType] = 'creative'
-  } else {
-    generationStyle.value[roleType] = 'custom'
-  }
-}
-
-function applyStyle(roleType: RoleType, style: GenerationStyle) {
-  generationStyle.value[roleType] = style
-  if (style === 'stable') {
-    forms[roleType].temperature = 0.2
-  } else if (style === 'balanced') {
-    forms[roleType].temperature = 0.3
-  } else if (style === 'creative') {
-    forms[roleType].temperature = 0.5
-  }
 }
 
 function statusText(status: number) {
@@ -179,45 +168,126 @@ function statusText(status: number) {
 }
 
 function temperatureLabel(roleType: RoleType) {
-  const style = generationStyle.value[roleType]
-  if (style === 'stable') return '稳定'
-  if (style === 'creative') return '发散'
-  if (style === 'balanced') return '均衡'
-  return '自定义'
+  const value = forms[roleType].temperature
+  if (value <= 0.3) return '保守'
+  if (value <= 0.7) return '平衡'
+  return '创意'
 }
 
-function reviewChecklistLabel(roleType: RoleType) {
-  return roleType === 'CASE_GENERATOR' ? '补充要求' : '评审清单'
+function temperatureTone(roleType: RoleType) {
+  const value = forms[roleType].temperature
+  if (value <= 0.3) return 'safe'
+  if (value <= 0.7) return 'balanced'
+  return 'creative'
 }
 
-function capabilityStateText(supported: boolean | null) {
-  if (supported === true) return '支持'
-  if (supported === false) return '不支持'
-  return '未知'
+function topPLabel(roleType: RoleType) {
+  const value = topPValues.value[roleType]
+  if (value <= 0.4) return '聚焦'
+  if (value <= 0.7) return '均衡'
+  return '发散'
 }
 
-function overrideValueForSelect(value: boolean | null | undefined) {
-  if (value === true) return 'true'
-  if (value === false) return 'false'
-  return 'inherit'
+function topPTone(roleType: RoleType) {
+  const value = topPValues.value[roleType]
+  if (value <= 0.4) return 'safe'
+  if (value <= 0.7) return 'balanced'
+  return 'creative'
 }
 
-const providerSelectOptions = computed(() => providers.value.map(item => ({
-  label: `${item.connectionName} / ${item.protocolType}`,
-  value: item.id,
-})))
+function defaultPromptForRole(roleType: RoleType) {
+  return roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_PROMPT : DEFAULT_REVIEW_PROMPT
+}
+
+function defaultChecklistForRole(roleType: RoleType) {
+  return roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_CHECKLIST : DEFAULT_REVIEW_CHECKLIST
+}
+
+function restoreDefaultPrompt(roleType: RoleType) {
+  forms[roleType].promptTemplate = defaultPromptForRole(roleType)
+  forms[roleType].reviewChecklist = defaultChecklistForRole(roleType)
+}
 
 const hasNoProviders = computed(() => providers.value.length === 0)
+const modelPoolOptions = computed<ModelPoolOption[]>(() => {
+  return providers.value
+    .filter(provider => !!provider.modelName?.trim())
+    .map(provider => {
+      const modelName = provider.modelName!.trim()
+      return {
+        key: `${provider.id}::${modelName}`,
+        providerId: provider.id,
+        providerName: provider.connectionName,
+        modelName,
+        displayName: modelName,
+      }
+    })
+})
+const totalModelCount = computed(() => modelPoolOptions.value.length)
 
 function getProviderById(id: number | null) {
   if (!id) return null
   return providers.value.find(item => item.id === id) ?? null
 }
 
-function getRoleModels(roleType: RoleType) {
-  const connectionId = forms[roleType].providerConnectionId
-  if (!connectionId) return []
-  return providerModels[connectionId] ?? []
+function selectedModelKey(roleType: RoleType) {
+  const form = forms[roleType]
+  if (!form.providerConnectionId || !form.model) return ''
+  return `${form.providerConnectionId}::${form.model}`
+}
+
+function selectedModelOption(roleType: RoleType) {
+  const selectedKey = selectedModelKey(roleType)
+  return modelPoolOptions.value.find(option => option.key === selectedKey) ?? null
+}
+
+function selectedProviderClass(roleType: RoleType) {
+  const selected = selectedModelOption(roleType)
+  return selected ? providerOptionClass(selected) : ''
+}
+
+function selectedProviderText(roleType: RoleType) {
+  const selected = selectedModelOption(roleType)
+  return selected ? providerOptionText(selected) : ''
+}
+
+function providerOptionClass(option: Pick<ModelPoolOption, 'providerName' | 'modelName'>) {
+  const source = `${option.providerName} ${option.modelName}`.toLowerCase()
+  if (source.includes('anthropic') || source.includes('claude')) return 'provider-anthropic'
+  if (source.includes('deepseek')) return 'provider-deepseek'
+  if (source.includes('google') || source.includes('gemini')) return 'provider-google'
+  if (source.includes('qwen') || source.includes('通义') || source.includes('alibaba')) return 'provider-qwen'
+  return 'provider-openai'
+}
+
+function providerOptionText(option: Pick<ModelPoolOption, 'providerName' | 'modelName'>) {
+  const source = `${option.providerName} ${option.modelName}`.toLowerCase()
+  if (source.includes('anthropic') || source.includes('claude')) return 'Anthropic'
+  if (source.includes('deepseek')) return 'DeepSeek'
+  if (source.includes('google') || source.includes('gemini')) return 'Google'
+  if (source.includes('qwen') || source.includes('通义') || source.includes('alibaba')) return 'Alibaba'
+  return option.providerName || 'OpenAI'
+}
+
+function toggleModelSelect(roleType: RoleType) {
+  openModelRole.value = openModelRole.value === roleType ? null : roleType
+}
+
+function toggleRoleStatus(roleType: RoleType) {
+  forms[roleType].status = forms[roleType].status === 1 ? 0 : 1
+}
+
+function selectModelOption(roleType: RoleType, option: ModelPoolOption) {
+  openModelRole.value = null
+  handleRoleModelPoolChanged(roleType, option.key)
+}
+
+function handleRoleModelPoolChanged(roleType: RoleType, value: string) {
+  const [providerIdText, modelName] = value.split('::')
+  const providerConnectionId = Number(providerIdText)
+  forms[roleType].providerConnectionId = Number.isFinite(providerConnectionId) ? providerConnectionId : null
+  forms[roleType].model = modelName ?? ''
+  handleRoleConnectionChanged(roleType)
 }
 
 function recomputeEffectiveCapabilities(roleType: RoleType) {
@@ -248,37 +318,14 @@ function applyLoadedRole(roleType: RoleType, config: AiCaseConfig | null) {
     forms[roleType].capabilityOverride,
   )
   forms[roleType].supportsImageInput = config.supportsImageInput
-  syncStyleFromTemperature(roleType)
 }
 
 async function loadProviders() {
-  providerLoading.value = true
   try {
     providers.value = await platformApi.getAiProviderConnections('ALL')
   } catch (error) {
     ElMessage.error((error as Error).message)
-  } finally {
-    providerLoading.value = false
   }
-}
-
-async function loadProviderModels(connectionId: number, forceFetch = false) {
-  if (!connectionId) {
-    return []
-  }
-  try {
-    if (forceFetch) {
-      const response = await platformApi.fetchAiProviderModels('ALL', connectionId)
-      providerModels[connectionId] = response.models
-      ElMessage.success(response.message || '模型列表已刷新')
-    } else {
-      providerModels[connectionId] = await platformApi.getAiProviderModels('ALL', connectionId)
-    }
-  } catch (error) {
-    ElMessage.error((error as Error).message)
-    providerModels[connectionId] = providerModels[connectionId] ?? []
-  }
-  return providerModels[connectionId] ?? []
 }
 
 async function loadConfig() {
@@ -287,34 +334,12 @@ async function loadConfig() {
   resetRoleForm('CASE_REVIEWER')
   try {
     const response = await platformApi.getAiCaseConfig('ALL')
-    hasLegacyConfig.value = response.hasLegacyConfig
-    canBootstrapFromLegacy.value = response.canBootstrapFromLegacy
     applyLoadedRole('CASE_GENERATOR', response.generatorConfig)
     applyLoadedRole('CASE_REVIEWER', response.reviewerConfig)
-    const connectionIds = Array.from(new Set(
-      [forms.CASE_GENERATOR.providerConnectionId, forms.CASE_REVIEWER.providerConnectionId]
-        .filter((item): item is number => typeof item === 'number' && item > 0),
-    ))
-    await Promise.all(connectionIds.map(connectionId => loadProviderModels(connectionId)))
   } catch (error) {
     ElMessage.error((error as Error).message)
   } finally {
     loading.value = false
-  }
-}
-
-async function bootstrapLegacyConfig() {
-  bootstrappingLegacy.value = true
-  try {
-    const response = await platformApi.bootstrapAiCaseConfigFromLegacy('ALL')
-    hasLegacyConfig.value = response.hasLegacyConfig
-    canBootstrapFromLegacy.value = response.canBootstrapFromLegacy
-    ElMessage.success('旧版 AI 配置已复制到当前账号')
-    await Promise.all([loadProviders(), loadConfig()])
-  } catch (error) {
-    ElMessage.error((error as Error).message)
-  } finally {
-    bootstrappingLegacy.value = false
   }
 }
 
@@ -325,68 +350,25 @@ function goToAiConnections() {
   })
 }
 
-async function handleRoleConnectionChanged(roleType: RoleType) {
-  const connectionId = forms[roleType].providerConnectionId
+function handleRoleConnectionChanged(roleType: RoleType) {
   forms[roleType].detectedCapabilities = createUnknownCapabilities()
   recomputeEffectiveCapabilities(roleType)
-  if (!connectionId) {
-    return
-  }
-  await loadProviderModels(connectionId)
-  if (forms[roleType].model.trim()) {
-    const matched = (providerModels[connectionId] ?? []).find(item => item.modelName === forms[roleType].model.trim())
-    if (matched) {
-      forms[roleType].detectedCapabilities = matched.detectedCapabilities
-      recomputeEffectiveCapabilities(roleType)
-    }
-  }
 }
 
-async function handleRoleModelChanged(roleType: RoleType) {
-  const connectionId = forms[roleType].providerConnectionId
-  const model = forms[roleType].model.trim()
-  if (!connectionId || !model) {
-    forms[roleType].detectedCapabilities = createUnknownCapabilities()
-    recomputeEffectiveCapabilities(roleType)
+async function testRoleConnection(roleType: RoleType) {
+  if (!canSaveRole(roleType)) {
+    ElMessage.error('请先补全当前角色绑定配置')
     return
   }
-  const cached = (providerModels[connectionId] ?? []).find(item => item.modelName === model)
-  if (cached) {
-    forms[roleType].detectedCapabilities = cached.detectedCapabilities
-    recomputeEffectiveCapabilities(roleType)
-  }
-  await probeRoleModel(roleType)
-}
-
-async function probeRoleModel(roleType: RoleType) {
-  const connectionId = forms[roleType].providerConnectionId
-  const model = forms[roleType].model.trim()
-  if (!connectionId || !model) {
-    return
-  }
-  probingRole.value = roleType
+  testingRole.value = roleType
   try {
-    const result = await platformApi.probeAiProviderModel('ALL', connectionId, model)
-    const nextModels = providerModels[connectionId] ?? []
-    const index = nextModels.findIndex(item => item.modelName === result.modelName)
-    if (index >= 0) {
-      nextModels.splice(index, 1, result)
-    } else {
-      nextModels.unshift(result)
-    }
-    providerModels[connectionId] = [...nextModels]
-    forms[roleType].detectedCapabilities = result.detectedCapabilities
-    recomputeEffectiveCapabilities(roleType)
+    const response = await platformApi.testAiCaseConfig('ALL', buildRolePayload(roleType))
+    ElMessage.success(response.message || '测试连接成功')
   } catch (error) {
     ElMessage.error((error as Error).message)
   } finally {
-    probingRole.value = null
+    testingRole.value = null
   }
-}
-
-function updateCapabilityOverride(roleType: RoleType, key: CapabilityKey, value: string) {
-  forms[roleType].capabilityOverride[key] = value === 'inherit' ? null : value === 'true'
-  recomputeEffectiveCapabilities(roleType)
 }
 
 function canSaveRole(roleType: RoleType) {
@@ -439,230 +421,234 @@ async function saveRole(roleType: RoleType) {
   }
 }
 
-watch(() => forms.CASE_GENERATOR.temperature, () => syncStyleFromTemperature('CASE_GENERATOR'))
-watch(() => forms.CASE_REVIEWER.temperature, () => syncStyleFromTemperature('CASE_REVIEWER'))
+function handleDocumentPointerDown(event: MouseEvent) {
+  const target = event.target
+  if (target instanceof Element && target.closest('.model-select-native')) {
+    return
+  }
+  openModelRole.value = null
+}
 
 onMounted(async () => {
+  document.addEventListener('mousedown', handleDocumentPointerDown)
   await Promise.all([loadProviders(), loadConfig()])
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', handleDocumentPointerDown)
 })
 </script>
 
 <template>
-  <section class="page-shell ai-role-page">
-    <article class="panel-card overview-card">
-      <div class="panel-header">
-        <div>
-          <div class="panel-title">AI角色配置</div>
-          <div class="panel-subtitle">这里负责绑定你自己的 AI 连接，并配置生成模型、评审模型及对应 Prompt。</div>
-        </div>
-        <div class="panel-header-actions">
-          <el-button @click="loadConfig">
-            <el-icon><RefreshRight /></el-icon>
-            刷新配置
-          </el-button>
-          <el-button type="primary" @click="goToAiConnections">
-            <el-icon><Setting /></el-icon>
-            管理AI连接
-          </el-button>
-        </div>
-      </div>
+  <section v-loading="loading" class="ai-config-modern-page">
+    <div class="ai-config-tip">
+      <Info class="ai-config-tip-icon" />
+      <span>
+        模型来自连接池，共 <strong>{{ totalModelCount }}</strong> 个可选。如需添加，请前往
+        <button type="button" class="tip-link" @click="goToAiConnections">系统设置 → AI 连接</button>
+      </span>
+    </div>
 
-      <div v-if="canBootstrapFromLegacy" class="legacy-banner">
-        <div>
-          <div class="legacy-title">检测到旧版全局 AI 配置</div>
-          <div class="legacy-desc">当前账号还没有个人 AI 配置，可以一键复制旧版配置到“我的连接”和“我的角色配置”。</div>
-        </div>
-        <el-button type="primary" :loading="bootstrappingLegacy" @click="bootstrapLegacyConfig">复制为我的配置</el-button>
-      </div>
+    <div v-if="hasNoProviders" class="empty-inline">
+      你还没有可用的 AI 连接，请先到系统设置中创建。
+      <el-button link type="primary" @click="goToAiConnections">去创建连接</el-button>
+    </div>
 
-      <div v-else-if="hasLegacyConfig" class="legacy-note">
-        旧版全局 AI 配置仍保留在系统中，但当前页面只展示并使用你自己的 AI 配置。
-      </div>
-
-      <div v-if="hasNoProviders" class="empty-inline">
-        你还没有可用的 AI 连接，请先到系统设置中创建。
-        <el-button link type="primary" @click="goToAiConnections">去创建连接</el-button>
-      </div>
-    </article>
-
-    <div class="ai-config-grid">
-      <article v-for="meta in roleMeta" :key="meta.roleType" class="panel-card ai-config-card">
-        <div class="panel-header">
-          <div>
-            <div class="panel-title">{{ meta.title }}</div>
-            <div class="panel-subtitle">{{ meta.subtitle }}</div>
+    <div class="ai-config-card-grid">
+      <article
+        v-for="meta in roleMeta"
+        :key="meta.roleType"
+        class="ai-role-card"
+        :class="{ 'is-disabled': forms[meta.roleType].status !== 1 }"
+      >
+        <header class="ai-role-card-header">
+          <div class="role-heading">
+            <div class="role-icon" :class="meta.iconClass">
+              <Zap v-if="meta.iconType === 'generator'" class="role-icon-svg" />
+              <ClipboardCheck v-else class="role-icon-svg" />
+            </div>
+            <div>
+              <h3>{{ meta.title }}</h3>
+              <p>{{ meta.subtitle }}</p>
+            </div>
           </div>
-          <div class="panel-header-actions">
-            <el-button
-              :loading="probingRole === meta.roleType"
-              :disabled="!forms[meta.roleType].providerConnectionId || !forms[meta.roleType].model.trim()"
-              @click="probeRoleModel(meta.roleType)"
-            >
-              <el-icon><MagicStick /></el-icon>
-              探测能力
-            </el-button>
-            <el-button
-              type="primary"
-              :loading="savingRole === meta.roleType"
-              :disabled="!canSaveRole(meta.roleType)"
-              @click="saveRole(meta.roleType)"
-            >
-              <el-icon><Setting /></el-icon>
-              保存绑定
-            </el-button>
-          </div>
-        </div>
-
-        <el-form label-width="100px" :disabled="loading" class="ai-config-form">
-          <el-form-item label="绑定连接">
-            <div class="field-stack">
-              <el-select
-                v-model="forms[meta.roleType].providerConnectionId"
-                placeholder="请选择已保存的 AI 连接"
-                @change="handleRoleConnectionChanged(meta.roleType)"
-              >
-                <el-option
-                  v-for="option in providerSelectOptions"
-                  :key="option.value"
-                  :label="option.label"
-                  :value="option.value"
-                />
-              </el-select>
-              <div v-if="hasNoProviders" class="field-hint">
-                当前没有可绑定的 AI 连接。
-                <el-button link type="primary" @click="goToAiConnections">去创建连接</el-button>
-              </div>
-            </div>
-          </el-form-item>
-
-          <el-form-item label="模型">
-            <div class="field-stack">
-              <div class="inline-row">
-                <el-select
-                  v-model="forms[meta.roleType].model"
-                  filterable
-                  allow-create
-                  default-first-option
-                  clearable
-                  placeholder="先获取模型列表，或直接手工输入模型名"
-                  class="flex-select"
-                  @change="handleRoleModelChanged(meta.roleType)"
-                >
-                  <el-option
-                    v-for="item in getRoleModels(meta.roleType)"
-                    :key="item.modelName"
-                    :label="item.displayName || item.modelName"
-                    :value="item.modelName"
-                  />
-                </el-select>
-                <el-button
-                  :loading="providerFetchingId === forms[meta.roleType].providerConnectionId"
-                  :disabled="!forms[meta.roleType].providerConnectionId"
-                  @click="loadProviderModels(forms[meta.roleType].providerConnectionId!, true)"
-                >
-                  <el-icon><RefreshRight /></el-icon>
-                  获取模型
-                </el-button>
-              </div>
-              <div class="field-hint">
-                支持下拉选择，也支持在服务端不提供 `/models` 时直接手工输入模型名称。
-              </div>
-            </div>
-          </el-form-item>
-
-          <el-form-item label="状态">
-            <div class="status-toggle-row">
-              <el-switch v-model="forms[meta.roleType].status" :active-value="1" :inactive-value="0" />
-              <span class="status-toggle-text">{{ statusText(forms[meta.roleType].status) }}</span>
-            </div>
-          </el-form-item>
-
-          <el-form-item label="生成风格">
-            <el-segmented
-              :model-value="generationStyle[meta.roleType]"
-              :options="[
-                { label: '稳定', value: 'stable' },
-                { label: '均衡', value: 'balanced' },
-                { label: '发散', value: 'creative' },
-                { label: '自定义', value: 'custom' },
-              ]"
-              @change="(value: string | number | boolean) => applyStyle(meta.roleType, value as GenerationStyle)"
+          <div class="role-status">
+            <span>{{ statusText(forms[meta.roleType].status).replace('启用中', '已启用') }}</span>
+            <button
+              type="button"
+              class="native-toggle"
+              :class="{ 'is-on': forms[meta.roleType].status === 1 }"
+              :aria-pressed="forms[meta.roleType].status === 1"
+              @click="toggleRoleStatus(meta.roleType)"
             />
-          </el-form-item>
-
-          <el-form-item label="Temperature">
-            <div class="temperature-field">
-              <el-slider v-model="forms[meta.roleType].temperature" :min="0" :max="1" :step="0.1" />
-              <div class="temperature-meta">
-                <span class="temperature-badge">{{ temperatureLabel(meta.roleType) }}</span>
-                <span>{{ forms[meta.roleType].temperature.toFixed(1) }}</span>
-              </div>
-            </div>
-          </el-form-item>
-
-          <el-form-item label="系统上限">
-            <el-input-number v-model="forms[meta.roleType].maxCases" :min="1" :max="100" />
-          </el-form-item>
-
-          <el-form-item label="能力矩阵">
-            <div class="capability-panel">
-              <div class="capability-header">
-                <div>能力项</div>
-                <div>自动探测</div>
-                <div>人工修正</div>
-                <div>最终生效</div>
-              </div>
-              <div v-for="item in capabilityMeta" :key="item.key" class="capability-row">
-                <div class="capability-name">
-                  <div>{{ item.label }}</div>
-                  <div class="capability-hint">{{ item.hint }}</div>
-                </div>
-                <div class="capability-value">
-                  <el-tag size="small" effect="plain" :type="forms[meta.roleType].detectedCapabilities[item.key].supported === true ? 'success' : forms[meta.roleType].detectedCapabilities[item.key].supported === false ? 'danger' : 'info'">
-                    {{ capabilityStateText(forms[meta.roleType].detectedCapabilities[item.key].supported) }}
-                  </el-tag>
-                  <span class="source-text">{{ capabilitySourceText[forms[meta.roleType].detectedCapabilities[item.key].source] }}</span>
-                </div>
-                <div>
-                  <el-select
-                    :model-value="overrideValueForSelect(forms[meta.roleType].capabilityOverride[item.key])"
-                    @change="(value: string) => updateCapabilityOverride(meta.roleType, item.key, value)"
-                  >
-                    <el-option label="跟随自动探测" value="inherit" />
-                    <el-option label="强制支持" value="true" />
-                    <el-option label="强制禁用" value="false" />
-                  </el-select>
-                </div>
-                <div class="capability-value">
-                  <el-tag size="small" :type="forms[meta.roleType].effectiveCapabilities[item.key].supported === true ? 'success' : forms[meta.roleType].effectiveCapabilities[item.key].supported === false ? 'danger' : 'info'">
-                    {{ capabilityStateText(forms[meta.roleType].effectiveCapabilities[item.key].supported) }}
-                  </el-tag>
-                  <span class="source-text">{{ capabilitySourceText[forms[meta.roleType].effectiveCapabilities[item.key].source] }}</span>
-                </div>
-              </div>
-            </div>
-          </el-form-item>
-
-          <el-form-item label="Prompt 模板">
-            <el-input v-model="forms[meta.roleType].promptTemplate" type="textarea" :rows="10" resize="vertical" />
-          </el-form-item>
-
-          <el-form-item :label="reviewChecklistLabel(meta.roleType)">
-            <el-input v-model="forms[meta.roleType].reviewChecklist" type="textarea" :rows="5" resize="vertical" />
-          </el-form-item>
-        </el-form>
-
-        <div class="detail-card ai-config-summary">
-          <div class="detail-title">{{ meta.title }}</div>
-          <div class="detail-meta">
-            {{ forms[meta.roleType].providerConnectionId ? '已绑定连接，可直接参与当前账号的 AI 业务链路。' : '尚未绑定连接。' }}
           </div>
-          <div class="detail-body"><strong>当前连接：</strong>{{ getProviderById(forms[meta.roleType].providerConnectionId)?.connectionName ?? '-' }}</div>
-          <div class="detail-body"><strong>当前模型：</strong>{{ forms[meta.roleType].model || '-' }}</div>
-          <div class="detail-body"><strong>Temperature：</strong>{{ forms[meta.roleType].temperature.toFixed(1) }}（{{ temperatureLabel(meta.roleType) }}）</div>
-          <div class="detail-body"><strong>系统上限：</strong>{{ forms[meta.roleType].maxCases }} 条</div>
-          <div class="detail-body"><strong>图片输入：</strong>{{ forms[meta.roleType].supportsImageInput ? '已开启' : '未开启' }}</div>
-          <div class="detail-body"><strong>状态：</strong>{{ statusText(forms[meta.roleType].status) }}</div>
+        </header>
+
+        <div class="ai-role-card-body">
+          <div class="form-block">
+            <label class="field-label">选择模型</label>
+            <div class="field-help">从 AI 连接池中选择已配置的模型</div>
+            <div class="model-row">
+              <div class="model-select-native">
+                <button
+                  type="button"
+                  class="model-select-trigger"
+                  :class="{ 'is-open': openModelRole === meta.roleType }"
+                  @click="toggleModelSelect(meta.roleType)"
+                >
+                  <template v-if="selectedModelOption(meta.roleType)">
+                    <span class="model-select-name">{{ selectedModelOption(meta.roleType)?.displayName }}</span>
+                    <span
+                      class="provider-chip"
+                      :class="selectedProviderClass(meta.roleType)"
+                    >
+                      {{ selectedProviderText(meta.roleType) }}
+                    </span>
+                  </template>
+                  <span v-else class="model-select-placeholder">请选择模型</span>
+                  <ChevronDown class="model-select-chevron" />
+                </button>
+
+                <div v-if="openModelRole === meta.roleType" class="model-select-dropdown">
+                  <button
+                    v-for="option in modelPoolOptions"
+                    :key="option.key"
+                    type="button"
+                    class="model-select-option"
+                    :class="{ 'is-selected': selectedModelKey(meta.roleType) === option.key }"
+                    @click="selectModelOption(meta.roleType, option)"
+                  >
+                    <div class="model-option-copy">
+                      <div class="model-option-title-row">
+                        <span class="model-option-title">{{ option.displayName }}</span>
+                        <span
+                          v-if="option.displayName.toLowerCase().includes('gpt-4o') || option.displayName.toLowerCase().includes('sonnet')"
+                          class="model-badge"
+                        >
+                          推荐
+                        </span>
+                      </div>
+                      <span class="provider-chip option-provider-chip" :class="providerOptionClass(option)">
+                        {{ providerOptionText(option) }}
+                      </span>
+                    </div>
+                    <Check v-if="selectedModelKey(meta.roleType) === option.key" class="model-option-check" />
+                  </button>
+                  <div v-if="modelPoolOptions.length === 0" class="model-select-empty">暂无可选模型</div>
+                </div>
+              </div>
+              <button
+                type="button"
+                class="test-button"
+                :disabled="!canSaveRole(meta.roleType)"
+                @click="testRoleConnection(meta.roleType)"
+              >
+                <Sparkles :class="{ 'is-loading': testingRole === meta.roleType }" />
+                {{ testingRole === meta.roleType ? '连接中...' : '测试连接' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="slider-block">
+            <div class="slider-header">
+              <div class="slider-label">
+                <span>创意度 (Temperature)</span>
+                <span class="field-tooltip">
+                  <Info class="inline-info-icon" />
+                  <span class="field-tooltip-popover">
+                    控制回答的随机性与创意程度。
+                    <br>• 偏低（精准）：回答更稳定、一致
+                    <br>• 偏高（创意）：回答更多样、发散
+                    <br>建议生成任务用 0.5，评审任务用 0.3
+                  </span>
+                </span>
+              </div>
+              <span class="slider-value" :class="`tone-${temperatureTone(meta.roleType)}`">
+                {{ temperatureLabel(meta.roleType) }} ({{ forms[meta.roleType].temperature.toFixed(1) }})
+              </span>
+            </div>
+            <input
+              v-model.number="forms[meta.roleType].temperature"
+              type="range"
+              min="0"
+              max="1"
+              step="0.1"
+              class="native-range"
+            >
+            <div class="slider-scale">
+              <span>精准</span>
+              <span>创意</span>
+            </div>
+          </div>
+
+          <div class="slider-block">
+            <div class="slider-header">
+              <div class="slider-label">
+                <span>采样范围 (Top-p)</span>
+                <span class="field-tooltip">
+                  <Info class="inline-info-icon" />
+                  <span class="field-tooltip-popover">
+                    控制 AI 选词的候选范围（核采样）。
+                    <br>• 偏低（聚焦）：用词更精准、克制
+                    <br>• 偏高（发散）：表达更丰富、多样
+                    <br>建议生成任务用 0.9，评审任务用 0.7
+                  </span>
+                </span>
+              </div>
+              <span class="slider-value" :class="`tone-${topPTone(meta.roleType)}`">
+                {{ topPLabel(meta.roleType) }} ({{ topPValues[meta.roleType].toFixed(1) }})
+              </span>
+            </div>
+            <input
+              v-model.number="topPValues[meta.roleType]"
+              type="range"
+              min="0.1"
+              max="1"
+              step="0.1"
+              class="native-range"
+            >
+            <div class="slider-scale">
+              <span>聚焦</span>
+              <span>发散</span>
+            </div>
+          </div>
+
+          <div class="prompt-block">
+            <div class="prompt-header">
+              <label class="field-label">角色提示词</label>
+              <button type="button" class="restore-button" @click="restoreDefaultPrompt(meta.roleType)">
+                <RotateCcw />
+                恢复默认
+              </button>
+            </div>
+            <el-input
+              v-model="forms[meta.roleType].promptTemplate"
+              type="textarea"
+              :rows="7"
+              resize="none"
+              class="prompt-textarea"
+            />
+            <p class="prompt-hint">
+              <Info />
+              提示词会附加在每次 AI 请求前，影响生成结果的风格和质量
+            </p>
+          </div>
+
+          <div class="hidden-business-fields" aria-hidden="true">
+            <el-input v-model="forms[meta.roleType].reviewChecklist" type="hidden" />
+            <el-input-number v-model="forms[meta.roleType].maxCases" :min="1" :max="100" />
+          </div>
+
+          <button
+            type="button"
+            class="save-config-button"
+            :disabled="!canSaveRole(meta.roleType)"
+            @click="saveRole(meta.roleType)"
+          >
+            <Save v-if="savingRole !== meta.roleType" />
+            <Sparkles v-else class="is-loading" />
+            {{ savingRole === meta.roleType ? '保存中...' : '保存配置' }}
+          </button>
         </div>
       </article>
     </div>
@@ -670,193 +656,701 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.ai-role-page {
-  display: grid;
-  gap: 16px;
+.ai-config-modern-page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-height: 100%;
+  padding: 0;
+  color: #111827;
 }
 
-.overview-card {
-  display: grid;
+.ai-config-tip {
+  display: flex;
+  align-items: center;
   gap: 12px;
+  min-height: 52px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: #eff6ff;
+  padding: 14px;
+  color: #1d4ed8;
+  font-size: 14px;
+  line-height: 20px;
 }
 
-.panel-header-actions {
+.ai-config-tip-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  color: #3b82f6;
+  stroke-width: 2;
+}
+
+.tip-link {
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 500;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.native-toggle,
+.model-select-trigger,
+.model-select-option,
+.test-button,
+.restore-button,
+.save-config-button {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
 }
 
-.legacy-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 16px;
-  border-radius: 10px;
-  background: rgba(36, 107, 255, 0.08);
-  border: 1px solid rgba(36, 107, 255, 0.16);
-}
-
-.legacy-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-main);
-}
-
-.legacy-desc,
-.legacy-note,
 .empty-inline {
+  border-radius: 12px;
+  color: #6b7280;
   font-size: 13px;
   line-height: 1.7;
-  color: var(--text-subtle);
 }
 
-.legacy-note {
-  padding: 2px 0;
-}
-
-.ai-config-grid {
+.ai-config-card-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 24px;
 }
 
-.ai-config-form {
-  margin-top: 4px;
+.ai-role-card {
+  overflow: hidden;
+  border: 1px solid #bfdbfe;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 4px 8px -2px rgba(59, 130, 246, 0.06), 0 2px 4px -2px rgba(59, 130, 246, 0.04);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.field-stack {
-  width: 100%;
+.ai-role-card:hover {
+  box-shadow: 0 10px 20px -8px rgba(59, 130, 246, 0.18);
 }
 
-.inline-row {
+.ai-role-card.is-disabled .ai-role-card-body {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.ai-role-card-header {
   display: flex;
-  gap: 10px;
-  width: 100%;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 80px;
+  border-bottom: 1px solid #f3f4f6;
+  padding: 20px 24px 16px;
 }
 
-.flex-select {
-  flex: 1;
+.role-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   min-width: 0;
 }
 
-.field-hint {
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--text-subtle);
-  line-height: 1.6;
+.role-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 12px;
 }
 
-.status-toggle-row {
+.role-icon-blue {
+  background: #eff6ff;
+  color: #3b82f6;
+}
+
+.role-icon-green {
+  background: #ecfdf5;
+  color: #22c55e;
+}
+
+.role-icon-svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2;
+}
+
+.role-heading h3 {
+  margin: 0;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.role-heading p {
+  margin: 2px 0 0;
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.role-status {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  padding-top: 2px;
+  color: #6b7280;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
-.status-toggle-text {
-  font-size: 13px;
-  color: var(--text-subtle);
+.native-toggle {
+  position: relative;
+  width: 40px;
+  height: 20px;
+  flex: 0 0 40px;
+  border-radius: 999px;
+  background: #d1d5db;
+  transition: background-color 0.2s ease;
 }
 
-.temperature-field {
+.native-toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.18);
+  transition: transform 0.2s ease;
+}
+
+.native-toggle.is-on {
+  background: #3b82f6;
+}
+
+.native-toggle.is-on::after {
+  transform: translateX(20px);
+}
+
+.ai-role-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px 24px;
+}
+
+.form-block,
+.prompt-block,
+.slider-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-label,
+.slider-label {
+  color: #374151;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.field-help {
+  margin-top: -4px;
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.model-select-native {
+  position: relative;
+  min-width: 0;
+}
+
+.model-select-trigger {
   width: 100%;
+  min-height: 42px;
+  gap: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 10px 12px;
+  color: #374151;
+  font-size: 14px;
+  line-height: 20px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.temperature-meta {
+.model-select-trigger:hover,
+.model-select-trigger.is-open {
+  border-color: #93c5fd;
+}
+
+.model-select-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: #1f2937;
+  font-weight: 500;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-select-placeholder {
+  flex: 1 1 auto;
+  color: #9ca3af;
+  text-align: left;
+}
+
+.model-select-chevron {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  color: #9ca3af;
+  stroke-width: 2;
+  transition: transform 0.15s ease;
+}
+
+.model-select-trigger.is-open .model-select-chevron {
+  transform: rotate(180deg);
+}
+
+.model-select-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 20px 25px -5px rgba(15, 23, 42, 0.12), 0 8px 10px -6px rgba(15, 23, 42, 0.10);
+  padding: 6px 0;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.model-select-dropdown::-webkit-scrollbar {
+  width: 6px;
+}
+
+.model-select-dropdown::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #d1d5db;
+}
+
+.model-select-option {
+  width: 100%;
+  min-height: 56px;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: 0;
+  background: #ffffff;
+  color: #1f2937;
+  padding: 10px 12px;
+  text-align: left;
+  transition: background-color 0.15s ease;
+}
+
+.model-select-option:hover {
+  background: #f9fafb;
+}
+
+.model-select-option.is-selected {
+  background: #eff6ff;
+}
+
+.model-option-copy {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.model-option-title-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-top: 8px;
-  font-size: 13px;
-  color: var(--text-subtle);
+  max-width: 100%;
+  gap: 8px;
 }
 
-.temperature-badge {
+.model-option-title {
+  overflow: hidden;
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-badge {
+  flex: 0 0 auto;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #2563eb;
+  padding: 1px 6px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.model-option-check {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  color: #3b82f6;
+  stroke-width: 2;
+}
+
+.model-select-empty {
+  padding: 12px;
+  color: #9ca3af;
+  font-size: 13px;
+  text-align: center;
+}
+
+.provider-chip {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
+  min-height: 20px;
   border-radius: 999px;
-  background: rgba(59, 130, 246, 0.1);
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.option-provider-chip {
+  padding: 1px 6px;
+}
+
+.provider-openai {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.provider-anthropic {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.provider-google {
+  background: #dbeafe;
   color: #2563eb;
 }
 
-.capability-panel {
-  width: 100%;
-  border: 1px solid var(--el-border-color);
-  border-radius: 8px;
-  overflow: hidden;
+.provider-deepseek {
+  background: #f3e8ff;
+  color: #7e22ce;
 }
 
-.capability-header,
-.capability-row {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr 1fr 1fr;
-  gap: 12px;
-  padding: 12px 14px;
+.provider-qwen {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.test-button {
+  height: 42px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #4b5563;
+  padding: 0 14px;
+  font-size: 14px;
+  line-height: 20px;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.test-button svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2;
+}
+
+.test-button:hover:not(:disabled) {
+  border-color: #bfdbfe;
+  background: #f9fafb;
+}
+
+.test-button:disabled,
+.save-config-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.slider-header,
+.prompt-header {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.capability-header {
-  background: var(--el-fill-color-light);
-  color: var(--text-subtle);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.capability-row + .capability-row {
-  border-top: 1px solid var(--el-border-color-lighter);
-}
-
-.capability-name {
-  min-width: 0;
-}
-
-.capability-hint {
-  margin-top: 4px;
-  color: var(--text-subtle);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.capability-value {
+.slider-label {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.source-text {
-  color: var(--text-subtle);
+.field-tooltip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+}
+
+.inline-info-icon,
+.prompt-hint svg {
+  width: 14px;
+  height: 14px;
+  color: #9ca3af;
+  stroke-width: 2;
+}
+
+.field-tooltip:hover .inline-info-icon {
+  color: #60a5fa;
+}
+
+.field-tooltip-popover {
+  pointer-events: none;
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  z-index: 30;
+  width: 208px;
+  transform: translateY(-50%) translateX(-2px);
+  border-radius: 12px;
+  background: #111827;
+  color: #ffffff;
+  box-shadow: 0 20px 25px -5px rgba(15, 23, 42, 0.22), 0 8px 10px -6px rgba(15, 23, 42, 0.16);
   font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+  opacity: 0;
+  padding: 10px 12px;
+  text-align: left;
+  white-space: normal;
+  transition: opacity 0.12s ease, transform 0.12s ease;
 }
 
-.ai-config-summary {
-  margin-top: 12px;
+.field-tooltip-popover::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 100%;
+  width: 0;
+  height: 0;
+  transform: translateY(-50%);
+  border-top: 4px solid transparent;
+  border-right: 4px solid #111827;
+  border-bottom: 4px solid transparent;
+}
+
+.field-tooltip:hover .field-tooltip-popover {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+.slider-value {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tone-safe {
+  color: #2563eb;
+}
+
+.tone-balanced {
+  color: #16a34a;
+}
+
+.tone-creative {
+  color: #f97316;
+}
+
+.native-range {
+  width: 100%;
+  height: 6px;
+  margin: 5px 0 2px;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.native-range:focus {
+  outline: none;
+}
+
+.native-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #e5e7eb;
+}
+
+.native-range::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -4px;
+  border: 0;
+  border-radius: 999px;
+  appearance: none;
+  background: #3b82f6;
+  box-shadow: 0 0 0 2px #ffffff, 0 1px 4px rgba(37, 99, 235, 0.35);
+}
+
+.native-range::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #e5e7eb;
+}
+
+.native-range::-moz-range-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: #e5e7eb;
+}
+
+.native-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 999px;
+  background: #3b82f6;
+  box-shadow: 0 0 0 2px #ffffff, 0 1px 4px rgba(37, 99, 235, 0.35);
+}
+
+.slider-scale {
+  display: flex;
+  justify-content: space-between;
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.restore-button {
+  gap: 4px;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 12px;
+  padding: 0;
+  transition: color 0.15s ease;
+}
+
+.restore-button:hover {
+  color: #2563eb;
+}
+
+.restore-button svg,
+.save-config-button svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2;
+}
+
+.restore-button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.prompt-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0 0;
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.hidden-business-fields {
+  display: none;
+}
+
+.save-config-button {
+  width: 100%;
+  height: 42px;
+  border-radius: 12px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.save-config-button:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.save-config-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.is-loading {
+  animation: spin 0.9s linear infinite;
+}
+
+:deep(.prompt-textarea .el-textarea__inner) {
+  min-height: 170px !important;
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px #e5e7eb inset;
+  color: #374151;
+  font-size: 14px;
+  line-height: 22px;
+  padding: 12px;
+  transition: box-shadow 0.15s ease;
+}
+
+:deep(.prompt-textarea .el-textarea__inner:focus) {
+  box-shadow: 0 0 0 1px #3b82f6 inset, 0 0 0 2px rgba(59, 130, 246, 0.12);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 1280px) {
-  .ai-config-grid {
+  .ai-config-card-grid {
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 960px) {
-  .legacy-banner {
-    flex-direction: column;
+  .ai-config-tip,
+  .empty-inline {
     align-items: flex-start;
-  }
-
-  .capability-header {
-    display: none;
-  }
-
-  .capability-row {
-    grid-template-columns: 1fr;
-  }
-
-  .inline-row {
     flex-direction: column;
+  }
+
+  .model-row {
+    grid-template-columns: 1fr;
   }
 }
 </style>

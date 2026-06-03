@@ -9,6 +9,7 @@ public record ReviewAiGeneratedCasesRequest(
         @NotBlank(message = "Requirement title is required") String requirementTitle,
         @NotBlank(message = "Requirement content is required") String requirementContent,
         String sceneFocus,
+        List<String> remainingCoverageGaps,
         @NotEmpty(message = "Generated cases are required") List<AiExistingCaseItem> generatedCases
 ) {
 }

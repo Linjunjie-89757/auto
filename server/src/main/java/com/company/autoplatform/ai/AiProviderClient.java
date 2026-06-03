@@ -105,6 +105,8 @@ public class AiProviderClient {
             if (!casesNode.isArray()) {
                 throw new BadRequestException("AI 返回内容无法解析为结构化用例");
             }
+            String coverageSummary = parsed.isArray() ? null : optionalText(parsed, "coverageSummary");
+            List<String> remainingCoverageGaps = parsed.isArray() ? List.of() : stringList(parsed.path("remainingCoverageGaps"));
             List<GeneratedAiCaseItem> items = new ArrayList<>();
             List<String> warnings = new ArrayList<>();
             List<AiInvalidCaseItem> invalidCases = new ArrayList<>();
@@ -147,9 +149,15 @@ public class AiProviderClient {
                         optionalText(item, "testAngle"),
                         optionalText(item, "generationReason"),
                         optionalText(item, "requirementEvidence"),
+                        firstText(item, "aiSource", "source"),
+                        optionalText(item, "reviewComment"),
+                        optionalText(item, "optimizationReason"),
+                        optionalText(item, "supplementReason"),
+                        optionalText(item, "coverageGap"),
+                        null,
                         itemWarnings,
-                        null,
-                        null,
+                        firstText(item, "aiReviewStatus", "reviewStatus"),
+                        firstText(item, "aiReviewSummary", "reviewSummary"),
                         false,
                         null,
                         null
@@ -158,7 +166,7 @@ public class AiProviderClient {
             if (items.isEmpty()) {
                 throw new BadRequestException("AI 返回已解析，但没有得到有效用例");
             }
-            return new AiGeneratedCasesResult(items, warnings, invalidCases, normalizedJson);
+            return new AiGeneratedCasesResult(items, coverageSummary, remainingCoverageGaps, warnings, invalidCases, normalizedJson);
         } catch (IOException exception) {
             throw new BadRequestException("AI 返回内容无法解析为结构化用例");
         }
@@ -171,6 +179,17 @@ public class AiProviderClient {
             String summary = optionalText(parsed, "summary");
             List<String> issues = stringList(parsed.path("issues"));
             List<String> suggestions = stringList(parsed.path("suggestions"));
+            List<AiReviewCaseDecision> caseDecisions = parseReviewCaseDecisions(parsed.path("caseDecisions"));
+            if (caseDecisions.isEmpty()) {
+                caseDecisions = parseReviewCaseDecisions(parsed.path("reviews"));
+            }
+            List<GeneratedAiCaseItem> supplementCases = parseGeneratedCaseItems(
+                    firstArray(parsed, "supplementCases", "supplementedCases"),
+                    null,
+                    "REVIEW_SUPPLEMENTED",
+                    "SUPPLEMENTED"
+            );
+            List<String> unresolvedCoverageGaps = stringList(parsed.path("unresolvedCoverageGaps"));
             if ((summary == null || summary.isBlank()) && !issues.isEmpty()) {
                 summary = issues.get(0);
             }
@@ -180,17 +199,143 @@ public class AiProviderClient {
             if (summary == null || summary.isBlank()) {
                 summary = "AI review completed. Please combine the issues and suggestions to decide next steps.";
             }
-            return new AiReviewResult(result, summary, issues, suggestions, normalizedJson, true);
+            return new AiReviewResult(result, summary, issues, suggestions, caseDecisions, supplementCases, unresolvedCoverageGaps, normalizedJson, true);
         } catch (IOException exception) {
             return new AiReviewResult(
                     "SUGGEST",
                     "AI returned a non-structured review result. Please inspect the raw content.",
                     Collections.emptyList(),
                     Collections.emptyList(),
+                    Collections.emptyList(),
+                    Collections.emptyList(),
+                    Collections.emptyList(),
                     normalizedJson,
                     false
             );
         }
+    }
+
+    private List<AiReviewCaseDecision> parseReviewCaseDecisions(JsonNode node) {
+        if (!node.isArray()) {
+            return List.of();
+        }
+        List<AiReviewCaseDecision> decisions = new ArrayList<>();
+        for (JsonNode item : node) {
+            Integer caseIndex = optionalInt(item.path("caseIndex"));
+            if (caseIndex == null) {
+                caseIndex = optionalInt(item.path("itemIndex"));
+            }
+            if (caseIndex == null) {
+                caseIndex = optionalInt(item.path("index"));
+            }
+            String status = normalizePerCaseReviewStatus(firstText(item, "status", "result", "reviewStatus"));
+            GeneratedAiCaseItem optimizedCase = parseGeneratedCaseItem(item.path("optimizedCase"), "REVIEW_OPTIMIZED", status);
+            decisions.add(new AiReviewCaseDecision(
+                    caseIndex,
+                    status,
+                    firstText(item, "summary", "message", "reason", "suggestion"),
+                    firstText(item, "coverageComment", "coverage", "coverageReason"),
+                    firstText(item, "evidenceComment", "evidence", "evidenceReason"),
+                    firstText(item, "reviewComment", "comment"),
+                    optionalText(item, "optimizationReason"),
+                    optionalText(item, "coverageGap"),
+                    optimizedCase
+            ));
+        }
+        return decisions;
+    }
+
+    private List<GeneratedAiCaseItem> parseGeneratedCaseItems(JsonNode node, Integer limit, String source, String reviewStatus) {
+        if (!node.isArray()) {
+            return List.of();
+        }
+        List<GeneratedAiCaseItem> items = new ArrayList<>();
+        for (JsonNode item : node) {
+            if (limit != null && items.size() >= limit) {
+                break;
+            }
+            GeneratedAiCaseItem parsed = parseGeneratedCaseItem(item, source, reviewStatus);
+            if (parsed != null) {
+                items.add(parsed);
+            }
+        }
+        return items;
+    }
+
+    private GeneratedAiCaseItem parseGeneratedCaseItem(JsonNode item, String source, String reviewStatus) {
+        if (item == null || item.isMissingNode() || item.isNull()) {
+            return null;
+        }
+        String title = optionalText(item, "title");
+        String steps = optionalText(item, "steps");
+        String expectedResult = optionalText(item, "expectedResult");
+        if (title == null || title.isBlank() || steps == null || steps.isBlank() || expectedResult == null || expectedResult.isBlank()) {
+            return null;
+        }
+        List<String> itemWarnings = new ArrayList<>();
+        String aiSource = firstText(item, "aiSource", "source");
+        String aiReviewStatus = firstText(item, "aiReviewStatus", "reviewStatus");
+        return new GeneratedAiCaseItem(
+                title,
+                normalizeCaseType(optionalText(item, "caseType"), itemWarnings),
+                normalizePriority(optionalText(item, "priority"), itemWarnings),
+                optionalText(item, "precondition"),
+                steps,
+                expectedResult,
+                optionalText(item, "riskNotes"),
+                optionalText(item, "testAngle"),
+                optionalText(item, "generationReason"),
+                optionalText(item, "requirementEvidence"),
+                aiSource == null ? source : aiSource,
+                optionalText(item, "reviewComment"),
+                optionalText(item, "optimizationReason"),
+                optionalText(item, "supplementReason"),
+                optionalText(item, "coverageGap"),
+                null,
+                itemWarnings,
+                aiReviewStatus == null ? reviewStatus : aiReviewStatus,
+                firstText(item, "aiReviewSummary", "reviewSummary"),
+                false,
+                null,
+                null
+        );
+    }
+
+    private JsonNode firstArray(JsonNode item, String... fields) {
+        for (String field : fields) {
+            JsonNode node = item.path(field);
+            if (node.isArray()) {
+                return node;
+            }
+        }
+        return objectMapper.createArrayNode();
+    }
+
+    private Integer optionalInt(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (node.canConvertToInt()) {
+            return node.asInt();
+        }
+        if (node.isTextual()) {
+            try {
+                return Integer.parseInt(node.asText().trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private String firstText(JsonNode item, String... fields) {
+        for (String field : fields) {
+            String value = optionalText(item, field);
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private String optionalText(JsonNode item, String field) {
@@ -268,6 +413,21 @@ public class AiProviderClient {
         return switch (normalized) {
             case "APPROVE", "REJECT", "SUGGEST" -> normalized;
             default -> "SUGGEST";
+        };
+    }
+
+    private String normalizePerCaseReviewStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return "CONFIRM_REQUIRED";
+        }
+        String normalized = status.trim().toUpperCase();
+        return switch (normalized) {
+            case "APPROVE", "APPROVED", "PASS", "PASSED" -> "APPROVED";
+            case "OPTIMIZE", "OPTIMIZED", "SUGGESTED", "SUGGEST", "IMPROVED" -> "OPTIMIZED";
+            case "SUPPLEMENT", "SUPPLEMENTED", "ADDED" -> "SUPPLEMENTED";
+            case "CONFIRM", "CONFIRM_REQUIRED", "NEEDS_CONFIRMATION" -> "CONFIRM_REQUIRED";
+            case "NOT_RECOMMENDED", "REJECT", "REJECTED", "FAIL", "FAILED" -> "NOT_RECOMMENDED";
+            default -> "CONFIRM_REQUIRED";
         };
     }
 

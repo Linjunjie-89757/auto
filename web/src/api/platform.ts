@@ -424,6 +424,13 @@ export const platformApi = {
       body: JSON.stringify(payload),
     })
   },
+  validateAiGenerationImageSupport(workspaceCode: string, assetIds: number[]) {
+    return request<void>('/cases/ai/tasks/image-support/validate', {
+      method: 'POST',
+      workspaceCode,
+      body: JSON.stringify({ assetIds }),
+    })
+  },
   listAiGenerationTasks(workspaceCode: string) {
     return request<AiGenerationTask[]>('/cases/ai/tasks', { workspaceCode })
   },

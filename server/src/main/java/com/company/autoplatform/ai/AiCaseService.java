@@ -47,6 +47,9 @@ public class AiCaseService {
     private static final String PROTOCOL_OPENAI_CHAT = AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_CHAT;
     private static final String PROTOCOL_OPENAI_RESPONSES = AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_RESPONSES;
     private static final String PROTOCOL_AZURE_OPENAI = "AZURE_OPENAI";
+    public static final int INITIAL_SMART_MAX_CASES = 50;
+    public static final int REVIEW_SUPPLEMENT_MAX_CASES = 30;
+    public static final int FINAL_MAX_CASES = 80;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final AiCaseConfigMapper aiCaseConfigMapper;
@@ -185,9 +188,9 @@ public class AiCaseService {
         if (normalizeStatus(config.getStatus()) != 1) {
             throw new BadRequestException("No active personal case generator config found");
         }
-        int systemMaxCases = config.getMaxCases();
-        int requestedMaxCases = request.maxCases() == null ? systemMaxCases : request.maxCases();
-        int effectiveMaxCases = Math.min(requestedMaxCases, systemMaxCases);
+        int systemMaxCases = INITIAL_SMART_MAX_CASES;
+        int requestedMaxCases = request.maxCases() == null ? INITIAL_SMART_MAX_CASES : request.maxCases();
+        int effectiveMaxCases = Math.min(requestedMaxCases, INITIAL_SMART_MAX_CASES);
         List<AiRequirementAssetEntity> assets = loadRequirementAssets(request.assetIds());
         if (!assets.isEmpty() && !supportsImageInputForGeneration(resolved)) {
             throw new BadRequestException("The current AI config does not support image input. Remove the images or enable an image-capable model.");
@@ -225,6 +228,8 @@ public class AiCaseService {
                 effectiveMaxCases,
                 result.generatedCases().size(),
                 result.generatedCases(),
+                result.coverageSummary(),
+                result.remainingCoverageGaps(),
                 result.warnings(),
                 result.invalidCases(),
                 result.rawContent(),
@@ -246,9 +251,9 @@ public class AiCaseService {
         if (normalizeStatus(config.getStatus()) != 1) {
             throw new BadRequestException("No active personal case generator config found");
         }
-        int systemMaxCases = config.getMaxCases();
-        int requestedMaxCases = request.maxCases() == null ? systemMaxCases : request.maxCases();
-        int effectiveMaxCases = Math.min(requestedMaxCases, systemMaxCases);
+        int systemMaxCases = INITIAL_SMART_MAX_CASES;
+        int requestedMaxCases = request.maxCases() == null ? INITIAL_SMART_MAX_CASES : request.maxCases();
+        int effectiveMaxCases = Math.min(requestedMaxCases, INITIAL_SMART_MAX_CASES);
         List<AiRequirementAssetEntity> assets = loadRequirementAssets(request.assetIds());
         if (!assets.isEmpty() && !supportsImageInputForGeneration(resolved)) {
             throw new BadRequestException("The current AI config does not support image input. Remove the images or enable an image-capable model.");
@@ -342,6 +347,8 @@ public class AiCaseService {
                 effectiveMaxCases,
                 generatedCases.size(),
                 generatedCases,
+                blankToNull(generationCoverageSummary(rawContent)),
+                generationRemainingCoverageGaps(rawContent),
                 warnings,
                 invalidCases,
                 rawContent,
@@ -657,6 +664,10 @@ public class AiCaseService {
                         reviewResult.summary(),
                         reviewResult.summary(),
                         "完整输出评审未返回逐条依据评价，请查看评审原始输出。",
+                        reviewResult.summary(),
+                        null,
+                        null,
+                        null,
                         rawContent
                 );
                 updates.put(index, update);
@@ -1332,7 +1343,12 @@ public class AiCaseService {
                 }
             }
         }
-        builder.append("[Generation Limit] At most ").append(maxCases).append(" cases.\n");
+        builder.append("[Smart Generation Policy]\n");
+        builder.append("- Generate enough high-value cases according to requirement complexity.\n");
+        builder.append("- Do not pad duplicated or low-value cases just to reach a number.\n");
+        builder.append("- Initial generation must return at most ").append(maxCases).append(" cases.\n");
+        builder.append("- If fewer cases are enough, return fewer cases.\n");
+        builder.append("- If full coverage needs more than ").append(maxCases).append(" cases, return the highest-value cases first and report remainingCoverageGaps.\n");
         if (config.getReviewChecklist() != null && !config.getReviewChecklist().isBlank()) {
             builder.append("[Extra Checklist]\n").append(config.getReviewChecklist().trim()).append("\n\n");
         }
@@ -1368,7 +1384,12 @@ public class AiCaseService {
             builder.append("""
                     [Output Requirements]
                     1. Return JSON only. Do not return markdown, explanation, or extra prose.
-                    2. The response must be either a JSON array or {\"cases\":[...]}.
+                    2. The response must be:
+                       {
+                         "coverageSummary":"short summary of covered functions, risks, boundaries, and scenario types",
+                         "remainingCoverageGaps":["gap that could not fit in the initial limit"],
+                         "cases":[...]
+                       }
                     3. Every case must contain:
                        - title
                        - caseType
@@ -1404,6 +1425,15 @@ public class AiCaseService {
         if (blankToNull(request.sceneFocus()) != null) {
             builder.append("[Focus] ").append(request.sceneFocus().trim()).append('\n');
         }
+        if (request.remainingCoverageGaps() != null && !request.remainingCoverageGaps().isEmpty()) {
+            builder.append("[Remaining Coverage Gaps Reported By Generator]\n");
+            for (String gap : request.remainingCoverageGaps()) {
+                if (blankToNull(gap) != null) {
+                    builder.append("- ").append(gap.trim()).append('\n');
+                }
+            }
+            builder.append("Use these gaps as input, but independently verify coverage against the requirement.\n\n");
+        }
         builder.append("[Candidate Cases To Review]\n");
         int index = 0;
         for (AiExistingCaseItem item : request.generatedCases()) {
@@ -1424,16 +1454,22 @@ public class AiCaseService {
             builder.append("""
                     [Output Requirements]
                     1. Return NDJSON only. Do not return markdown, explanation, JSON array wrappers, or extra prose.
-                    2. Output one complete JSON object per line. Each line represents one reviewed case.
+                    2. Output one complete JSON object per line. Each line represents one reviewed existing case.
                     3. Every line must contain:
                        - caseIndex: the zero-based Index shown above
-                       - status: APPROVED, SUGGESTED, or REJECTED
+                       - status: APPROVED, OPTIMIZED, CONFIRM_REQUIRED, or NOT_RECOMMENDED
                        - summary: one short actionable review summary
                        - coverageComment: explain whether this case covers the intended requirement, risk, boundary, or scenario
                        - evidenceComment: judge whether requirementEvidence clearly maps to requirement text, business rule, image/prototype information, or a reasonable risk-based inference
-                    4. Use SUGGESTED when the case is usable but should be optimized.
-                    5. Use REJECTED when the case is duplicated, unexecutable, or seriously misaligned with the requirement.
-                    6. summary, coverageComment, and evidenceComment must be useful for manual improvement, not only "passed".
+                       - reviewComment: final quality judgment for this case
+                       - optimizationReason: required when status is OPTIMIZED
+                       - optimizedCase: required when status is OPTIMIZED, containing the full improved case fields
+                       - coverageGap: optional gap this case relates to
+                    4. Use APPROVED when the case can be kept unchanged.
+                    5. Use OPTIMIZED when the case is valuable but should be rewritten; include optimizedCase.
+                    6. Use CONFIRM_REQUIRED when the case depends on unclear requirements or strong risk inference.
+                    7. Use NOT_RECOMMENDED when the case is duplicated, low-value, unexecutable, or misaligned.
+                    8. For streaming mode, do not output supplement cases in NDJSON. Instead, mention missing coverage in coverageComment or summary.
                     """);
         } else {
             builder.append("""
@@ -1444,11 +1480,37 @@ public class AiCaseService {
                          \"result\":\"APPROVE|REJECT|SUGGEST\",
                          \"summary\":\"one-sentence summary\",
                          \"issues\":[\"issue 1\",\"issue 2\"],
-                         \"suggestions\":[\"suggestion 1\",\"suggestion 2\"]
+                         \"suggestions\":[\"suggestion 1\",\"suggestion 2\"],
+                         \"caseDecisions\":[{
+                           \"caseIndex\":0,
+                           \"status\":\"APPROVED|OPTIMIZED|CONFIRM_REQUIRED|NOT_RECOMMENDED\",
+                           \"summary\":\"short summary\",
+                           \"coverageComment\":\"coverage judgment\",
+                           \"evidenceComment\":\"evidence judgment\",
+                           \"reviewComment\":\"quality judgment\",
+                           \"optimizationReason\":\"why optimized, required for OPTIMIZED\",
+                           \"coverageGap\":\"related gap if any\",
+                           \"optimizedCase\":{ \"title\":\"...\", \"caseType\":\"FUNCTION|BOUNDARY|EXCEPTION|REGRESSION\", \"priority\":\"P0|P1|P2|P3\", \"precondition\":\"...\", \"steps\":\"...\", \"expectedResult\":\"...\", \"riskNotes\":\"...\", \"testAngle\":\"...\", \"generationReason\":\"...\", \"requirementEvidence\":\"...\" }
+                         }],
+                         \"supplementCases\":[{
+                           \"title\":\"...\",
+                           \"caseType\":\"FUNCTION|BOUNDARY|EXCEPTION|REGRESSION\",
+                           \"priority\":\"P0|P1|P2|P3\",
+                           \"precondition\":\"...\",
+                           \"steps\":\"...\",
+                           \"expectedResult\":\"...\",
+                           \"riskNotes\":\"...\",
+                           \"testAngle\":\"...\",
+                           \"generationReason\":\"why this supplement is needed\",
+                           \"requirementEvidence\":\"requirement text, image/prototype evidence, or risk inference\",
+                           \"supplementReason\":\"what missing coverage this case fills\",
+                           \"coverageGap\":\"the gap being covered\"
+                         }],
+                         \"unresolvedCoverageGaps\":[\"gap still not covered because of ambiguity or final limit\"]
                        }
                     3. Use issues to point out missing coverage, duplicates, ambiguity, or non-executable content.
-                    4. Use suggestions to propose concrete follow-up scenarios or improvements.
-                    5. Even if the overall quality is good, still provide useful suggestions for strengthening coverage.
+                    4. Review must directly optimize useful weak cases and supplement important missing cases.
+                    5. Do not add low-value supplement cases. Total final cases should stay within the product limit.
                     """);
         }
         return builder.toString();
@@ -1563,6 +1625,28 @@ public class AiCaseService {
 
     private String nullSafe(String value) {
         return blankToNull(value) == null ? "-" : value.trim();
+    }
+
+    private String normalizeCaseType(String caseType) {
+        if (caseType == null || caseType.isBlank()) {
+            return "FUNCTION";
+        }
+        String normalized = caseType.trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "FUNCTION", "BOUNDARY", "EXCEPTION", "REGRESSION" -> normalized;
+            default -> "FUNCTION";
+        };
+    }
+
+    private String normalizePriority(String priority) {
+        if (priority == null || priority.isBlank()) {
+            return "P1";
+        }
+        String normalized = priority.trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "P0", "P1", "P2", "P3" -> normalized;
+            default -> "P1";
+        };
     }
 
     private String resolveExtension(String fileName) {
@@ -1895,11 +1979,16 @@ public class AiCaseService {
             String summary = firstText(root, "summary", "message", "reason", "suggestion");
             String coverageComment = firstText(root, "coverageComment", "coverage", "coverageReason");
             String evidenceComment = firstText(root, "evidenceComment", "evidence", "evidenceReason");
+            String reviewComment = firstText(root, "reviewComment", "comment");
+            String optimizationReason = firstText(root, "optimizationReason");
+            String coverageGap = firstText(root, "coverageGap");
+            GeneratedAiCaseItem optimizedCase = parseStreamGeneratedCase(root.path("optimizedCase"), "REVIEW_OPTIMIZED", status);
             if (summary == null || summary.isBlank()) {
                 summary = switch (status) {
                     case "APPROVED" -> "AI review approved this case.";
-                    case "REJECTED" -> "AI review suggests regenerating this case.";
-                    default -> "AI review suggests optimizing this case.";
+                    case "NOT_RECOMMENDED", "REJECTED" -> "AI review does not recommend this case.";
+                    case "OPTIMIZED" -> "AI review optimized this case.";
+                    default -> "AI review suggests confirming this case.";
                 };
             }
             if (coverageComment == null || coverageComment.isBlank()) {
@@ -1908,7 +1997,7 @@ public class AiCaseService {
             if (evidenceComment == null || evidenceComment.isBlank()) {
                 evidenceComment = firstText(root, "reason", "summary");
             }
-            ReviewCaseStreamUpdate update = new ReviewCaseStreamUpdate(caseIndex, status, summary, coverageComment, evidenceComment, rawOutput.toString());
+            ReviewCaseStreamUpdate update = new ReviewCaseStreamUpdate(caseIndex, status, summary, coverageComment, evidenceComment, reviewComment, optimizationReason, coverageGap, optimizedCase, rawOutput.toString());
             updates.put(caseIndex, update);
             if (reviewConsumer != null) {
                 reviewConsumer.accept(update);
@@ -1955,6 +2044,42 @@ public class AiCaseService {
         return null;
     }
 
+    private GeneratedAiCaseItem parseStreamGeneratedCase(JsonNode node, String source, String reviewStatus) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        String title = firstText(node, "title");
+        String steps = firstText(node, "steps");
+        String expectedResult = firstText(node, "expectedResult");
+        if (title == null || steps == null || expectedResult == null) {
+            return null;
+        }
+        return new GeneratedAiCaseItem(
+                title,
+                normalizeCaseType(firstText(node, "caseType")),
+                normalizePriority(firstText(node, "priority")),
+                firstText(node, "precondition"),
+                steps,
+                expectedResult,
+                firstText(node, "riskNotes"),
+                firstText(node, "testAngle"),
+                firstText(node, "generationReason"),
+                firstText(node, "requirementEvidence"),
+                firstText(node, "aiSource", "source") == null ? source : firstText(node, "aiSource", "source"),
+                firstText(node, "reviewComment"),
+                firstText(node, "optimizationReason"),
+                firstText(node, "supplementReason"),
+                firstText(node, "coverageGap"),
+                null,
+                List.of(),
+                firstText(node, "aiReviewStatus", "reviewStatus") == null ? reviewStatus : firstText(node, "aiReviewStatus", "reviewStatus"),
+                firstText(node, "aiReviewSummary", "reviewSummary"),
+                false,
+                null,
+                null
+        );
+    }
+
     private Integer optionalInt(JsonNode node) {
         if (node == null || node.isMissingNode() || node.isNull()) {
             return null;
@@ -1984,13 +2109,16 @@ public class AiCaseService {
 
     private String normalizePerCaseReviewStatus(String status) {
         if (status == null || status.isBlank()) {
-            return "SUGGESTED";
+            return "CONFIRM_REQUIRED";
         }
         String normalized = status.trim().toUpperCase(Locale.ROOT);
         return switch (normalized) {
             case "APPROVE", "APPROVED", "PASS", "PASSED" -> "APPROVED";
-            case "REJECT", "REJECTED", "FAIL", "FAILED" -> "REJECTED";
-            default -> "SUGGESTED";
+            case "OPTIMIZE", "OPTIMIZED", "SUGGESTED", "SUGGEST", "IMPROVED" -> "OPTIMIZED";
+            case "SUPPLEMENT", "SUPPLEMENTED", "ADDED" -> "SUPPLEMENTED";
+            case "CONFIRM", "CONFIRM_REQUIRED", "NEEDS_CONFIRMATION" -> "CONFIRM_REQUIRED";
+            case "NOT_RECOMMENDED", "REJECT", "REJECTED", "FAIL", "FAILED" -> "NOT_RECOMMENDED";
+            default -> "CONFIRM_REQUIRED";
         };
     }
 
@@ -1998,19 +2126,66 @@ public class AiCaseService {
         if (updates.isEmpty()) {
             return aiProviderClient.parseReviewResultContent(rawContent);
         }
-        boolean hasRejected = updates.values().stream().anyMatch(item -> "REJECTED".equals(item.status()));
-        boolean hasSuggested = updates.values().stream().anyMatch(item -> "SUGGESTED".equals(item.status()));
+        boolean hasRejected = updates.values().stream().anyMatch(item -> "NOT_RECOMMENDED".equals(item.status()));
+        boolean hasSuggested = updates.values().stream().anyMatch(item -> !"APPROVED".equals(item.status()));
         String result = hasRejected ? "REJECT" : hasSuggested ? "SUGGEST" : "APPROVE";
         List<String> issues = updates.values().stream()
-                .filter(item -> "REJECTED".equals(item.status()))
+                .filter(item -> "NOT_RECOMMENDED".equals(item.status()))
                 .map(item -> "Case " + (item.itemIndex() + 1) + ": " + item.summary())
                 .toList();
         List<String> suggestions = updates.values().stream()
-                .filter(item -> "SUGGESTED".equals(item.status()))
+                .filter(item -> !"APPROVED".equals(item.status()) && !"NOT_RECOMMENDED".equals(item.status()))
                 .map(item -> "Case " + (item.itemIndex() + 1) + ": " + item.summary())
                 .toList();
         String summary = "AI review completed for " + updates.size() + " generated cases.";
-        return new AiReviewResult(result, summary, issues, suggestions, rawContent, true);
+        return new AiReviewResult(result, summary, issues, suggestions, updates.values().stream()
+                .map(item -> new AiReviewCaseDecision(
+                        item.itemIndex(),
+                        item.status(),
+                        item.summary(),
+                        item.coverageComment(),
+                        item.evidenceComment(),
+                        item.reviewComment(),
+                        item.optimizationReason(),
+                        item.coverageGap(),
+                        item.optimizedCase()
+                ))
+                .toList(), List.of(), List.of(), rawContent, true);
+    }
+
+    private String generationCoverageSummary(String rawContent) {
+        if (rawContent == null || rawContent.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode parsed = OBJECT_MAPPER.readTree(rawContent);
+            JsonNode node = parsed.path("coverageSummary");
+            return node.isTextual() && !node.asText().trim().isBlank() ? node.asText().trim() : null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private List<String> generationRemainingCoverageGaps(String rawContent) {
+        if (rawContent == null || rawContent.isBlank()) {
+            return List.of();
+        }
+        try {
+            JsonNode parsed = OBJECT_MAPPER.readTree(rawContent);
+            JsonNode node = parsed.path("remainingCoverageGaps");
+            if (!node.isArray()) {
+                return List.of();
+            }
+            List<String> values = new ArrayList<>();
+            for (JsonNode item : node) {
+                if (item.isTextual() && !item.asText().trim().isBlank()) {
+                    values.add(item.asText().trim());
+                }
+            }
+            return values;
+        } catch (Exception ignored) {
+            return List.of();
+        }
     }
 
     private record DocumentImportContent(
@@ -2056,6 +2231,10 @@ public class AiCaseService {
             String summary,
             String coverageComment,
             String evidenceComment,
+            String reviewComment,
+            String optimizationReason,
+            String coverageGap,
+            GeneratedAiCaseItem optimizedCase,
             String rawOutput
     ) {
     }
@@ -2070,6 +2249,8 @@ public class AiCaseService {
             Integer effectiveMaxCases,
             Integer actualGeneratedCount,
             List<GeneratedAiCaseItem> generatedCases,
+            String coverageSummary,
+            List<String> remainingCoverageGaps,
             List<String> warnings,
             List<AiInvalidCaseItem> invalidCases,
             String rawContent,

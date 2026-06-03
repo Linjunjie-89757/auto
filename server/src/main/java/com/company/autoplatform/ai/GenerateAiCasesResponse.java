@@ -12,6 +12,8 @@ public record GenerateAiCasesResponse(
         Integer effectiveMaxCases,
         Integer actualGeneratedCount,
         List<GeneratedAiCaseItem> generatedCases,
+        String coverageSummary,
+        List<String> remainingCoverageGaps,
         List<String> warnings,
         List<AiInvalidCaseItem> invalidCases,
         String rawContent,

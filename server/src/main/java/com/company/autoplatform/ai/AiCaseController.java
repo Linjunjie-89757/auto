@@ -185,6 +185,15 @@ public class AiCaseController {
         return ApiResponse.ok(aiCaseService.generateCases(workspaceCode, request), "AI cases generated");
     }
 
+    @PostMapping("/tasks/image-support/validate")
+    public ApiResponse<Void> validateTaskImageSupport(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestBody ValidateAiGenerationImageSupportRequest request
+    ) {
+        aiCaseService.validateGenerationImageSupport(request == null ? null : request.assetIds());
+        return ApiResponse.ok(null, "AI generation image support validated");
+    }
+
     @PostMapping("/tasks")
     public ApiResponse<AiGenerationTaskResponse> createTask(
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,

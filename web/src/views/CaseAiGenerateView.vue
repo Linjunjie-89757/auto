@@ -648,6 +648,37 @@ async function handleGenerateCases(source: 'manual' | 'document' = 'manual') {
 
   try {
     const resolvedDirectory = await ensureDirectoryPath(directoryPath)
+    let finalAssetIds = selectedAssetIds
+    let ignoredAssetCount = 0
+    if (source === 'document' && selectedAssetIds.length) {
+      try {
+        await platformApi.validateAiGenerationImageSupport(targetWorkspaceCode.value, selectedAssetIds)
+      }
+      catch (error) {
+        const message = (error as Error).message
+        if (!message.includes(IMAGE_UNSUPPORTED_CREATE_MESSAGE)) {
+          throw error
+        }
+        try {
+          await ElMessageBox.confirm(
+            '当前生成模型不支持图片识别。可以取消生成，或忽略图片素材，仅基于文档文本继续生成。',
+            '模型不支持图片',
+            {
+              type: 'warning',
+              confirmButtonText: '忽略图片继续生成',
+              cancelButtonText: '取消生成',
+              distinguishCancelAndClose: true,
+            },
+          )
+        }
+        catch {
+          return
+        }
+        ignoredAssetCount = selectedAssetIds.length
+        finalAssetIds = []
+        ElMessage.warning(`已忽略 ${ignoredAssetCount} 个图片素材，将按纯文本需求继续生成。`)
+      }
+    }
     const submitTask = (assetIds: number[], ignoredAssetCount = 0) => createAiGenerationRecord(targetWorkspaceCode.value, {
         requirementTitle,
         requirementContent,
@@ -659,7 +690,7 @@ async function handleGenerateCases(source: 'manual' | 'document' = 'manual') {
       })
     let baseRecord: AiGenerationTaskRecord
     try {
-      baseRecord = await submitTask(selectedAssetIds)
+      baseRecord = await submitTask(finalAssetIds, ignoredAssetCount)
     }
     catch (error) {
       const message = (error as Error).message

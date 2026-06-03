@@ -94,8 +94,8 @@ const adopting = ref(false)
 const savingPath = ref(false)
 const savingCaseEdit = ref(false)
 const requirementExpanded = ref(false)
-const rawOutputExpanded = ref(false)
-const rawOutputPhase = ref<'generation' | 'review'>('generation')
+const casePreviewActiveTab = ref<'detail' | 'analysis'>('detail')
+const casePreviewScrollRef = ref<HTMLElement | null>(null)
 const streamConnected = ref(false)
 const exporting = ref(false)
 const selectedCaseIndexes = ref<number[]>([])
@@ -181,6 +181,11 @@ const selectedCount = computed(() => selectedCases.value.length)
 const pendingCaseCount = computed(() => availableCases.value.filter(item => getCaseReviewState(item) === 'PENDING').length)
 const adoptedCaseCount = computed(() => availableCases.value.filter(item => getCaseReviewState(item) === 'ADOPTED').length)
 const discardedCaseCount = computed(() => availableCases.value.filter(item => getCaseReviewState(item) === 'DISCARDED').length)
+const initialCaseCount = computed(() => availableCases.value.filter(item => getAiSource(item) === 'INITIAL').length)
+const optimizedCaseCount = computed(() => availableCases.value.filter(item => getAiReviewStatus(item) === 'OPTIMIZED').length)
+const supplementedCaseCount = computed(() => availableCases.value.filter(item => getAiReviewStatus(item) === 'SUPPLEMENTED' || getAiSource(item) === 'REVIEW_SUPPLEMENTED').length)
+const confirmRequiredCaseCount = computed(() => availableCases.value.filter(item => getAiReviewStatus(item) === 'CONFIRM_REQUIRED').length)
+const notRecommendedCaseCount = computed(() => availableCases.value.filter(item => getAiReviewStatus(item) === 'NOT_RECOMMENDED').length)
 const adoptDialogCases = computed(() => (
   adoptDialogMode.value === 'selected' ? selectedAdoptableCases.value : adoptableCases.value
 ))
@@ -189,21 +194,9 @@ const showRealtimeOutputBoard = computed(() => {
   const record = activeRecord.value
   return !!record && record.outputMode === 'STREAM' && isRunningRecord(record)
 })
-const rawOutputOptions = computed(() => {
-  const record = activeRecord.value
-  const options: Array<{ key: 'generation' | 'review', label: string, content: string }> = []
-  if (record?.generationRawOutput) {
-    options.push({ key: 'generation', label: '生成原始输出', content: record.generationRawOutput })
-  }
-  if (record?.reviewRawOutput) {
-    options.push({ key: 'review', label: '评审原始输出', content: record.reviewRawOutput })
-  }
-  return options
-})
-const activeRawOutput = computed(() => rawOutputOptions.value.find(item => item.key === rawOutputPhase.value) ?? rawOutputOptions.value[0] ?? null)
 const showCompletedOutputBoard = computed(() => {
   const record = activeRecord.value
-  return !!record && record.status === 'COMPLETED' && (outputEvents.value.length > 0 || rawOutputOptions.value.length > 0)
+  return !!record && record.status === 'COMPLETED' && outputEvents.value.length > 0
 })
 const showTaskOutputBoard = computed(() => !!activeRecord.value && (
   activeRecord.value.status === 'FAILED'
@@ -228,13 +221,13 @@ const outputConnectionLabel = computed(() => {
   return streamConnected.value ? '实时连接中' : '轮询兜底'
 })
 const outputConnectionClass = computed(() => streamConnected.value ? 'status-success' : 'status-warning')
-const generationModelLabel = computed(() => {
+const generationModelInfo = computed(() => {
   const event = [...outputEvents.value].reverse().find(item => item.phase === 'GENERATING' && item.model)
-  return formatModelLabel(event?.provider ?? activeRecord.value?.provider, event?.model ?? activeRecord.value?.model)
+  return getModelDisplayInfo(event?.provider ?? activeRecord.value?.provider, event?.model ?? activeRecord.value?.model)
 })
-const reviewModelLabel = computed(() => {
+const reviewModelInfo = computed(() => {
   const event = [...outputEvents.value].reverse().find(item => item.phase === 'REVIEWING' && item.model)
-  return formatModelLabel(event?.provider, event?.model)
+  return getModelDisplayInfo(event?.provider, event?.model)
 })
 const outputTimeline = computed(() => {
   const record = activeRecord.value
@@ -243,14 +236,14 @@ const outputTimeline = computed(() => {
     {
       key: 'GENERATING',
       label: '用例生成',
-      meta: generationModelLabel.value,
+      meta: formatModelLabel(generationModelInfo.value),
       active: currentStep === 2,
       done: currentStep > 2 || outputEvents.value.some(item => item.eventType === 'GENERATION_COMPLETED'),
     },
     {
       key: 'REVIEWING',
       label: 'AI评审',
-      meta: reviewModelLabel.value,
+      meta: formatModelLabel(reviewModelInfo.value),
       active: currentStep === 3,
       done: currentStep > 3 || outputEvents.value.some(item => item.eventType === 'TASK_COMPLETED'),
     },
@@ -296,23 +289,84 @@ function isRunningRecord(record: AiGenerationTaskRecord | null | undefined) {
   return !!record && ['PENDING', 'GENERATING', 'REVIEWING'].includes(record.status)
 }
 
-function formatModelLabel(provider?: string | null, model?: string | null) {
+function getModelDisplayInfo(provider?: string | null, model?: string | null) {
   const normalizedModel = model && model !== '-' ? model : ''
   const normalizedProvider = provider && provider !== '-' ? provider : ''
-  if (normalizedProvider && normalizedModel) {
-    return `${normalizedProvider} / ${normalizedModel}`
+  const providerMap: Record<string, { label: string, className: string }> = {
+    OPENAI_COMPATIBLE_CHAT: { label: '兼容接口', className: 'provider-compatible' },
+    OPENAI_COMPATIBLE_RESPONSES: { label: '兼容接口', className: 'provider-compatible' },
+    AZURE_OPENAI: { label: 'Azure OpenAI', className: 'provider-openai' },
+    OPENAI: { label: 'OpenAI', className: 'provider-openai' },
+    DEEPSEEK: { label: 'DeepSeek', className: 'provider-deepseek' },
+    DASHSCOPE: { label: '通义千问', className: 'provider-qwen' },
+    QWEN: { label: '通义千问', className: 'provider-qwen' },
+    ANTHROPIC: { label: 'Anthropic', className: 'provider-anthropic' },
   }
-  return normalizedModel || normalizedProvider || '未就绪'
+  const normalizedKey = normalizedProvider.toUpperCase()
+  const matchedProvider = providerMap[normalizedKey]
+  return {
+    providerLabel: matchedProvider?.label || normalizedProvider || '未就绪',
+    providerClass: matchedProvider?.className || 'provider-default',
+    modelLabel: normalizedModel || '未就绪',
+  }
+}
+
+function formatModelLabel(info: { providerLabel: string, modelLabel: string }) {
+  if (info.providerLabel === '未就绪') {
+    return info.modelLabel
+  }
+  if (info.modelLabel === '未就绪') {
+    return info.providerLabel
+  }
+  return `${info.providerLabel} ${info.modelLabel}`
 }
 
 function getAiReviewStatus(row: DetailCaseRow | null | undefined) {
   return row?.aiReviewStatus || 'PENDING'
 }
 
+function getAiSource(row: DetailCaseRow | null | undefined) {
+  return row?.aiSource || 'INITIAL'
+}
+
+function getAiSourceLabel(row: DetailCaseRow | null | undefined) {
+  const source = getAiSource(row)
+  if (source === 'REVIEW_OPTIMIZED') {
+    return '评审优化'
+  }
+  if (source === 'REVIEW_SUPPLEMENTED') {
+    return '评审补充'
+  }
+  return '初始生成'
+}
+
+function getAiSourceClass(row: DetailCaseRow | null | undefined) {
+  const source = getAiSource(row)
+  if (source === 'REVIEW_OPTIMIZED') {
+    return 'status-warning'
+  }
+  if (source === 'REVIEW_SUPPLEMENTED') {
+    return 'status-info'
+  }
+  return 'status-neutral'
+}
+
 function getAiReviewStatusLabel(row: DetailCaseRow | null | undefined) {
   const status = getAiReviewStatus(row)
   if (status === 'APPROVED') {
     return '通过'
+  }
+  if (status === 'OPTIMIZED') {
+    return '已优化'
+  }
+  if (status === 'SUPPLEMENTED') {
+    return '已补充'
+  }
+  if (status === 'CONFIRM_REQUIRED') {
+    return '建议确认'
+  }
+  if (status === 'NOT_RECOMMENDED') {
+    return '不推荐'
   }
   if (status === 'SUGGESTED') {
     return '建议优化'
@@ -331,11 +385,17 @@ function getAiReviewStatusClass(row: DetailCaseRow | null | undefined) {
   if (status === 'APPROVED') {
     return 'status-success'
   }
-  if (status === 'REJECTED') {
+  if (status === 'REJECTED' || status === 'NOT_RECOMMENDED') {
     return 'status-danger'
   }
-  if (status === 'SUGGESTED') {
+  if (status === 'SUGGESTED' || status === 'OPTIMIZED') {
     return 'status-warning'
+  }
+  if (status === 'SUPPLEMENTED') {
+    return 'status-info'
+  }
+  if (status === 'CONFIRM_REQUIRED') {
+    return 'status-purple'
   }
   return 'status-info'
 }
@@ -348,15 +408,6 @@ function getOutputEventClass(event: AiGenerationTaskEvent) {
     return 'is-warn'
   }
   return 'is-info'
-}
-
-function toggleRawOutput(key: 'generation' | 'review') {
-  if (rawOutputPhase.value === key) {
-    rawOutputExpanded.value = !rawOutputExpanded.value
-    return
-  }
-  rawOutputPhase.value = key
-  rawOutputExpanded.value = true
 }
 
 function formatEventTime(value: string | null) {
@@ -744,8 +795,24 @@ const pathPickerSelectedFullPath = computed(() => {
 function openCasePreview(row: DetailCaseRow) {
   activeCaseCursor.value = availableCases.value.findIndex(item => item.index === row.index)
   casePreviewEditing.value = false
+  casePreviewActiveTab.value = 'detail'
+  if (casePreviewScrollRef.value) {
+    casePreviewScrollRef.value.scrollTop = 0
+  }
   syncCaseEditForm(row)
   casePreviewVisible.value = true
+}
+
+function switchCasePreviewTab(tab: 'detail' | 'analysis') {
+  if (casePreviewActiveTab.value === tab) {
+    return
+  }
+  casePreviewActiveTab.value = tab
+  requestAnimationFrame(() => {
+    if (casePreviewScrollRef.value) {
+      casePreviewScrollRef.value.scrollTop = 0
+    }
+  })
 }
 
 function syncCaseEditForm(row: DetailCaseRow | null) {
@@ -1281,7 +1348,7 @@ onBeforeUnmount(() => {
       <div class="task-output-header">
         <div>
           <div class="task-output-title">{{ outputBoardTitle }}</div>
-          <div class="task-output-subtitle">{{ activeRecord.stepMessage }}</div>
+          <div v-if="activeRecord.status !== 'COMPLETED'" class="task-output-subtitle">{{ activeRecord.stepMessage }}</div>
         </div>
         <div class="task-output-pills">
           <span class="status-pill" :class="outputBoardStatusClass">{{ outputBoardStatusLabel }}</span>
@@ -1314,8 +1381,16 @@ onBeforeUnmount(() => {
 
       <template v-else>
         <div class="task-output-models">
-          <span>生成模型：{{ generationModelLabel }}</span>
-          <span>评审模型：{{ reviewModelLabel }}</span>
+          <span class="task-output-model-chip">
+            <span class="task-output-model-label">生成模型</span>
+            <span class="task-output-provider" :class="generationModelInfo.providerClass">{{ generationModelInfo.providerLabel }}</span>
+            <span class="task-output-model-name">{{ generationModelInfo.modelLabel }}</span>
+          </span>
+          <span class="task-output-model-chip">
+            <span class="task-output-model-label">评审模型</span>
+            <span class="task-output-provider" :class="reviewModelInfo.providerClass">{{ reviewModelInfo.providerLabel }}</span>
+            <span class="task-output-model-name">{{ reviewModelInfo.modelLabel }}</span>
+          </span>
         </div>
         <div class="task-output-body">
           <div class="task-output-timeline">
@@ -1347,27 +1422,17 @@ onBeforeUnmount(() => {
         </div>
       </template>
 
-      <div v-if="rawOutputOptions.length" class="task-output-raw">
-        <div class="task-output-raw-actions">
-          <button
-            v-for="item in rawOutputOptions"
-            :key="item.key"
-            class="task-output-raw-toggle"
-            :class="{ 'is-active': activeRawOutput?.key === item.key && rawOutputExpanded }"
-            type="button"
-            @click="toggleRawOutput(item.key)"
-          >
-            {{ activeRawOutput?.key === item.key && rawOutputExpanded ? `收起${item.label}` : `查看${item.label}` }}
-          </button>
-        </div>
-        <pre v-if="rawOutputExpanded && activeRawOutput" class="task-output-raw-content">{{ activeRawOutput.content }}</pre>
-      </div>
     </div>
 
     <div v-if="activeRecord" class="panel-card detail-toolbar-card">
       <div class="detail-toolbar-row">
           <div class="detail-toolbar-meta">
-            <span>生成用例数：{{ activeRecord.generatedCases.length }}</span>
+            <span>最终用例数：{{ activeRecord.generatedCases.length }}</span>
+            <span>初始生成：{{ initialCaseCount }}</span>
+            <span>已优化：{{ optimizedCaseCount }}</span>
+            <span>已补充：{{ supplementedCaseCount }}</span>
+            <span>建议确认：{{ confirmRequiredCaseCount }}</span>
+            <span>不推荐：{{ notRecommendedCaseCount }}</span>
             <span>待处理：{{ pendingCaseCount }}</span>
             <span>已采纳：{{ adoptedCaseCount }}</span>
             <span>已弃用：{{ discardedCaseCount }}</span>
@@ -1435,6 +1500,9 @@ onBeforeUnmount(() => {
             <el-table-column v-else-if="column.key === 'aiReview'" label="AI评审" width="132" align="center" show-overflow-tooltip>
               <template #default="{ row }">
                 <div class="ai-review-cell">
+                  <span class="status-pill" :class="getAiSourceClass(row)">
+                    {{ getAiSourceLabel(row) }}
+                  </span>
                   <span class="status-pill" :class="getAiReviewStatusClass(row)">
                     {{ getAiReviewStatusLabel(row) }}
                   </span>
@@ -1509,71 +1577,143 @@ onBeforeUnmount(() => {
             <div class="adopt-dialog-title">用例详情</div>
             <div class="detail-preview-subtitle">逐条审阅 AI 生成用例，可直接编辑后保存或采纳。</div>
           </div>
+          <div v-if="activeCase" class="case-preview-tabbar">
+            <button
+              class="case-preview-tab"
+              :class="{ 'is-active': casePreviewActiveTab === 'detail' }"
+              type="button"
+              @click="switchCasePreviewTab('detail')"
+            >
+              用例详情
+            </button>
+            <button
+              class="case-preview-tab"
+              :class="{ 'is-active': casePreviewActiveTab === 'analysis' }"
+              type="button"
+              @click="switchCasePreviewTab('analysis')"
+            >
+              AI 分析
+            </button>
+          </div>
         </div>
       </template>
       <template v-if="activeCase">
-        <div class="detail-preview-layout">
-          <div class="case-preview-layout">
-            <div class="case-preview-item case-preview-item-full">
-              <div class="case-preview-label">用例标题</div>
-              <el-input
-                v-if="casePreviewEditing"
-                v-model="caseEditForm.title"
-                maxlength="200"
-                placeholder="请输入测试场景"
-              />
-              <div v-else class="case-preview-content">{{ activeCase.title || '-' }}</div>
-            </div>
-            <div class="case-preview-item case-preview-item-priority">
-              <div class="case-preview-label">用例优先级</div>
-              <el-segmented
-                v-if="casePreviewEditing"
-                v-model="caseEditForm.priority"
-                :options="['P0', 'P1', 'P2', 'P3']"
-                class="case-preview-priority-segmented"
-              />
-              <div v-else class="case-preview-priority-display">
-                <span class="priority-chip" :class="`priority-${activeCase.priority?.toLowerCase?.() || 'p3'}`">
-                  {{ activeCase.priority || 'P3' }}
-                </span>
+        <div class="case-preview-shell">
+          <div ref="casePreviewScrollRef" class="case-preview-scroll">
+          <template v-if="casePreviewActiveTab === 'detail'">
+            <div class="detail-preview-layout">
+              <div class="case-preview-tagline">
+                <span class="status-pill" :class="getAiSourceClass(activeCase)">{{ getAiSourceLabel(activeCase) }}</span>
+                <span class="status-pill" :class="getAiReviewStatusClass(activeCase)">{{ getAiReviewStatusLabel(activeCase) }}</span>
+              </div>
+              <div class="case-preview-layout">
+                <div class="case-preview-item case-preview-item-full">
+                  <div class="case-preview-label">用例标题</div>
+                  <el-input
+                    v-if="casePreviewEditing"
+                    v-model="caseEditForm.title"
+                    maxlength="200"
+                    placeholder="请输入测试场景"
+                  />
+                  <div v-else class="case-preview-content">{{ activeCase.title || '-' }}</div>
+                </div>
+                <div class="case-preview-item case-preview-item-priority">
+                  <div class="case-preview-label">用例优先级</div>
+                  <el-segmented
+                    v-if="casePreviewEditing"
+                    v-model="caseEditForm.priority"
+                    :options="['P0', 'P1', 'P2', 'P3']"
+                    class="case-preview-priority-segmented"
+                  />
+                  <div v-else class="case-preview-priority-display">
+                    <span class="priority-chip" :class="`priority-${activeCase.priority?.toLowerCase?.() || 'p3'}`">
+                      {{ activeCase.priority || 'P3' }}
+                    </span>
+                  </div>
+                </div>
+                <div class="case-preview-item">
+                  <div class="case-preview-label">前置条件</div>
+                  <el-input
+                    v-if="casePreviewEditing"
+                    v-model="caseEditForm.precondition"
+                    type="textarea"
+                    :rows="6"
+                    resize="none"
+                    placeholder="请输入前置条件"
+                  />
+                  <div v-else class="case-preview-content">{{ activeCase.precondition || '-' }}</div>
+                </div>
+                <div class="case-preview-item">
+                  <div class="case-preview-label">操作步骤</div>
+                  <el-input
+                    v-if="casePreviewEditing"
+                    v-model="caseEditForm.steps"
+                    type="textarea"
+                    :rows="6"
+                    resize="none"
+                    placeholder="请输入操作步骤"
+                  />
+                  <div v-else class="case-preview-content">{{ activeCase.steps || '-' }}</div>
+                </div>
+                <div class="case-preview-item case-preview-item-full">
+                  <div class="case-preview-label">预期结果</div>
+                  <el-input
+                    v-if="casePreviewEditing"
+                    v-model="caseEditForm.expectedResult"
+                    type="textarea"
+                    :rows="5"
+                    resize="none"
+                    placeholder="请输入预期结果"
+                  />
+                  <div v-else class="case-preview-content">{{ activeCase.expectedResult || '-' }}</div>
+                </div>
               </div>
             </div>
-            <div class="case-preview-item">
-              <div class="case-preview-label">前置条件</div>
-              <el-input
-                v-if="casePreviewEditing"
-                v-model="caseEditForm.precondition"
-                type="textarea"
-                :rows="6"
-                resize="none"
-                placeholder="请输入前置条件"
-              />
-              <div v-else class="case-preview-content">{{ activeCase.precondition || '-' }}</div>
+          </template>
+          <template v-else>
+            <div class="case-ai-analysis">
+              <div class="case-ai-analysis-grid">
+                <div class="case-preview-item">
+                  <div class="case-preview-label">测试角度</div>
+                  <div class="case-preview-content">{{ activeCase.testAngle || '-' }}</div>
+                </div>
+                <div class="case-preview-item">
+                  <div class="case-preview-label">生成依据</div>
+                  <div class="case-preview-content">{{ activeCase.requirementEvidence || '-' }}</div>
+                </div>
+                <div class="case-preview-item">
+                  <div class="case-preview-label">生成原因</div>
+                  <div class="case-preview-content">{{ activeCase.generationReason || '-' }}</div>
+                </div>
+                <div class="case-preview-item">
+                  <div class="case-preview-label">评审意见</div>
+                  <div class="case-preview-content">{{ activeCase.reviewComment || activeCase.aiReviewSummary || '-' }}</div>
+                </div>
+                <div v-if="activeCase.optimizationReason" class="case-preview-item">
+                  <div class="case-preview-label">优化原因</div>
+                  <div class="case-preview-content">{{ activeCase.optimizationReason }}</div>
+                </div>
+                <div v-if="activeCase.supplementReason || activeCase.coverageGap" class="case-preview-item">
+                  <div class="case-preview-label">补充原因 / 覆盖缺口</div>
+                  <div class="case-preview-content">{{ activeCase.supplementReason || activeCase.coverageGap }}</div>
+                </div>
+              </div>
+              <div v-if="activeCase.originalCaseSnapshot" class="case-version-compare">
+                <div class="case-version-card">
+                  <div class="case-preview-label">原始版本</div>
+                  <div class="case-version-title">{{ activeCase.originalCaseSnapshot.title || '-' }}</div>
+                  <div class="case-version-content">{{ activeCase.originalCaseSnapshot.steps || '-' }}</div>
+                  <div class="case-version-content">{{ activeCase.originalCaseSnapshot.expectedResult || '-' }}</div>
+                </div>
+                <div class="case-version-card is-current">
+                  <div class="case-preview-label">优化后版本</div>
+                  <div class="case-version-title">{{ activeCase.title || '-' }}</div>
+                  <div class="case-version-content">{{ activeCase.steps || '-' }}</div>
+                  <div class="case-version-content">{{ activeCase.expectedResult || '-' }}</div>
+                </div>
+              </div>
             </div>
-            <div class="case-preview-item">
-              <div class="case-preview-label">操作步骤</div>
-              <el-input
-                v-if="casePreviewEditing"
-                v-model="caseEditForm.steps"
-                type="textarea"
-                :rows="6"
-                resize="none"
-                placeholder="请输入操作步骤"
-              />
-              <div v-else class="case-preview-content">{{ activeCase.steps || '-' }}</div>
-            </div>
-            <div class="case-preview-item case-preview-item-full">
-              <div class="case-preview-label">预期结果</div>
-              <el-input
-                v-if="casePreviewEditing"
-                v-model="caseEditForm.expectedResult"
-                type="textarea"
-                :rows="5"
-                resize="none"
-                placeholder="请输入预期结果"
-              />
-              <div v-else class="case-preview-content">{{ activeCase.expectedResult || '-' }}</div>
-            </div>
+          </template>
           </div>
         </div>
       </template>
@@ -2068,27 +2208,83 @@ onBeforeUnmount(() => {
 .task-output-models {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 16px;
+  gap: 8px;
+  margin-top: 8px;
   color: #475467;
   font-size: 12px;
 }
 
-.task-output-models span {
+.task-output-model-chip {
   display: inline-flex;
   align-items: center;
+  gap: 8px;
   min-height: 28px;
   padding: 0 10px;
-  border-radius: 999px;
+  border-radius: 8px;
   background: #f8fafc;
   border: 1px solid #e4e7ec;
+}
+
+.task-output-model-label {
+  color: #667085;
+  font-weight: 600;
+}
+
+.task-output-provider {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 20px;
+}
+
+.task-output-provider.provider-compatible {
+  background: rgba(239, 246, 255, 0.95);
+  color: #2563eb;
+}
+
+.task-output-provider.provider-openai {
+  background: rgba(236, 253, 245, 0.95);
+  color: #047857;
+}
+
+.task-output-provider.provider-deepseek {
+  background: rgba(238, 242, 255, 0.95);
+  color: #4f46e5;
+}
+
+.task-output-provider.provider-qwen {
+  background: rgba(255, 247, 237, 0.95);
+  color: #c2410c;
+}
+
+.task-output-provider.provider-anthropic {
+  background: rgba(250, 245, 255, 0.95);
+  color: #7e22ce;
+}
+
+.task-output-provider.provider-default {
+  background: rgba(242, 244, 247, 0.95);
+  color: #475467;
+}
+
+.task-output-model-name {
+  max-width: 260px;
+  overflow: hidden;
+  color: #344054;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .task-output-body {
   display: grid;
   grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
   gap: 18px;
-  margin-top: 16px;
+  margin-top: 12px;
 }
 
 .task-output-timeline {
@@ -2201,50 +2397,6 @@ onBeforeUnmount(() => {
   color: #b42318;
 }
 
-.task-output-raw {
-  margin-top: 16px;
-}
-
-.task-output-raw-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.task-output-raw-toggle {
-  height: 30px;
-  border: 1px solid rgba(47, 107, 255, 0.18);
-  border-radius: 8px;
-  padding: 0 12px;
-  background: #fff;
-  color: #2f6bff;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.task-output-raw-toggle:hover,
-.task-output-raw-toggle.is-active {
-  border-color: rgba(47, 107, 255, 0.36);
-  background: rgba(239, 246, 255, 0.86);
-}
-
-.task-output-raw-content {
-  max-height: 260px;
-  margin: 10px 0 0;
-  overflow: auto;
-  padding: 12px;
-  border-radius: 10px;
-  border: 1px solid #eaecf0;
-  background: #f8fafc;
-  color: #344054;
-  font-family: Consolas, 'SFMono-Regular', Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .failure-detail-header {
   display: flex;
   align-items: center;
@@ -2316,14 +2468,16 @@ onBeforeUnmount(() => {
 
 .detail-preview-header {
   display: grid;
+  width: 100%;
+  min-width: 0;
   gap: 4px;
 }
 
 .detail-preview-header-review {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  gap: 12px;
-  padding-right: 32px;
+  gap: 6px;
+  padding-right: 44px;
 }
 
 .detail-preview-subtitle {
@@ -2415,22 +2569,74 @@ onBeforeUnmount(() => {
 
 .detail-preview-drawer :deep(.el-drawer__header) {
   margin-bottom: 0;
-  padding: 18px 20px 0;
+  padding: 16px 20px 8px;
   align-items: flex-start;
+  overflow: visible;
+  position: relative;
+  z-index: 3;
+  background: #fff;
+}
+
+:global(.detail-preview-drawer .el-drawer__header) {
+  margin-bottom: 0;
+  padding: 16px 20px 8px;
+  align-items: flex-start;
+  overflow: visible;
+  position: relative;
+  z-index: 3;
+  background: #fff;
 }
 
 .detail-preview-drawer :deep(.el-drawer__headerbtn) {
+  position: absolute;
   top: 18px;
   right: 20px;
+  z-index: 5;
+}
+
+:global(.detail-preview-drawer .el-drawer__headerbtn) {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  z-index: 5;
+}
+
+.detail-preview-drawer :deep(.el-drawer) {
+  display: flex;
+  flex-direction: column;
+  max-height: 100vh;
 }
 
 .detail-preview-drawer :deep(.el-drawer__body) {
-  padding: 12px 20px 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: unset;
+  padding: 0 20px;
+}
+
+:global(.detail-preview-drawer .el-drawer__body) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: unset;
+  padding: 0 20px;
 }
 
 .detail-preview-drawer :deep(.el-drawer__footer) {
+  flex: 0 0 auto;
   padding: 16px 20px 20px;
   border-top: 1px solid var(--line-soft);
+  position: relative;
+  z-index: 3;
+  background: #fff;
+}
+
+:global(.detail-preview-drawer .el-drawer__footer) {
+  flex: 0 0 auto;
+  padding: 16px 20px 20px;
+  border-top: 1px solid var(--line-soft);
+  position: relative;
+  z-index: 3;
+  background: #fff;
 }
 
 .detail-preview-drawer :deep(.el-textarea__inner),
@@ -2839,9 +3045,133 @@ onBeforeUnmount(() => {
   color: #b42318;
 }
 
+.status-purple {
+  background: rgba(243, 232, 255, 0.92);
+  color: #7e22ce;
+}
+
 .status-neutral {
   background: rgba(242, 244, 247, 0.96);
   color: #475467;
+}
+
+.case-preview-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.case-preview-tabbar {
+  position: relative;
+  z-index: 4;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  height: 40px;
+  margin-top: 2px;
+  background: #fff;
+  box-shadow: inset 0 -1px 0 #b8c4d4, 0 4px 10px rgba(15, 23, 42, 0.06);
+}
+
+.case-preview-tab {
+  position: relative;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 40px;
+  color: #344054;
+  cursor: pointer;
+}
+
+.case-preview-tab.is-active {
+  color: #2563eb;
+}
+
+.case-preview-tab.is-active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: #2563eb;
+}
+
+.case-preview-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 16px;
+  padding-bottom: 20px;
+  position: relative;
+  background: #fff;
+  clip-path: inset(0 0 0 0);
+  overscroll-behavior: contain;
+}
+
+.case-preview-scroll > .detail-preview-layout,
+.case-preview-scroll > .case-ai-analysis {
+  margin-top: 0;
+}
+
+.case-preview-tagline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.case-ai-analysis {
+  display: grid;
+  gap: 18px;
+}
+
+.case-ai-analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.case-version-compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.case-version-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.case-version-card.is-current {
+  border-color: rgba(37, 99, 235, 0.18);
+  background: rgba(239, 246, 255, 0.72);
+}
+
+.case-version-title {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.6;
+  color: #101828;
+}
+
+.case-version-content {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #475467;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .detail-empty-card {
@@ -2888,6 +3218,11 @@ onBeforeUnmount(() => {
   }
 
   .failure-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .case-ai-analysis-grid,
+  .case-version-compare {
     grid-template-columns: 1fr;
   }
 }

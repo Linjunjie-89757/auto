@@ -289,8 +289,14 @@ export interface AiGeneratedCase {
   testAngle?: string | null
   generationReason?: string | null
   requirementEvidence?: string | null
+  aiSource?: 'INITIAL' | 'REVIEW_OPTIMIZED' | 'REVIEW_SUPPLEMENTED' | string | null
+  reviewComment?: string | null
+  optimizationReason?: string | null
+  supplementReason?: string | null
+  coverageGap?: string | null
+  originalCaseSnapshot?: AiGeneratedCase | null
   warnings: string[]
-  aiReviewStatus?: 'PENDING' | 'APPROVED' | 'SUGGESTED' | 'REJECTED' | null
+  aiReviewStatus?: 'PENDING' | 'APPROVED' | 'SUGGESTED' | 'REJECTED' | 'OPTIMIZED' | 'SUPPLEMENTED' | 'CONFIRM_REQUIRED' | 'NOT_RECOMMENDED' | null
   aiReviewSummary?: string | null
   savedDirectoryName?: string | null
   manualEdited?: boolean
@@ -314,6 +320,8 @@ export interface AiGenerateResponse {
   effectiveMaxCases: number
   actualGeneratedCount: number
   generatedCases: AiGeneratedCase[]
+  coverageSummary?: string | null
+  remainingCoverageGaps?: string[]
   warnings: string[]
   invalidCases: AiInvalidCaseItem[]
   rawContent: string
@@ -323,6 +331,7 @@ export interface ReviewAiGeneratedCasesPayload {
   requirementTitle: string
   requirementContent: string
   sceneFocus?: string
+  remainingCoverageGaps?: string[]
   generatedCases: AiExistingCaseItem[]
 }
 

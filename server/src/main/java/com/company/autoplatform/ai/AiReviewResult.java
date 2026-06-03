@@ -7,6 +7,9 @@ public record AiReviewResult(
         String summary,
         List<String> issues,
         List<String> suggestions,
+        List<AiReviewCaseDecision> caseDecisions,
+        List<GeneratedAiCaseItem> supplementCases,
+        List<String> unresolvedCoverageGaps,
         String rawContent,
         boolean structured
 ) {

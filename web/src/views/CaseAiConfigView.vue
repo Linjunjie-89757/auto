@@ -141,7 +141,7 @@ function applyOverrideToCapabilities(capabilities: AiModelCapabilities, override
 
 function createDefaultForm(roleType: RoleType): RoleForm {
   const detectedCapabilities = createUnknownCapabilities()
-  const capabilityOverride: AiCapabilityOverride = roleType === 'CASE_GENERATOR' ? { imageInput: true } : {}
+  const capabilityOverride: AiCapabilityOverride = {}
   const effectiveCapabilities = applyOverrideToCapabilities(detectedCapabilities, capabilityOverride)
   return {
     id: null,
@@ -394,7 +394,6 @@ function buildRolePayload(roleType: RoleType): SaveAiCaseConfigPayload {
     temperature: Number(form.temperature),
     maxCases: Number(form.maxCases),
     capabilityOverride: { ...form.capabilityOverride },
-    supportsImageInput: form.supportsImageInput,
     status: form.status,
   }
 }

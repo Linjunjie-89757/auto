@@ -21,7 +21,7 @@ import AiGenerationProcessDialog from '../components/AiGenerationProcessDialog.v
 import TableSettingsDrawer from '../components/TableSettingsDrawer.vue'
 import { useTableSettings, type TableSettingsColumn } from '../composables/useTableSettings'
 import { useWorkspace } from '../composables/useWorkspace'
-import type { AiGeneratedCase, CaseDirectoryNode, CreateCasePayload } from '../types/api'
+import type { AiGeneratedCase, AiGenerationTaskEvent, CaseDirectoryNode, CreateCasePayload } from '../types/api'
 import type { AiGenerationTaskRecord } from '../utils/caseAiGenerationRecords'
 import {
   cancelAiGenerationRecord,
@@ -67,6 +67,7 @@ const detailTableColumns: TableSettingsColumn[] = [
   { key: 'expectedResult', label: '预期结果', required: true, defaultVisible: true },
   { key: 'savedDirectoryName', label: '最终保存路径', defaultVisible: true },
   { key: 'priority', label: '优先级', defaultVisible: true },
+  { key: 'aiReview', label: 'AI评审', defaultVisible: true },
   { key: 'status', label: '状态', defaultVisible: true },
   { key: 'manualEdited', label: '人工修改', defaultVisible: false },
   { key: 'manualEditedByName', label: '操作人', defaultVisible: false },
@@ -93,11 +94,17 @@ const adopting = ref(false)
 const savingPath = ref(false)
 const savingCaseEdit = ref(false)
 const requirementExpanded = ref(false)
+const rawOutputExpanded = ref(false)
+const rawOutputPhase = ref<'generation' | 'review'>('generation')
+const streamConnected = ref(false)
 const exporting = ref(false)
 const selectedCaseIndexes = ref<number[]>([])
 const adoptDialogMode = ref<'all' | 'selected'>('all')
 const casePreviewEditing = ref(false)
 let pollingTimer: number | null = null
+let streamAbortController: AbortController | null = null
+let streamTaskId: string | null = null
+let streamRefreshTimer: number | null = null
 
 function getRecordSnapshotFromHistory(taskId?: string) {
   const snapshot = window.history.state?.recordSnapshot as AiGenerationTaskRecord | undefined
@@ -177,6 +184,78 @@ const discardedCaseCount = computed(() => availableCases.value.filter(item => ge
 const adoptDialogCases = computed(() => (
   adoptDialogMode.value === 'selected' ? selectedAdoptableCases.value : adoptableCases.value
 ))
+const outputEvents = computed(() => [...(activeRecord.value?.events ?? [])].sort((left, right) => (left.seq ?? 0) - (right.seq ?? 0)))
+const showRealtimeOutputBoard = computed(() => {
+  const record = activeRecord.value
+  return !!record && record.outputMode === 'STREAM' && isRunningRecord(record)
+})
+const rawOutputOptions = computed(() => {
+  const record = activeRecord.value
+  const options: Array<{ key: 'generation' | 'review', label: string, content: string }> = []
+  if (record?.generationRawOutput) {
+    options.push({ key: 'generation', label: '生成原始输出', content: record.generationRawOutput })
+  }
+  if (record?.reviewRawOutput) {
+    options.push({ key: 'review', label: '评审原始输出', content: record.reviewRawOutput })
+  }
+  return options
+})
+const activeRawOutput = computed(() => rawOutputOptions.value.find(item => item.key === rawOutputPhase.value) ?? rawOutputOptions.value[0] ?? null)
+const showCompletedOutputBoard = computed(() => {
+  const record = activeRecord.value
+  return !!record && record.status === 'COMPLETED' && (outputEvents.value.length > 0 || rawOutputOptions.value.length > 0)
+})
+const showTaskOutputBoard = computed(() => !!activeRecord.value && (
+  activeRecord.value.status === 'FAILED'
+  || showRealtimeOutputBoard.value
+  || showCompletedOutputBoard.value
+))
+const outputBoardTitle = computed(() => {
+  if (activeRecord.value?.status === 'FAILED') {
+    return '任务失败详情'
+  }
+  if (activeRecord.value?.status === 'COMPLETED') {
+    return 'AI 输出记录'
+  }
+  return '实时输出'
+})
+const outputBoardStatusLabel = computed(() => activeRecord.value ? getStatusLabel(activeRecord.value.status) : '-')
+const outputBoardStatusClass = computed(() => activeRecord.value ? getStatusClass(activeRecord.value.status) : 'status-neutral')
+const outputConnectionLabel = computed(() => {
+  if (!showRealtimeOutputBoard.value) {
+    return '未连接'
+  }
+  return streamConnected.value ? '实时连接中' : '轮询兜底'
+})
+const outputConnectionClass = computed(() => streamConnected.value ? 'status-success' : 'status-warning')
+const generationModelLabel = computed(() => {
+  const event = [...outputEvents.value].reverse().find(item => item.phase === 'GENERATING' && item.model)
+  return formatModelLabel(event?.provider ?? activeRecord.value?.provider, event?.model ?? activeRecord.value?.model)
+})
+const reviewModelLabel = computed(() => {
+  const event = [...outputEvents.value].reverse().find(item => item.phase === 'REVIEWING' && item.model)
+  return formatModelLabel(event?.provider, event?.model)
+})
+const outputTimeline = computed(() => {
+  const record = activeRecord.value
+  const currentStep = record?.currentStep ?? 1
+  return [
+    {
+      key: 'GENERATING',
+      label: '用例生成',
+      meta: generationModelLabel.value,
+      active: currentStep === 2,
+      done: currentStep > 2 || outputEvents.value.some(item => item.eventType === 'GENERATION_COMPLETED'),
+    },
+    {
+      key: 'REVIEWING',
+      label: 'AI评审',
+      meta: reviewModelLabel.value,
+      active: currentStep === 3,
+      done: currentStep > 3 || outputEvents.value.some(item => item.eventType === 'TASK_COMPLETED'),
+    },
+  ]
+})
 
 function getCaseReviewState(row: DetailCaseRow | null | undefined): CaseReviewState {
   if (!row) {
@@ -213,6 +292,91 @@ function getCaseReviewStateClass(row: DetailCaseRow | null | undefined) {
   return 'status-info'
 }
 
+function isRunningRecord(record: AiGenerationTaskRecord | null | undefined) {
+  return !!record && ['PENDING', 'GENERATING', 'REVIEWING'].includes(record.status)
+}
+
+function formatModelLabel(provider?: string | null, model?: string | null) {
+  const normalizedModel = model && model !== '-' ? model : ''
+  const normalizedProvider = provider && provider !== '-' ? provider : ''
+  if (normalizedProvider && normalizedModel) {
+    return `${normalizedProvider} / ${normalizedModel}`
+  }
+  return normalizedModel || normalizedProvider || '未就绪'
+}
+
+function getAiReviewStatus(row: DetailCaseRow | null | undefined) {
+  return row?.aiReviewStatus || 'PENDING'
+}
+
+function getAiReviewStatusLabel(row: DetailCaseRow | null | undefined) {
+  const status = getAiReviewStatus(row)
+  if (status === 'APPROVED') {
+    return '通过'
+  }
+  if (status === 'SUGGESTED') {
+    return '建议优化'
+  }
+  if (status === 'REJECTED') {
+    return '需重生成'
+  }
+  if (activeRecord.value?.status === 'GENERATING') {
+    return '生成中'
+  }
+  return '待评审'
+}
+
+function getAiReviewStatusClass(row: DetailCaseRow | null | undefined) {
+  const status = getAiReviewStatus(row)
+  if (status === 'APPROVED') {
+    return 'status-success'
+  }
+  if (status === 'REJECTED') {
+    return 'status-danger'
+  }
+  if (status === 'SUGGESTED') {
+    return 'status-warning'
+  }
+  return 'status-info'
+}
+
+function getOutputEventClass(event: AiGenerationTaskEvent) {
+  if (event.level === 'ERROR') {
+    return 'is-error'
+  }
+  if (event.level === 'WARN') {
+    return 'is-warn'
+  }
+  return 'is-info'
+}
+
+function toggleRawOutput(key: 'generation' | 'review') {
+  if (rawOutputPhase.value === key) {
+    rawOutputExpanded.value = !rawOutputExpanded.value
+    return
+  }
+  rawOutputPhase.value = key
+  rawOutputExpanded.value = true
+}
+
+function formatEventTime(value: string | null) {
+  if (!value) {
+    return '--:--:--'
+  }
+  return new Date(value).toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+function shouldRefreshForEvent(event: AiGenerationTaskEvent) {
+  return [
+    'CASE_GENERATED',
+    'CASE_REVIEWED',
+    'GENERATION_COMPLETED',
+    'TASK_COMPLETED',
+    'TASK_FAILED',
+    'TASK_CANCELED',
+  ].includes(event.eventType)
+}
+
 function canEditCase(row: DetailCaseRow | null | undefined) {
   return !!row && getCaseReviewState(row) !== 'ADOPTED'
 }
@@ -231,11 +395,113 @@ function stopPolling() {
   }
 }
 
+function stopEventStream() {
+  if (streamAbortController) {
+    streamAbortController.abort()
+    streamAbortController = null
+  }
+  streamTaskId = null
+  streamConnected.value = false
+}
+
+function mergeTaskEvent(event: AiGenerationTaskEvent) {
+  if (!activeRecord.value || activeRecord.value.id !== event.taskId) {
+    return
+  }
+  const events = activeRecord.value.events ?? []
+  const existingIndex = events.findIndex(item => item.seq === event.seq)
+  const nextEvents = existingIndex >= 0
+    ? events.map(item => (item.seq === event.seq ? event : item))
+    : [...events, event]
+  activeRecord.value = {
+    ...activeRecord.value,
+    events: nextEvents.sort((left, right) => (left.seq ?? 0) - (right.seq ?? 0)),
+  }
+  if (shouldRefreshForEvent(event)) {
+    scheduleRecordRefresh()
+  }
+}
+
+function scheduleRecordRefresh() {
+  if (streamRefreshTimer != null) {
+    return
+  }
+  streamRefreshTimer = window.setTimeout(() => {
+    streamRefreshTimer = null
+    void refreshRecordSilently()
+  }, 350)
+}
+
+async function refreshRecordSilently() {
+  const taskId = route.params.taskId?.toString()
+  if (!taskId) {
+    return
+  }
+  try {
+    const nextRecord = await getAiGenerationRecord(workspaceCode.value, taskId)
+    if (nextRecord) {
+      activeRecord.value = nextRecord
+      syncRecordWatchers(nextRecord)
+    }
+  }
+  catch {
+    // Keep the visible stream state; normal polling will retry.
+  }
+}
+
+function startEventStream(record: AiGenerationTaskRecord) {
+  if (streamTaskId === record.id && streamAbortController) {
+    return
+  }
+  stopEventStream()
+  const controller = new AbortController()
+  streamAbortController = controller
+  streamTaskId = record.id
+  streamConnected.value = true
+  void platformApi.streamAiGenerationTaskEvents(record.workspaceCode || workspaceCode.value, record.id, {
+    signal: controller.signal,
+    onEvent: mergeTaskEvent,
+  }).then(() => {
+    if (streamTaskId === record.id) {
+      streamConnected.value = false
+      streamAbortController = null
+      streamTaskId = null
+      void refreshRecordSilently()
+    }
+  }).catch((error) => {
+    if ((error as Error).name !== 'AbortError' && streamTaskId === record.id) {
+      streamConnected.value = false
+    }
+    if (streamTaskId === record.id) {
+      streamAbortController = null
+      streamTaskId = null
+    }
+  })
+}
+
+function syncEventStream(record: AiGenerationTaskRecord | null) {
+  if (record && record.outputMode === 'STREAM' && isRunningRecord(record)) {
+    startEventStream(record)
+    return
+  }
+  stopEventStream()
+}
+
+function syncRecordWatchers(record: AiGenerationTaskRecord | null) {
+  if (isRunningRecord(record)) {
+    startPolling()
+  } else {
+    stopPolling()
+  }
+  syncEventStream(record)
+}
+
 async function loadRecord() {
   const taskId = route.params.taskId?.toString()
   if (!taskId) {
     activeRecord.value = null
     loadingRecord.value = false
+    syncRecordWatchers(null)
     return
   }
   const hasSnapshot = seedRecordSnapshot(taskId)
@@ -243,14 +509,11 @@ async function loadRecord() {
   try {
     const nextRecord = await getAiGenerationRecord(workspaceCode.value, taskId)
     activeRecord.value = nextRecord
-    if (activeRecord.value && ['PENDING', 'GENERATING', 'REVIEWING'].includes(activeRecord.value.status)) {
-      startPolling()
-    } else {
-      stopPolling()
-    }
+    syncRecordWatchers(activeRecord.value)
   } catch (error) {
     ElMessage.error((error as Error).message)
     activeRecord.value = null
+    syncRecordWatchers(null)
   } finally {
     loadingRecord.value = false
   }
@@ -927,6 +1190,7 @@ function exportExcel() {
 }
 
 watch(() => route.params.taskId, () => {
+  stopEventStream()
   seedRecordSnapshot(route.params.taskId?.toString())
   void loadRecord()
 })
@@ -962,6 +1226,11 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopPolling()
+  stopEventStream()
+  if (streamRefreshTimer != null) {
+    window.clearTimeout(streamRefreshTimer)
+    streamRefreshTimer = null
+  }
 })
 </script>
 
@@ -1008,30 +1277,90 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="activeRecord?.status === 'FAILED'" class="panel-card failure-detail-card">
-      <div class="failure-detail-header">
-        <div class="failure-detail-title">任务失败详情</div>
-        <span class="status-pill status-danger">失败</span>
+    <div v-if="showTaskOutputBoard && activeRecord" class="panel-card task-output-card" :class="{ 'is-failed': activeRecord.status === 'FAILED' }">
+      <div class="task-output-header">
+        <div>
+          <div class="task-output-title">{{ outputBoardTitle }}</div>
+          <div class="task-output-subtitle">{{ activeRecord.stepMessage }}</div>
+        </div>
+        <div class="task-output-pills">
+          <span class="status-pill" :class="outputBoardStatusClass">{{ outputBoardStatusLabel }}</span>
+          <span v-if="showRealtimeOutputBoard" class="status-pill" :class="outputConnectionClass">{{ outputConnectionLabel }}</span>
+        </div>
       </div>
-      <div class="failure-detail-grid">
-        <div class="failure-detail-item">
-          <div class="failure-detail-label">失败阶段</div>
-          <div class="failure-detail-value">{{ getFailureStageLabel(activeRecord) }}</div>
+
+      <template v-if="activeRecord.status === 'FAILED'">
+        <div class="failure-detail-grid">
+          <div class="failure-detail-item">
+            <div class="failure-detail-label">失败阶段</div>
+            <div class="failure-detail-value">{{ getFailureStageLabel(activeRecord) }}</div>
+          </div>
+          <div class="failure-detail-item">
+            <div class="failure-detail-label">结束时间</div>
+            <div class="failure-detail-value">{{ formatTime(activeRecord.finishedAt) }}</div>
+          </div>
+          <div class="failure-detail-item failure-detail-item-full">
+            <div class="failure-detail-label">失败原因</div>
+            <div class="failure-detail-value failure-detail-error">{{ activeRecord.errorMessage || activeRecord.stepMessage }}</div>
+          </div>
+          <div class="failure-detail-item failure-detail-item-full">
+            <div class="failure-detail-label">建议处理</div>
+            <ul class="failure-detail-list">
+              <li v-for="item in getFailureSuggestions(activeRecord)" :key="item">{{ item }}</li>
+            </ul>
+          </div>
         </div>
-        <div class="failure-detail-item">
-          <div class="failure-detail-label">结束时间</div>
-          <div class="failure-detail-value">{{ formatTime(activeRecord.finishedAt) }}</div>
+      </template>
+
+      <template v-else>
+        <div class="task-output-models">
+          <span>生成模型：{{ generationModelLabel }}</span>
+          <span>评审模型：{{ reviewModelLabel }}</span>
         </div>
-        <div class="failure-detail-item failure-detail-item-full">
-          <div class="failure-detail-label">失败原因</div>
-          <div class="failure-detail-value failure-detail-error">{{ activeRecord.errorMessage || activeRecord.stepMessage }}</div>
+        <div class="task-output-body">
+          <div class="task-output-timeline">
+            <div
+              v-for="item in outputTimeline"
+              :key="item.key"
+              class="task-output-timeline-item"
+              :class="{ 'is-active': item.active, 'is-done': item.done }"
+            >
+              <span class="task-output-timeline-dot" />
+              <div class="task-output-timeline-main">
+                <div class="task-output-timeline-label">{{ item.label }}</div>
+                <div class="task-output-timeline-meta">{{ item.meta }}</div>
+              </div>
+            </div>
+          </div>
+          <div class="task-output-log">
+            <div v-if="!outputEvents.length" class="task-output-empty">等待任务输出事件...</div>
+            <div
+              v-for="event in outputEvents"
+              :key="event.seq"
+              class="task-output-log-row"
+              :class="getOutputEventClass(event)"
+            >
+              <span class="task-output-log-time">{{ formatEventTime(event.createdAt) }}</span>
+              <span class="task-output-log-message">{{ event.message }}</span>
+            </div>
+          </div>
         </div>
-        <div class="failure-detail-item failure-detail-item-full">
-          <div class="failure-detail-label">建议处理</div>
-          <ul class="failure-detail-list">
-            <li v-for="item in getFailureSuggestions(activeRecord)" :key="item">{{ item }}</li>
-          </ul>
+      </template>
+
+      <div v-if="rawOutputOptions.length" class="task-output-raw">
+        <div class="task-output-raw-actions">
+          <button
+            v-for="item in rawOutputOptions"
+            :key="item.key"
+            class="task-output-raw-toggle"
+            :class="{ 'is-active': activeRawOutput?.key === item.key && rawOutputExpanded }"
+            type="button"
+            @click="toggleRawOutput(item.key)"
+          >
+            {{ activeRawOutput?.key === item.key && rawOutputExpanded ? `收起${item.label}` : `查看${item.label}` }}
+          </button>
         </div>
+        <pre v-if="rawOutputExpanded && activeRawOutput" class="task-output-raw-content">{{ activeRawOutput.content }}</pre>
       </div>
     </div>
 
@@ -1101,6 +1430,16 @@ onBeforeUnmount(() => {
             <el-table-column v-else-if="column.key === 'priority'" label="优先级" width="88" align="center">
               <template #default="{ row }">
                 <span class="priority-chip" :class="`priority-${row.priority?.toLowerCase?.() || 'p3'}`">{{ row.priority }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column v-else-if="column.key === 'aiReview'" label="AI评审" width="132" align="center" show-overflow-tooltip>
+              <template #default="{ row }">
+                <div class="ai-review-cell">
+                  <span class="status-pill" :class="getAiReviewStatusClass(row)">
+                    {{ getAiReviewStatusLabel(row) }}
+                  </span>
+                  <span v-if="row.aiReviewSummary" class="ai-review-summary">{{ row.aiReviewSummary }}</span>
+                </div>
               </template>
             </el-table-column>
             <el-table-column v-else-if="column.key === 'status'" label="状态" width="100" align="center">
@@ -1683,10 +2022,227 @@ onBeforeUnmount(() => {
   margin-top: 10px;
 }
 
-.failure-detail-card {
+.task-output-card {
   padding: 18px 20px;
-  border: 1px solid rgba(240, 68, 56, 0.14);
+  border: 1px solid rgba(16, 24, 40, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.task-output-card.is-failed {
+  border-color: rgba(240, 68, 56, 0.14);
   background: rgba(254, 242, 242, 0.72);
+}
+
+.task-output-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.task-output-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #101828;
+}
+
+.task-output-card.is-failed .task-output-title {
+  color: #7a271a;
+}
+
+.task-output-subtitle {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #667085;
+}
+
+.task-output-pills {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.task-output-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+  color: #475467;
+  font-size: 12px;
+}
+
+.task-output-models span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #f8fafc;
+  border: 1px solid #e4e7ec;
+}
+
+.task-output-body {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  gap: 18px;
+  margin-top: 16px;
+}
+
+.task-output-timeline {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #eef2f6;
+}
+
+.task-output-timeline-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 10px;
+  color: #667085;
+}
+
+.task-output-timeline-item + .task-output-timeline-item::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: -14px;
+  width: 1px;
+  height: 16px;
+  background: #d0d5dd;
+}
+
+.task-output-timeline-dot {
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  border-radius: 999px;
+  border: 2px solid #d0d5dd;
+  background: #ffffff;
+}
+
+.task-output-timeline-item.is-active .task-output-timeline-dot {
+  border-color: #2f6bff;
+  box-shadow: 0 0 0 4px rgba(47, 107, 255, 0.12);
+}
+
+.task-output-timeline-item.is-done .task-output-timeline-dot {
+  border-color: #12b76a;
+  background: #12b76a;
+}
+
+.task-output-timeline-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #344054;
+}
+
+.task-output-timeline-meta {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #667085;
+  word-break: break-word;
+}
+
+.task-output-log {
+  min-height: 168px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #eef2f6;
+  background: #fcfcfd;
+}
+
+.task-output-empty {
+  display: flex;
+  align-items: center;
+  min-height: 140px;
+  color: #98a2b3;
+  font-size: 13px;
+}
+
+.task-output-log-row {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(234, 236, 240, 0.8);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.task-output-log-row:last-child {
+  border-bottom: 0;
+}
+
+.task-output-log-time {
+  color: #98a2b3;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-output-log-message {
+  color: #344054;
+  word-break: break-word;
+}
+
+.task-output-log-row.is-warn .task-output-log-message {
+  color: #b54708;
+}
+
+.task-output-log-row.is-error .task-output-log-message {
+  color: #b42318;
+}
+
+.task-output-raw {
+  margin-top: 16px;
+}
+
+.task-output-raw-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-output-raw-toggle {
+  height: 30px;
+  border: 1px solid rgba(47, 107, 255, 0.18);
+  border-radius: 8px;
+  padding: 0 12px;
+  background: #fff;
+  color: #2f6bff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.task-output-raw-toggle:hover,
+.task-output-raw-toggle.is-active {
+  border-color: rgba(47, 107, 255, 0.36);
+  background: rgba(239, 246, 255, 0.86);
+}
+
+.task-output-raw-content {
+  max-height: 260px;
+  margin: 10px 0 0;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #eaecf0;
+  background: #f8fafc;
+  color: #344054;
+  font-family: Consolas, 'SFMono-Regular', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .failure-detail-header {
@@ -1927,6 +2483,24 @@ onBeforeUnmount(() => {
 
 .detail-cell-text {
   color: var(--text-main);
+}
+
+.ai-review-cell {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ai-review-summary {
+  display: block;
+  max-width: 112px;
+  overflow: hidden;
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .path-edit-button {
@@ -2298,6 +2872,19 @@ onBeforeUnmount(() => {
 
   .detail-page-header {
     align-items: flex-start;
+  }
+
+  .task-output-header,
+  .task-output-body {
+    grid-template-columns: 1fr;
+  }
+
+  .task-output-header {
+    flex-direction: column;
+  }
+
+  .task-output-pills {
+    justify-content: flex-start;
   }
 
   .failure-detail-grid {

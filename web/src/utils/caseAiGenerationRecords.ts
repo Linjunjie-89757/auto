@@ -2,6 +2,7 @@ import { platformApi } from '../api/platform'
 import type {
   AiGenerateResponse,
   AiGeneratedCase,
+  AiGenerationTaskEvent,
   AiGenerationOutputMode,
   AiGenerationTask,
   AiGenerationTaskStatus,
@@ -40,6 +41,9 @@ export interface AiGenerationTaskRecord {
   invalidCases: AiInvalidCaseItem[]
   generatedCases: AiGeneratedCase[]
   reviewResult: AiReviewResult | null
+  generationRawOutput: string | null
+  reviewRawOutput: string | null
+  events: AiGenerationTaskEvent[]
   adoptedCaseIndexes: number[]
   deletedCaseIndexes: number[]
   cancelRequested: boolean
@@ -82,6 +86,9 @@ export function fromAiGenerationTask(task: AiGenerationTask): AiGenerationTaskRe
     invalidCases: task.invalidCases ?? [],
     generatedCases: task.generatedCases ?? [],
     reviewResult: task.reviewResult,
+    generationRawOutput: task.generationRawOutput ?? null,
+    reviewRawOutput: task.reviewRawOutput ?? null,
+    events: task.events ?? [],
     adoptedCaseIndexes: task.adoptedCaseIndexes ?? [],
     deletedCaseIndexes: task.deletedCaseIndexes ?? [],
     cancelRequested: task.cancelRequested,

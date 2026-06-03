@@ -14,6 +14,7 @@ public record GenerateAiCasesResponse(
         List<GeneratedAiCaseItem> generatedCases,
         List<String> warnings,
         List<AiInvalidCaseItem> invalidCases,
-        String rawContent
+        String rawContent,
+        boolean ignoredImages
 ) {
 }

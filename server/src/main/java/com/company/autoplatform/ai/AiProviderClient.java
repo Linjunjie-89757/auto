@@ -34,12 +34,12 @@ public class AiProviderClient {
             List<ImageInput> images
     ) {
         String content = adapter(profile.protocolType()).requestStructuredContent(profile, apiKey, prompt, images);
-        return parseGeneratedCases(content, profile.maxCases());
+        return parseGeneratedCasesContent(content, profile.maxCases());
     }
 
     public AiReviewResult review(AiProviderRequestProfile profile, String apiKey, String prompt) {
         String content = adapter(profile.protocolType()).requestStructuredContent(profile, apiKey, prompt, List.of());
-        return parseReviewResult(content);
+        return parseReviewResultContent(content);
     }
 
     public String requestStructuredContent(AiProviderRequestProfile profile, String apiKey, String prompt) {
@@ -52,11 +52,29 @@ public class AiProviderClient {
             String prompt,
             Consumer<String> deltaConsumer
     ) {
+        return streamStructuredContentWithResult(profile, apiKey, prompt, deltaConsumer).content();
+    }
+
+    public StreamContentResult streamStructuredContentWithResult(
+            AiProviderRequestProfile profile,
+            String apiKey,
+            String prompt,
+            Consumer<String> deltaConsumer
+    ) {
         AiProtocolAdapter adapter = adapter(profile.protocolType());
+        if (!adapter.supportsStructuredStreaming()) {
+            String content = adapter.requestStructuredContent(profile, apiKey, prompt, List.of());
+            return new StreamContentResult(content, true, "当前协议适配器不支持实时流式输出");
+        }
         try {
-            return adapter.streamStructuredContent(profile, apiKey, prompt, List.of(), deltaConsumer);
+            return new StreamContentResult(
+                    adapter.streamStructuredContent(profile, apiKey, prompt, List.of(), deltaConsumer),
+                    false,
+                    null
+            );
         } catch (RuntimeException exception) {
-            return adapter.requestStructuredContent(profile, apiKey, prompt, List.of());
+            String content = adapter.requestStructuredContent(profile, apiKey, prompt, List.of());
+            return new StreamContentResult(content, true, exception.getMessage());
         }
     }
 
@@ -80,7 +98,7 @@ public class AiProviderClient {
         return adapter;
     }
 
-    private AiGeneratedCasesResult parseGeneratedCases(String normalizedJson, Integer maxCases) {
+    public AiGeneratedCasesResult parseGeneratedCasesContent(String normalizedJson, Integer maxCases) {
         try {
             JsonNode parsed = objectMapper.readTree(normalizedJson);
             JsonNode casesNode = parsed.isArray() ? parsed : parsed.path("cases");
@@ -126,7 +144,12 @@ public class AiProviderClient {
                         steps,
                         expectedResult,
                         optionalText(item, "riskNotes"),
+                        optionalText(item, "testAngle"),
+                        optionalText(item, "generationReason"),
+                        optionalText(item, "requirementEvidence"),
                         itemWarnings,
+                        null,
+                        null,
                         false,
                         null,
                         null
@@ -141,7 +164,7 @@ public class AiProviderClient {
         }
     }
 
-    private AiReviewResult parseReviewResult(String normalizedJson) {
+    public AiReviewResult parseReviewResultContent(String normalizedJson) {
         try {
             JsonNode parsed = objectMapper.readTree(normalizedJson);
             String result = normalizeReviewResult(optionalText(parsed, "result"));
@@ -252,6 +275,13 @@ public class AiProviderClient {
             String fileName,
             String contentType,
             byte[] bytes
+    ) {
+    }
+
+    public record StreamContentResult(
+            String content,
+            boolean fallbackToComplete,
+            String fallbackReason
     ) {
     }
 }

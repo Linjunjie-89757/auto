@@ -11,6 +11,7 @@ public record CreateAiGenerationTaskRequest(
         @NotBlank(message = "Output mode is required") String outputMode,
         Long directoryId,
         String directoryName,
-        List<Long> assetIds
+        List<Long> assetIds,
+        Integer ignoredAssetCount
 ) {
 }

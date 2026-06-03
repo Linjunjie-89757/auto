@@ -70,6 +70,12 @@ public class AiGenerationTaskEntity extends BaseEntity {
     @TableField("review_result_json")
     private String reviewResultJson;
 
+    @TableField("generation_raw_output")
+    private String generationRawOutput;
+
+    @TableField("review_raw_output")
+    private String reviewRawOutput;
+
     @TableField("adopted_case_indexes_json")
     private String adoptedCaseIndexesJson;
 

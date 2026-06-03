@@ -15,6 +15,10 @@ interface AiProtocolAdapter {
 
     String requestStructuredContent(AiProviderRequestProfile profile, String apiKey, String prompt, List<AiProviderClient.ImageInput> images);
 
+    default boolean supportsStructuredStreaming() {
+        return false;
+    }
+
     default String streamStructuredContent(
             AiProviderRequestProfile profile,
             String apiKey,

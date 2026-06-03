@@ -19,6 +19,11 @@ class OpenAiCompatibleChatAdapter extends AbstractOpenAiCompatibleAdapter {
     }
 
     @Override
+    public boolean supportsStructuredStreaming() {
+        return true;
+    }
+
+    @Override
     public AiCapabilityValue probeStreamCapability(
             AiProviderRequestProfile profile,
             String apiKey,

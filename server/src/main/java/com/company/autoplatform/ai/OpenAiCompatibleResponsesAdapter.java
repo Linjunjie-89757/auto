@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.function.Consumer;
 
 @Component
 class OpenAiCompatibleResponsesAdapter extends AbstractOpenAiCompatibleAdapter {
@@ -18,6 +19,11 @@ class OpenAiCompatibleResponsesAdapter extends AbstractOpenAiCompatibleAdapter {
     }
 
     @Override
+    public boolean supportsStructuredStreaming() {
+        return true;
+    }
+
+    @Override
     public AiCapabilityValue probeStreamCapability(
             AiProviderRequestProfile profile,
             String apiKey,
@@ -29,5 +35,16 @@ class OpenAiCompatibleResponsesAdapter extends AbstractOpenAiCompatibleAdapter {
     @Override
     public String requestStructuredContent(AiProviderRequestProfile profile, String apiKey, String prompt, List<AiProviderClient.ImageInput> images) {
         return requestStructuredContentWithResponses(profile, apiKey, prompt, images);
+    }
+
+    @Override
+    public String streamStructuredContent(
+            AiProviderRequestProfile profile,
+            String apiKey,
+            String prompt,
+            List<AiProviderClient.ImageInput> images,
+            Consumer<String> deltaConsumer
+    ) {
+        return streamStructuredContentWithResponses(profile, apiKey, prompt, images, deltaConsumer);
     }
 }

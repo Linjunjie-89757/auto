@@ -163,6 +163,17 @@ class AiProviderClientTests {
     }
 
     @Test
+    void extractsResponsesStreamingOutputTextDelta() {
+        String delta = (String) ReflectionTestUtils.invokeMethod(
+                responsesAdapter,
+                "extractResponsesStreamingDelta",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}"
+        );
+
+        assertThat(delta).isEqualTo("hello");
+    }
+
+    @Test
     void requestTimeoutFallsBackToAdapterDefaultWhenProfileDoesNotOverride() throws Exception {
         Method method = AbstractOpenAiCompatibleAdapter.class.getDeclaredMethod("resolveRequestTimeoutSeconds", Integer.class);
         method.setAccessible(true);

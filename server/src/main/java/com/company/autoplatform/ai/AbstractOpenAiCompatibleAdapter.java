@@ -14,6 +14,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -234,6 +235,44 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
         }
     }
 
+    protected String streamStructuredContentWithResponses(
+            AiProviderRequestProfile profile,
+            String apiKey,
+            String prompt,
+            List<AiProviderClient.ImageInput> images,
+            Consumer<String> deltaConsumer
+    ) {
+        String endpoint = resolveResponsesEndpoint(profile.baseUrl());
+        try {
+            String requestBody = buildResponsesRequestBody(profile, prompt, images, true);
+            HttpResponse<java.util.stream.Stream<String>> response = sendStreamingRequest(
+                    endpoint,
+                    apiKey,
+                    requestBody,
+                    profile.requestTimeoutSeconds()
+            );
+            if (response.statusCode() >= 400) {
+                String errorBody = readResponseBody(response.body());
+                if (requiresImageCapability(errorBody, images)) {
+                    throw new BadRequestException("褰撳墠妯″瀷鎴栨湇鍔′笉鏀寔鍥剧墖杈撳叆");
+                }
+                throw new BadRequestException("AI 鎻愪緵鏂规祦寮忚姹傚け璐? " + abbreviate(errorBody));
+            }
+            String merged = consumeResponsesStreamingLines(response.body(), deltaConsumer);
+            if (merged.isBlank()) {
+                throw new BadRequestException("AI 鎻愪緵鏂硅繑鍥炰簡绌虹殑娴佸紡鍐呭");
+            }
+            return stripJsonFence(merged);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            log.error("AI provider responses streaming request interrupted", exception);
+            throw new BadRequestException("AI 鎻愪緵鏂规祦寮忚姹傝涓柇");
+        } catch (IOException exception) {
+            log.error("AI provider responses streaming request failed", exception);
+            throw new BadRequestException("AI provider streaming request failed");
+        }
+    }
+
     protected String buildChatCompletionsRequestBody(
             AiProviderRequestProfile profile,
             String prompt,
@@ -271,6 +310,15 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
             String prompt,
             List<AiProviderClient.ImageInput> images
     ) throws IOException {
+        return buildResponsesRequestBody(profile, prompt, images, false);
+    }
+
+    protected String buildResponsesRequestBody(
+            AiProviderRequestProfile profile,
+            String prompt,
+            List<AiProviderClient.ImageInput> images,
+            boolean stream
+    ) throws IOException {
         List<Object> inputContent = new ArrayList<>();
         inputContent.add(Map.of("type", "input_text", "text", prompt));
         for (AiProviderClient.ImageInput image : images) {
@@ -279,14 +327,17 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
                     "image_url", buildDataUrl(image)
             ));
         }
-        return objectMapper.writeValueAsString(Map.of(
-                "model", profile.model(),
-                "temperature", profile.temperature(),
-                "instructions", "You are a QA assistant that outputs only structured JSON.",
-                "input", List.of(
-                        Map.of("role", "user", "content", inputContent)
-                )
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("model", profile.model());
+        request.put("temperature", profile.temperature());
+        if (stream) {
+            request.put("stream", true);
+        }
+        request.put("instructions", "You are a QA assistant that outputs only structured JSON.");
+        request.put("input", List.of(
+                Map.of("role", "user", "content", inputContent)
         ));
+        return objectMapper.writeValueAsString(request);
     }
 
     protected HttpResponse<String> sendRequest(
@@ -526,6 +577,50 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
             return null;
         }
         return extractContent(contentNode);
+    }
+
+    protected String consumeResponsesStreamingLines(
+            java.util.stream.Stream<String> lines,
+            Consumer<String> deltaConsumer
+    ) throws IOException {
+        StringBuilder builder = new StringBuilder();
+        try (lines) {
+            var iterator = lines.iterator();
+            while (iterator.hasNext()) {
+                String rawLine = iterator.next();
+                String delta = extractResponsesStreamingDelta(rawLine);
+                if (delta == null || delta.isEmpty()) {
+                    continue;
+                }
+                builder.append(delta);
+                if (deltaConsumer != null) {
+                    deltaConsumer.accept(delta);
+                }
+            }
+        }
+        return builder.toString();
+    }
+
+    protected String extractResponsesStreamingDelta(String rawLine) throws IOException {
+        String line = rawLine == null ? "" : rawLine.trim();
+        if (line.isEmpty() || !line.startsWith("data:")) {
+            return null;
+        }
+        String payload = line.substring(5).trim();
+        if (payload.isEmpty() || "[DONE]".equals(payload)) {
+            return null;
+        }
+        JsonNode root = objectMapper.readTree(payload);
+        String type = root.path("type").asText("");
+        if ("response.output_text.delta".equals(type) || "response.text.delta".equals(type)) {
+            JsonNode delta = root.path("delta");
+            return delta.isTextual() ? delta.asText() : null;
+        }
+        JsonNode outputTextDelta = root.path("output_text_delta");
+        if (outputTextDelta.isTextual()) {
+            return outputTextDelta.asText();
+        }
+        return null;
     }
 
     protected String readResponseBody(java.util.stream.Stream<String> lines) {

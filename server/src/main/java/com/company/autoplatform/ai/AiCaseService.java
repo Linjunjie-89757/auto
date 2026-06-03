@@ -6,6 +6,8 @@ import com.company.autoplatform.casecenter.CaseDetailResponse;
 import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.workspace.WorkspaceEntity;
 import com.company.autoplatform.workspace.WorkspaceService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.poi.xwpf.usermodel.BodyElementType;
 import org.apache.poi.xwpf.usermodel.IBodyElement;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
@@ -26,10 +28,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 @Service
@@ -43,6 +47,7 @@ public class AiCaseService {
     private static final String PROTOCOL_OPENAI_CHAT = AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_CHAT;
     private static final String PROTOCOL_OPENAI_RESPONSES = AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_RESPONSES;
     private static final String PROTOCOL_AZURE_OPENAI = "AZURE_OPENAI";
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final AiCaseConfigMapper aiCaseConfigMapper;
     private final AiProviderConnectionMapper aiProviderConnectionMapper;
@@ -160,6 +165,17 @@ public class AiCaseService {
         );
     }
 
+    public void validateGenerationImageSupport(List<Long> assetIds) {
+        List<AiRequirementAssetEntity> assets = loadRequirementAssets(assetIds);
+        if (assets.isEmpty()) {
+            return;
+        }
+        ResolvedRoleConfig resolved = requireResolvedRoleConfig(ROLE_GENERATOR);
+        if (!supportsImageInputForGeneration(resolved)) {
+            throw new BadRequestException("当前生成模型不支持图片识别，是否忽略图片并仅基于文本继续生成？");
+        }
+    }
+
     public GenerateAiCasesResponse generateCases(String headerWorkspaceCode, GenerateAiCasesRequest request) {
         WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
                 workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode())
@@ -173,16 +189,32 @@ public class AiCaseService {
         int requestedMaxCases = request.maxCases() == null ? systemMaxCases : request.maxCases();
         int effectiveMaxCases = Math.min(requestedMaxCases, systemMaxCases);
         List<AiRequirementAssetEntity> assets = loadRequirementAssets(request.assetIds());
-        if (!assets.isEmpty() && !resolved.effectiveCapabilities().supportsImageInput()) {
+        if (!assets.isEmpty() && !supportsImageInputForGeneration(resolved)) {
             throw new BadRequestException("The current AI config does not support image input. Remove the images or enable an image-capable model.");
         }
-        String prompt = buildGeneratorPrompt(config, request, workspace, effectiveMaxCases, assets);
-        AiGeneratedCasesResult result = aiProviderClient.generate(
-                resolved.profileWithMaxCases(effectiveMaxCases),
-                resolved.apiKey(),
-                prompt,
-                toImageInputs(assets)
-        );
+        boolean ignoredImages = false;
+        String prompt = buildGeneratorPrompt(config, request, workspace, effectiveMaxCases, assets, false);
+        AiGeneratedCasesResult result;
+        try {
+            result = aiProviderClient.generate(
+                    resolved.profileWithMaxCases(effectiveMaxCases),
+                    resolved.apiKey(),
+                    prompt,
+                    toImageInputs(assets)
+            );
+        } catch (BadRequestException exception) {
+            if (assets.isEmpty() || !isImageInputUnsupportedError(exception)) {
+                throw exception;
+            }
+            ignoredImages = true;
+            prompt = buildGeneratorPrompt(config, request, workspace, effectiveMaxCases, List.of(), false);
+            result = aiProviderClient.generate(
+                    resolved.profileWithMaxCases(effectiveMaxCases),
+                    resolved.apiKey(),
+                    prompt,
+                    List.of()
+            );
+        }
         return new GenerateAiCasesResponse(
                 workspace.getWorkspaceCode(),
                 workspace.getWorkspaceName(),
@@ -195,7 +227,127 @@ public class AiCaseService {
                 result.generatedCases(),
                 result.warnings(),
                 result.invalidCases(),
-                result.rawContent()
+                result.rawContent(),
+                ignoredImages
+        );
+    }
+
+    public StreamedGenerateCasesResult streamGenerateCases(
+            String headerWorkspaceCode,
+            GenerateAiCasesRequest request,
+            Consumer<AiStreamModelInfo> modelConsumer,
+            Consumer<GeneratedCaseStreamUpdate> caseConsumer
+    ) {
+        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
+                workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode())
+        );
+        ResolvedRoleConfig resolved = requireResolvedRoleConfig(ROLE_GENERATOR);
+        AiCaseConfigEntity config = resolved.roleConfig();
+        if (normalizeStatus(config.getStatus()) != 1) {
+            throw new BadRequestException("No active personal case generator config found");
+        }
+        int systemMaxCases = config.getMaxCases();
+        int requestedMaxCases = request.maxCases() == null ? systemMaxCases : request.maxCases();
+        int effectiveMaxCases = Math.min(requestedMaxCases, systemMaxCases);
+        List<AiRequirementAssetEntity> assets = loadRequirementAssets(request.assetIds());
+        if (!assets.isEmpty() && !supportsImageInputForGeneration(resolved)) {
+            throw new BadRequestException("The current AI config does not support image input. Remove the images or enable an image-capable model.");
+        }
+        if (modelConsumer != null) {
+            modelConsumer.accept(new AiStreamModelInfo(resolved.profile().provider(), config.getModel()));
+        }
+        boolean ignoredImages = false;
+        String prompt = buildGeneratorPrompt(config, request, workspace, effectiveMaxCases, assets, true);
+        List<GeneratedAiCaseItem> generatedCases = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
+        List<AiInvalidCaseItem> invalidCases = new ArrayList<>();
+        StringBuilder rawOutput = new StringBuilder();
+        StringBuilder lineBuffer = new StringBuilder();
+        Consumer<String> deltaConsumer = delta -> {
+            rawOutput.append(delta);
+            lineBuffer.append(delta);
+            drainCompleteLines(lineBuffer, line -> emitGeneratedCaseLine(
+                    line,
+                    effectiveMaxCases,
+                    generatedCases,
+                    warnings,
+                    invalidCases,
+                    rawOutput,
+                    caseConsumer
+            ));
+        };
+
+        AiProviderClient.StreamContentResult streamResult;
+        try {
+            streamResult = aiProviderClient.streamStructuredContentWithResult(
+                    resolved.profileWithMaxCases(effectiveMaxCases),
+                    resolved.apiKey(),
+                    prompt,
+                    deltaConsumer
+            );
+        } catch (BadRequestException exception) {
+            if (assets.isEmpty() || !isImageInputUnsupportedError(exception)) {
+                throw exception;
+            }
+            ignoredImages = true;
+            rawOutput.setLength(0);
+            lineBuffer.setLength(0);
+            generatedCases.clear();
+            warnings.clear();
+            invalidCases.clear();
+            prompt = buildGeneratorPrompt(config, request, workspace, effectiveMaxCases, List.of(), true);
+            streamResult = aiProviderClient.streamStructuredContentWithResult(
+                    resolved.profileWithMaxCases(effectiveMaxCases),
+                    resolved.apiKey(),
+                    prompt,
+                    deltaConsumer
+            );
+        }
+        String finalContent = streamResult.content();
+        String rawContent = finalContent == null || finalContent.isBlank() ? rawOutput.toString() : finalContent;
+        emitGeneratedCaseLine(
+                lineBuffer.toString(),
+                effectiveMaxCases,
+                generatedCases,
+                warnings,
+                invalidCases,
+                new StringBuilder(rawContent),
+                caseConsumer
+        );
+        if (generatedCases.isEmpty()) {
+            AiGeneratedCasesResult parsed = aiProviderClient.parseGeneratedCasesContent(rawContent, effectiveMaxCases);
+            warnings.addAll(parsed.warnings());
+            invalidCases.addAll(parsed.invalidCases());
+            for (GeneratedAiCaseItem item : parsed.generatedCases()) {
+                if (generatedCases.size() >= effectiveMaxCases) {
+                    break;
+                }
+                generatedCases.add(item);
+                if (caseConsumer != null) {
+                    caseConsumer.accept(new GeneratedCaseStreamUpdate(
+                            generatedCases.size() - 1,
+                            item,
+                            rawContent
+                    ));
+                }
+            }
+        }
+        return new StreamedGenerateCasesResult(
+                workspace.getWorkspaceCode(),
+                workspace.getWorkspaceName(),
+                resolved.profile().provider(),
+                config.getModel(),
+                systemMaxCases,
+                requestedMaxCases,
+                effectiveMaxCases,
+                generatedCases.size(),
+                generatedCases,
+                warnings,
+                invalidCases,
+                rawContent,
+                streamResult.fallbackToComplete(),
+                streamResult.fallbackReason(),
+                ignoredImages
         );
     }
 
@@ -448,8 +600,79 @@ public class AiCaseService {
     public AiReviewResult reviewGeneratedCases(String headerWorkspaceCode, ReviewAiGeneratedCasesRequest request) {
         ResolvedRoleConfig resolved = requireResolvedRoleConfig(ROLE_REVIEWER);
         AiCaseConfigEntity config = resolved.roleConfig();
-        String prompt = buildGeneratedCasesReviewPrompt(config, request);
+        String prompt = buildGeneratedCasesReviewPrompt(config, request, false);
         return aiProviderClient.review(resolved.profile(), resolved.apiKey(), prompt);
+    }
+
+    public StreamedReviewResult streamReviewGeneratedCases(
+            String headerWorkspaceCode,
+            ReviewAiGeneratedCasesRequest request,
+            Consumer<AiStreamModelInfo> modelConsumer,
+            Consumer<ReviewCaseStreamUpdate> reviewConsumer
+    ) {
+        ResolvedRoleConfig resolved = requireResolvedRoleConfig(ROLE_REVIEWER);
+        AiCaseConfigEntity config = resolved.roleConfig();
+        if (modelConsumer != null) {
+            modelConsumer.accept(new AiStreamModelInfo(resolved.profile().provider(), config.getModel()));
+        }
+        String prompt = buildGeneratedCasesReviewPrompt(config, request, true);
+        Map<Integer, ReviewCaseStreamUpdate> updates = new LinkedHashMap<>();
+        StringBuilder rawOutput = new StringBuilder();
+        StringBuilder lineBuffer = new StringBuilder();
+        Consumer<String> deltaConsumer = delta -> {
+            rawOutput.append(delta);
+            lineBuffer.append(delta);
+            drainCompleteLines(lineBuffer, line -> emitReviewLine(
+                    line,
+                    request.generatedCases().size(),
+                    rawOutput,
+                    updates,
+                    reviewConsumer
+            ));
+        };
+
+        AiProviderClient.StreamContentResult streamResult = aiProviderClient.streamStructuredContentWithResult(
+                resolved.profile(),
+                resolved.apiKey(),
+                prompt,
+                deltaConsumer
+        );
+        String finalContent = streamResult.content();
+        String rawContent = finalContent == null || finalContent.isBlank() ? rawOutput.toString() : finalContent;
+        emitReviewLine(
+                lineBuffer.toString(),
+                request.generatedCases().size(),
+                new StringBuilder(rawContent),
+                updates,
+                reviewConsumer
+        );
+
+        AiReviewResult reviewResult = buildStreamReviewResult(rawContent, updates);
+        if (updates.isEmpty() && !request.generatedCases().isEmpty()) {
+            String fallbackStatus = normalizePerCaseReviewStatus(reviewResult.result());
+            for (int index = 0; index < request.generatedCases().size(); index += 1) {
+                ReviewCaseStreamUpdate update = new ReviewCaseStreamUpdate(
+                        index,
+                        fallbackStatus,
+                        reviewResult.summary(),
+                        reviewResult.summary(),
+                        "完整输出评审未返回逐条依据评价，请查看评审原始输出。",
+                        rawContent
+                );
+                updates.put(index, update);
+                if (reviewConsumer != null) {
+                    reviewConsumer.accept(update);
+                }
+            }
+        }
+        return new StreamedReviewResult(
+                resolved.profile().provider(),
+                config.getModel(),
+                reviewResult,
+                rawContent,
+                streamResult.fallbackToComplete(),
+                streamResult.fallbackReason()
+        );
     }
 
     public AiReviewResult reviewSavedCase(String headerWorkspaceCode, CaseDetailResponse detail) {
@@ -833,6 +1056,14 @@ public class AiCaseService {
         return AiModelCapabilities.infer(connection.getProtocolType(), modelName, true);
     }
 
+    private boolean supportsImageInputForGeneration(ResolvedRoleConfig resolved) {
+        AiCapabilityValue effectiveImage = resolved.effectiveCapabilities().imageInput();
+        if (Boolean.FALSE.equals(effectiveImage.supported())) {
+            return false;
+        }
+        return Boolean.TRUE.equals(resolved.detectedCapabilities().imageInput().supported());
+    }
+
     private List<AiProviderModelItem> persistFetchedModels(
             AiProviderConnectionEntity connection,
             List<AiProviderModelItem> fetchedModels,
@@ -1063,7 +1294,8 @@ public class AiCaseService {
             GenerateAiCasesRequest request,
             WorkspaceEntity workspace,
             int maxCases,
-            List<AiRequirementAssetEntity> assets
+            List<AiRequirementAssetEntity> assets,
+            boolean streamMode
     ) {
         StringBuilder builder = new StringBuilder();
         builder.append(config.getPromptTemplate()).append("\n\n");
@@ -1104,29 +1336,67 @@ public class AiCaseService {
         if (config.getReviewChecklist() != null && !config.getReviewChecklist().isBlank()) {
             builder.append("[Extra Checklist]\n").append(config.getReviewChecklist().trim()).append("\n\n");
         }
-        builder.append("""
-                [Output Requirements]
-                1. Return JSON only. Do not return markdown, explanation, or extra prose.
-                2. The response must be either a JSON array or {\"cases\":[...]}.
-                3. Every case must contain:
-                   - title
-                   - caseType
-                   - priority
-                   - precondition
-                   - steps
-                   - expectedResult
-                   - riskNotes
-                4. caseType must be one of: FUNCTION, BOUNDARY, EXCEPTION, REGRESSION.
-                5. priority must be one of: P0, P1, P2, P3.
-                6. Keep titles, steps, and expected results concrete, executable, and verifiable.
-                7. Cover useful test points first. Do not pad with duplicate or low-value cases.
-                8. If the requirement only supports fewer valid cases than the limit, return only the reasonable count.
-                9. When text and images both provide information, combine them and do not ignore key UI or flow details.
-                """);
+        if (streamMode) {
+            builder.append("""
+                    [Output Requirements]
+                    1. Return NDJSON only. Do not return markdown, explanation, JSON array wrappers, or extra prose.
+                    2. Output one complete JSON object per line. Each line represents one finished test case.
+                    3. Every line must contain:
+                       - title
+                       - caseType
+                       - priority
+                       - precondition
+                       - steps
+                       - expectedResult
+                       - riskNotes
+                       - testAngle: one of 正常场景, 异常场景, 边界值, 等价类, 状态迁移, 组合/判定表, 错误推测, 端到端, 非功能, 数据依赖与清理
+                       - generationReason: short reason explaining why this case is needed and what risk or coverage gap it targets
+                       - requirementEvidence: requirement text, business rule, constraint, or image/prototype evidence that supports this case
+                    4. caseType must be one of: FUNCTION, BOUNDARY, EXCEPTION, REGRESSION.
+                    5. priority must be one of: P0, P1, P2, P3.
+                    6. requirementEvidence must explain the source of the case:
+                       - If based on requirement text, quote or summarize the related sentence, rule, or constraint.
+                       - If based on an attached image/prototype, start with "图片素材显示：".
+                       - If inferred from testing risk because the requirement is not explicit, start with "需求未明确，基于风险推断：".
+                       - Do not fabricate exact requirement wording. If unsure, summarize instead of quoting.
+                    7. Keep titles, steps, expected results, generationReason, and requirementEvidence concrete, executable, and verifiable.
+                    8. Cover useful test points first. Do not pad with duplicate or low-value cases.
+                    9. If the requirement only supports fewer valid cases than the limit, return only the reasonable count.
+                    10. When text and images both provide information, combine them and do not ignore key UI or flow details.
+                    """);
+        } else {
+            builder.append("""
+                    [Output Requirements]
+                    1. Return JSON only. Do not return markdown, explanation, or extra prose.
+                    2. The response must be either a JSON array or {\"cases\":[...]}.
+                    3. Every case must contain:
+                       - title
+                       - caseType
+                       - priority
+                       - precondition
+                       - steps
+                       - expectedResult
+                       - riskNotes
+                       - testAngle: one of 正常场景, 异常场景, 边界值, 等价类, 状态迁移, 组合/判定表, 错误推测, 端到端, 非功能, 数据依赖与清理
+                       - generationReason: short reason explaining why this case is needed and what risk or coverage gap it targets
+                       - requirementEvidence: requirement text, business rule, constraint, or image/prototype evidence that supports this case
+                    4. caseType must be one of: FUNCTION, BOUNDARY, EXCEPTION, REGRESSION.
+                    5. priority must be one of: P0, P1, P2, P3.
+                    6. requirementEvidence must explain the source of the case:
+                       - If based on requirement text, quote or summarize the related sentence, rule, or constraint.
+                       - If based on an attached image/prototype, start with "图片素材显示：".
+                       - If inferred from testing risk because the requirement is not explicit, start with "需求未明确，基于风险推断：".
+                       - Do not fabricate exact requirement wording. If unsure, summarize instead of quoting.
+                    7. Keep titles, steps, expected results, generationReason, and requirementEvidence concrete, executable, and verifiable.
+                    8. Cover useful test points first. Do not pad with duplicate or low-value cases.
+                    9. If the requirement only supports fewer valid cases than the limit, return only the reasonable count.
+                    10. When text and images both provide information, combine them and do not ignore key UI or flow details.
+                    """);
+        }
         return builder.toString();
     }
 
-    private String buildGeneratedCasesReviewPrompt(AiCaseConfigEntity config, ReviewAiGeneratedCasesRequest request) {
+    private String buildGeneratedCasesReviewPrompt(AiCaseConfigEntity config, ReviewAiGeneratedCasesRequest request, boolean streamMode) {
         StringBuilder builder = new StringBuilder();
         builder.append(config.getPromptTemplate()).append("\n\n");
         builder.append("[Requirement Title] ").append(request.requirementTitle().trim()).append('\n');
@@ -1135,32 +1405,52 @@ public class AiCaseService {
             builder.append("[Focus] ").append(request.sceneFocus().trim()).append('\n');
         }
         builder.append("[Candidate Cases To Review]\n");
-        int index = 1;
+        int index = 0;
         for (AiExistingCaseItem item : request.generatedCases()) {
-            builder.append(index++).append(". Title: ").append(nullSafe(item.title())).append('\n');
+            builder.append("[Index ").append(index++).append("] Title: ").append(nullSafe(item.title())).append('\n');
             builder.append("   Type: ").append(nullSafe(item.caseType()))
                     .append(", Priority: ").append(nullSafe(item.priority())).append('\n');
             builder.append("   Precondition: ").append(nullSafe(item.precondition())).append('\n');
             builder.append("   Steps: ").append(nullSafe(item.steps())).append('\n');
-            builder.append("   Expected Result: ").append(nullSafe(item.expectedResult())).append("\n\n");
+            builder.append("   Expected Result: ").append(nullSafe(item.expectedResult())).append('\n');
+            builder.append("   Test Angle: ").append(nullSafe(item.testAngle())).append('\n');
+            builder.append("   Generation Reason: ").append(nullSafe(item.generationReason())).append('\n');
+            builder.append("   Requirement Evidence: ").append(nullSafe(item.requirementEvidence())).append("\n\n");
         }
         if (config.getReviewChecklist() != null && !config.getReviewChecklist().isBlank()) {
             builder.append("[Extra Review Checklist]\n").append(config.getReviewChecklist().trim()).append("\n\n");
         }
-        builder.append("""
-                [Output Requirements]
-                1. Return JSON only. Do not return markdown, explanation, or extra prose.
-                2. The response must be:
-                   {
-                     \"result\":\"APPROVE|REJECT|SUGGEST\",
-                     \"summary\":\"one-sentence summary\",
-                     \"issues\":[\"issue 1\",\"issue 2\"],
-                     \"suggestions\":[\"suggestion 1\",\"suggestion 2\"]
-                   }
-                3. Use issues to point out missing coverage, duplicates, ambiguity, or non-executable content.
-                4. Use suggestions to propose concrete follow-up scenarios or improvements.
-                5. Even if the overall quality is good, still provide useful suggestions for strengthening coverage.
-                """);
+        if (streamMode) {
+            builder.append("""
+                    [Output Requirements]
+                    1. Return NDJSON only. Do not return markdown, explanation, JSON array wrappers, or extra prose.
+                    2. Output one complete JSON object per line. Each line represents one reviewed case.
+                    3. Every line must contain:
+                       - caseIndex: the zero-based Index shown above
+                       - status: APPROVED, SUGGESTED, or REJECTED
+                       - summary: one short actionable review summary
+                       - coverageComment: explain whether this case covers the intended requirement, risk, boundary, or scenario
+                       - evidenceComment: judge whether requirementEvidence clearly maps to requirement text, business rule, image/prototype information, or a reasonable risk-based inference
+                    4. Use SUGGESTED when the case is usable but should be optimized.
+                    5. Use REJECTED when the case is duplicated, unexecutable, or seriously misaligned with the requirement.
+                    6. summary, coverageComment, and evidenceComment must be useful for manual improvement, not only "passed".
+                    """);
+        } else {
+            builder.append("""
+                    [Output Requirements]
+                    1. Return JSON only. Do not return markdown, explanation, or extra prose.
+                    2. The response must be:
+                       {
+                         \"result\":\"APPROVE|REJECT|SUGGEST\",
+                         \"summary\":\"one-sentence summary\",
+                         \"issues\":[\"issue 1\",\"issue 2\"],
+                         \"suggestions\":[\"suggestion 1\",\"suggestion 2\"]
+                       }
+                    3. Use issues to point out missing coverage, duplicates, ambiguity, or non-executable content.
+                    4. Use suggestions to propose concrete follow-up scenarios or improvements.
+                    5. Even if the overall quality is good, still provide useful suggestions for strengthening coverage.
+                    """);
+        }
         return builder.toString();
     }
 
@@ -1494,6 +1784,20 @@ public class AiCaseService {
                 .toList();
     }
 
+    private boolean isImageInputUnsupportedError(RuntimeException exception) {
+        String message = exception.getMessage();
+        if (message == null) {
+            return false;
+        }
+        String normalized = message.toLowerCase(Locale.ROOT);
+        return normalized.contains("不支持图片")
+                || normalized.contains("图片输入")
+                || normalized.contains("image input")
+                || normalized.contains("vision")
+                || normalized.contains("image_url")
+                || normalized.contains("input_image");
+    }
+
     private AiRequirementAssetResponse toAssetResponse(AiRequirementAssetEntity entity) {
         return new AiRequirementAssetResponse(
                 entity.getId(),
@@ -1511,6 +1815,202 @@ public class AiCaseService {
         if (!asset.getUserId().equals(CurrentUserContext.get())) {
             throw new BadRequestException("You do not have permission to modify this requirement asset");
         }
+    }
+
+    private void drainCompleteLines(StringBuilder buffer, Consumer<String> lineConsumer) {
+        int index = indexOfLineBreak(buffer);
+        while (index >= 0) {
+            String line = buffer.substring(0, index);
+            buffer.delete(0, index + 1);
+            lineConsumer.accept(line);
+            index = indexOfLineBreak(buffer);
+        }
+    }
+
+    private int indexOfLineBreak(StringBuilder buffer) {
+        for (int index = 0; index < buffer.length(); index += 1) {
+            char current = buffer.charAt(index);
+            if (current == '\n') {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private void emitGeneratedCaseLine(
+            String rawLine,
+            int maxCases,
+            List<GeneratedAiCaseItem> generatedCases,
+            List<String> warnings,
+            List<AiInvalidCaseItem> invalidCases,
+            StringBuilder rawOutput,
+            Consumer<GeneratedCaseStreamUpdate> caseConsumer
+    ) {
+        if (generatedCases.size() >= maxCases) {
+            return;
+        }
+        String line = normalizeStreamJsonLine(rawLine);
+        if (line == null) {
+            return;
+        }
+        try {
+            AiGeneratedCasesResult parsed = aiProviderClient.parseGeneratedCasesContent("{\"cases\":[" + line + "]}", 1);
+            if (parsed.generatedCases().isEmpty()) {
+                return;
+            }
+            warnings.addAll(parsed.warnings());
+            invalidCases.addAll(parsed.invalidCases());
+            GeneratedAiCaseItem item = parsed.generatedCases().get(0);
+            generatedCases.add(item);
+            if (caseConsumer != null) {
+                caseConsumer.accept(new GeneratedCaseStreamUpdate(
+                        generatedCases.size() - 1,
+                        item,
+                        rawOutput.toString()
+                ));
+            }
+        } catch (RuntimeException ignored) {
+            // Wait for a later complete line or final full-output fallback.
+        }
+    }
+
+    private void emitReviewLine(
+            String rawLine,
+            int caseCount,
+            StringBuilder rawOutput,
+            Map<Integer, ReviewCaseStreamUpdate> updates,
+            Consumer<ReviewCaseStreamUpdate> reviewConsumer
+    ) {
+        String line = normalizeStreamJsonLine(rawLine);
+        if (line == null) {
+            return;
+        }
+        try {
+            JsonNode root = OBJECT_MAPPER.readTree(line);
+            Integer caseIndex = parseReviewCaseIndex(root, caseCount);
+            if (caseIndex == null) {
+                return;
+            }
+            String status = normalizePerCaseReviewStatus(firstText(root, "status", "result", "reviewStatus"));
+            String summary = firstText(root, "summary", "message", "reason", "suggestion");
+            String coverageComment = firstText(root, "coverageComment", "coverage", "coverageReason");
+            String evidenceComment = firstText(root, "evidenceComment", "evidence", "evidenceReason");
+            if (summary == null || summary.isBlank()) {
+                summary = switch (status) {
+                    case "APPROVED" -> "AI review approved this case.";
+                    case "REJECTED" -> "AI review suggests regenerating this case.";
+                    default -> "AI review suggests optimizing this case.";
+                };
+            }
+            if (coverageComment == null || coverageComment.isBlank()) {
+                coverageComment = summary;
+            }
+            if (evidenceComment == null || evidenceComment.isBlank()) {
+                evidenceComment = firstText(root, "reason", "summary");
+            }
+            ReviewCaseStreamUpdate update = new ReviewCaseStreamUpdate(caseIndex, status, summary, coverageComment, evidenceComment, rawOutput.toString());
+            updates.put(caseIndex, update);
+            if (reviewConsumer != null) {
+                reviewConsumer.accept(update);
+            }
+        } catch (Exception ignored) {
+            // Wait for a later complete line or final full-output fallback.
+        }
+    }
+
+    private String normalizeStreamJsonLine(String rawLine) {
+        if (rawLine == null) {
+            return null;
+        }
+        String line = rawLine.trim();
+        while (line.startsWith(",")) {
+            line = line.substring(1).trim();
+        }
+        while (line.endsWith(",")) {
+            line = line.substring(0, line.length() - 1).trim();
+        }
+        if (line.isBlank() || line.startsWith("```") || line.startsWith("[") || !line.startsWith("{")) {
+            return null;
+        }
+        return line;
+    }
+
+    private Integer parseReviewCaseIndex(JsonNode root, int caseCount) {
+        Integer caseIndex = optionalInt(root.path("caseIndex"));
+        if (caseIndex != null && caseIndex >= 0 && caseIndex < caseCount) {
+            return caseIndex;
+        }
+        Integer itemIndex = optionalInt(root.path("itemIndex"));
+        if (itemIndex != null && itemIndex >= 0 && itemIndex < caseCount) {
+            return itemIndex;
+        }
+        Integer index = optionalInt(root.path("index"));
+        if (index != null && index >= 0 && index < caseCount) {
+            return index;
+        }
+        Integer caseNo = optionalInt(root.path("caseNo"));
+        if (caseNo != null && caseNo >= 1 && caseNo <= caseCount) {
+            return caseNo - 1;
+        }
+        return null;
+    }
+
+    private Integer optionalInt(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (node.canConvertToInt()) {
+            return node.asInt();
+        }
+        if (node.isTextual()) {
+            try {
+                return Integer.parseInt(node.asText().trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private String firstText(JsonNode root, String... fieldNames) {
+        for (String fieldName : fieldNames) {
+            JsonNode node = root.path(fieldName);
+            if (node.isTextual() && !node.asText().trim().isBlank()) {
+                return node.asText().trim();
+            }
+        }
+        return null;
+    }
+
+    private String normalizePerCaseReviewStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return "SUGGESTED";
+        }
+        String normalized = status.trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "APPROVE", "APPROVED", "PASS", "PASSED" -> "APPROVED";
+            case "REJECT", "REJECTED", "FAIL", "FAILED" -> "REJECTED";
+            default -> "SUGGESTED";
+        };
+    }
+
+    private AiReviewResult buildStreamReviewResult(String rawContent, Map<Integer, ReviewCaseStreamUpdate> updates) {
+        if (updates.isEmpty()) {
+            return aiProviderClient.parseReviewResultContent(rawContent);
+        }
+        boolean hasRejected = updates.values().stream().anyMatch(item -> "REJECTED".equals(item.status()));
+        boolean hasSuggested = updates.values().stream().anyMatch(item -> "SUGGESTED".equals(item.status()));
+        String result = hasRejected ? "REJECT" : hasSuggested ? "SUGGEST" : "APPROVE";
+        List<String> issues = updates.values().stream()
+                .filter(item -> "REJECTED".equals(item.status()))
+                .map(item -> "Case " + (item.itemIndex() + 1) + ": " + item.summary())
+                .toList();
+        List<String> suggestions = updates.values().stream()
+                .filter(item -> "SUGGESTED".equals(item.status()))
+                .map(item -> "Case " + (item.itemIndex() + 1) + ": " + item.summary())
+                .toList();
+        String summary = "AI review completed for " + updates.size() + " generated cases.";
+        return new AiReviewResult(result, summary, issues, suggestions, rawContent, true);
     }
 
     private record DocumentImportContent(
@@ -1535,6 +2035,58 @@ public class AiCaseService {
             return "*".repeat(apiKey.length());
         }
         return apiKey.substring(0, 4) + "*".repeat(apiKey.length() - 8) + apiKey.substring(apiKey.length() - 4);
+    }
+
+    public record AiStreamModelInfo(
+            String provider,
+            String model
+    ) {
+    }
+
+    public record GeneratedCaseStreamUpdate(
+            Integer itemIndex,
+            GeneratedAiCaseItem item,
+            String rawOutput
+    ) {
+    }
+
+    public record ReviewCaseStreamUpdate(
+            Integer itemIndex,
+            String status,
+            String summary,
+            String coverageComment,
+            String evidenceComment,
+            String rawOutput
+    ) {
+    }
+
+    public record StreamedGenerateCasesResult(
+            String workspaceCode,
+            String workspaceName,
+            String provider,
+            String model,
+            Integer systemMaxCases,
+            Integer requestedMaxCases,
+            Integer effectiveMaxCases,
+            Integer actualGeneratedCount,
+            List<GeneratedAiCaseItem> generatedCases,
+            List<String> warnings,
+            List<AiInvalidCaseItem> invalidCases,
+            String rawContent,
+            boolean fallbackToComplete,
+            String fallbackReason,
+            boolean ignoredImages
+    ) {
+    }
+
+    public record StreamedReviewResult(
+            String provider,
+            String model,
+            AiReviewResult reviewResult,
+            String rawContent,
+            boolean fallbackToComplete,
+            String fallbackReason
+    ) {
     }
 
     private record ResolvedRoleConfig(

@@ -127,6 +127,8 @@ const processSteps = [
   },
 ]
 
+const IMAGE_UNSUPPORTED_CREATE_MESSAGE = '当前生成模型不支持图片识别，是否忽略图片并仅基于文本继续生成？'
+
 const targetWorkspaceCode = computed(() => (isAllScope.value ? selectedWorkspaceCode.value : workspaceCode.value))
 const currentWorkspaceName = computed(() => {
   if (!targetWorkspaceCode.value) {
@@ -153,13 +155,11 @@ const canGenerateDocument = computed(() => (
   && !!documentForm.directoryPath.trim()
   && !!activeConfig.value
 ))
-const hasImportedDocumentAssets = computed(() => requirementAssets.value.length > 0)
-const textOnlyGenerationNotice = computed(() => {
-  if (!hasImportedDocumentAssets.value || !activeConfig.value || activeConfig.value.supportsImageInput) {
-    return ''
-  }
-  return '当前编写模型不支持图片输入，将自动忽略文档中的图片素材，按纯文本需求继续生成测试用例。'
-})
+const selectedRequirementAssetIds = computed(() => requirementAssets.value.filter(item => item.selected).map(item => item.id))
+const imageCapabilityNotices = [
+  '模型支持图文输入，如文档中包含图片素材，将一并参与本次测试用例生成。',
+  '模型不支持图片识别。若文档中包含图片素材，生成时可选择忽略图片并仅基于文本继续。',
+]
 const aiConfigReady = computed(() => (
   !!currentWorkspaceName.value
   && !!activeConfig.value
@@ -642,24 +642,48 @@ async function handleGenerateCases(source: 'manual' | 'document' = 'manual') {
     return
   }
 
-  if (textOnlyGenerationNotice.value) {
-    ElMessage.warning(textOnlyGenerationNotice.value)
-  }
+  const selectedAssetIds = source === 'document' ? selectedRequirementAssetIds.value : []
 
   generating.value = true
 
   try {
     const resolvedDirectory = await ensureDirectoryPath(directoryPath)
-    const baseRecord = await createAiGenerationRecord(targetWorkspaceCode.value, {
-      requirementTitle,
-      requirementContent,
-      outputMode: form.outputMode,
-      directoryId: resolvedDirectory.directoryId,
-      directoryName: resolvedDirectory.directoryName ?? directoryPath,
-      assetIds: source === 'document' && activeConfig.value?.supportsImageInput
-        ? requirementAssets.value.filter(item => item.selected).map(item => item.id)
-        : [],
-    })
+    const submitTask = (assetIds: number[], ignoredAssetCount = 0) => createAiGenerationRecord(targetWorkspaceCode.value, {
+        requirementTitle,
+        requirementContent,
+        outputMode: form.outputMode,
+        directoryId: resolvedDirectory.directoryId,
+        directoryName: resolvedDirectory.directoryName ?? directoryPath,
+        assetIds,
+        ignoredAssetCount,
+      })
+    let baseRecord: AiGenerationTaskRecord
+    try {
+      baseRecord = await submitTask(selectedAssetIds)
+    }
+    catch (error) {
+      const message = (error as Error).message
+      if (source !== 'document' || !selectedAssetIds.length || !message.includes(IMAGE_UNSUPPORTED_CREATE_MESSAGE)) {
+        throw error
+      }
+      try {
+        await ElMessageBox.confirm(
+          '当前生成模型不支持图片识别。可以取消生成，或忽略图片素材，仅基于文档文本继续生成。',
+          '模型不支持图片',
+          {
+            type: 'warning',
+            confirmButtonText: '忽略图片继续生成',
+            cancelButtonText: '取消生成',
+            distinguishCancelAndClose: true,
+          },
+        )
+      }
+      catch {
+        return
+      }
+      ElMessage.warning(`已忽略 ${selectedAssetIds.length} 个图片素材，将按纯文本需求继续生成。`)
+      baseRecord = await submitTask([], selectedAssetIds.length)
+    }
     if (source === 'document') {
       documentTaskRecordId.value = baseRecord.id
     } else {
@@ -959,8 +983,8 @@ onBeforeUnmount(() => {
                   </template>
                 </el-input>
                 <div class="field-label">图片能力提示</div>
-                <div class="upload-hint-box" :class="{ 'upload-hint-box-warning': !!textOnlyGenerationNotice }">
-                  {{ textOnlyGenerationNotice || '当前模型支持图文输入，如文档中包含图片素材，将一并参与本次测试用例生成。' }}
+                <div class="upload-hint-box">
+                  <div v-for="notice in imageCapabilityNotices" :key="notice">{{ notice }}</div>
                 </div>
 
                 <div class="upload-card-actions">
@@ -1640,12 +1664,6 @@ onBeforeUnmount(() => {
   font-size: 13px;
   line-height: 1.75;
   color: #1d4ed8;
-}
-
-.upload-hint-box-warning {
-  border-color: rgba(245, 158, 11, 0.26);
-  background: rgba(255, 247, 237, 0.92);
-  color: #9a3412;
 }
 
 .upload-box-icon {

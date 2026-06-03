@@ -6,6 +6,9 @@ public record AiExistingCaseItem(
         String priority,
         String precondition,
         String steps,
-        String expectedResult
+        String expectedResult,
+        String testAngle,
+        String generationReason,
+        String requirementEvidence
 ) {
 }

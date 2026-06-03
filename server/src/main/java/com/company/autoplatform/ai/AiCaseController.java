@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 @RestController
 @RequestMapping("/api/cases/ai")
@@ -207,6 +208,14 @@ public class AiCaseController {
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
     ) {
         return ApiResponse.ok(aiGenerationTaskService.getTask(taskId, workspaceCode));
+    }
+
+    @GetMapping(value = "/tasks/{taskId}/events/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public StreamingResponseBody streamTaskEvents(
+            @PathVariable String taskId,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return aiGenerationTaskService.streamTaskEvents(taskId, workspaceCode);
     }
 
     @PutMapping("/tasks/{taskId}")

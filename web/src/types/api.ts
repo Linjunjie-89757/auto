@@ -162,6 +162,9 @@ export interface CreateCasePayload {
   precondition: string
   steps: string
   expectedResult: string
+  testAngle?: string | null
+  generationReason?: string | null
+  requirementEvidence?: string | null
 }
 
 export interface ReviewCasePayload {
@@ -283,7 +286,12 @@ export interface AiGeneratedCase {
   steps: string
   expectedResult: string
   riskNotes: string | null
+  testAngle?: string | null
+  generationReason?: string | null
+  requirementEvidence?: string | null
   warnings: string[]
+  aiReviewStatus?: 'PENDING' | 'APPROVED' | 'SUGGESTED' | 'REJECTED' | null
+  aiReviewSummary?: string | null
   savedDirectoryName?: string | null
   manualEdited?: boolean
   manualEditedByName?: string | null
@@ -397,6 +405,22 @@ export interface TestAiProviderConnectionResponse {
 export type AiGenerationOutputMode = 'STREAM' | 'COMPLETE'
 export type AiGenerationTaskStatus = 'PENDING' | 'GENERATING' | 'REVIEWING' | 'COMPLETED' | 'FAILED' | 'CANCELED'
 
+export interface AiGenerationTaskEvent {
+  id: number | null
+  taskId: string
+  seq: number
+  eventType: string
+  phase: string
+  level: 'INFO' | 'WARN' | 'ERROR' | string
+  message: string
+  itemIndex: number | null
+  itemTitle: string | null
+  provider: string | null
+  model: string | null
+  payloadJson: string | null
+  createdAt: string | null
+}
+
 export interface AiGenerationTask {
   taskId: string
   workspaceCode: string
@@ -420,6 +444,9 @@ export interface AiGenerationTask {
   invalidCases: AiInvalidCaseItem[]
   generatedCases: AiGeneratedCase[]
   reviewResult: AiReviewResult | null
+  generationRawOutput: string | null
+  reviewRawOutput: string | null
+  events: AiGenerationTaskEvent[]
   adoptedCaseIndexes: number[]
   deletedCaseIndexes: number[]
   cancelRequested: boolean
@@ -437,6 +464,7 @@ export interface CreateAiGenerationTaskPayload {
   directoryId?: number | null
   directoryName?: string | null
   assetIds?: number[]
+  ignoredAssetCount?: number
 }
 
 export interface UpdateAiGenerationTaskPayload {

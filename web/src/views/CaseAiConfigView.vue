@@ -54,20 +54,50 @@ type ModelPoolOption = {
 
 const router = useRouter()
 
-const DEFAULT_GENERATOR_PROMPT = `你是一名资深测试工程师，擅长接口自动化测试用例的设计。
+const DEFAULT_SMART_MAX_CASES = 50
+const DEFAULT_GENERATOR_PROMPT = `你是一名资深测试工程师，负责根据需求文档、业务规则、接口说明、页面原型或图片素材设计高质量测试用例。
+请优先产出真实有价值、可执行、可验证的测试用例，而不是为了数量凑重复场景。
+
+生成时请重点关注：
+1. 覆盖正常场景、异常场景、边界值、等价类、状态迁移、组合/判定表、错误推测、端到端场景、非功能性、数据准备与清理。
+2. 每条用例都要有清晰标题、前置条件、测试步骤、预期结果、优先级和测试类型。
+3. 每条用例都要说明测试角度、生成依据和生成原因。
+4. 生成依据应来自需求原文、业务规则、约束条件、图片/原型信息，或明确标注为基于风险的合理推断。
+5. 步骤必须清晰可执行，预期结果必须客观可验证，避免“系统正常”等模糊表述。
+6. 需求不明确时不要编造确定结论，应标明需要确认的点或风险假设。`
+const DEFAULT_GENERATOR_CHECKLIST = '优先覆盖主流程、异常分支、边界/等价类、状态流转、组合条件、错误推测、端到端链路、非功能风险和数据准备/清理；避免重复、低价值或不可执行用例。'
+const DEFAULT_REVIEW_PROMPT = `你是一名严格的测试架构师，负责对 AI 生成的测试用例进行质量评审、自动优化和覆盖补充。
+评审时请先基于需求全文和全部候选用例判断整体覆盖率，再逐条给出结论。
+
+评审时请重点检查：
+1. 需求覆盖度：功能点、业务规则、约束条件是否有正向和反向覆盖。
+2. 测试类型覆盖：正常、异常、边界、等价类、状态迁移、组合、错误推测、端到端、非功能、数据清理是否存在明显缺口。
+3. 可执行性：前置条件、步骤、预期结果是否明确、可操作、可验证。
+4. 依据可信度：生成依据是否能对应需求文本、图片/原型信息、业务规则或合理风险推断。
+5. 优先级合理性：P0/P1 是否对应核心流程和高风险场景。
+6. 冗余与低价值：是否存在重复、过泛、不可执行或与需求无关的用例。
+
+处理原则：
+1. 好的用例直接通过。
+2. 有价值但表达不清、步骤不完整或预期不可验证的用例，直接给出优化后的完整用例。
+3. 存在关键覆盖缺口时，直接补充新的完整用例。
+4. 需求不明确或依据不足时，标记为建议确认。
+5. 重复、低价值、不可执行或偏离需求的用例，标记为不推荐。`
+const DEFAULT_REVIEW_CHECKLIST = '重点检查覆盖缺口、边界/等价类、组合条件、异常鲁棒性、可执行性、依据可信度、优先级合理性、重复低价值用例；需要时直接优化或补充完整用例。'
+const LEGACY_GENERATOR_PROMPT = `你是一名资深测试工程师，擅长接口自动化测试用例的设计。
 请根据接口信息生成完整的测试用例，包括正向用例、边界值用例和异常用例。
 要求：
 1. 用例描述清晰，步骤明确
 2. 断言覆盖响应状态码、响应数据结构和业务逻辑
 3. 优先考虑高频业务场景`
-const DEFAULT_GENERATOR_CHECKLIST = '优先覆盖主流程、边界条件、异常分支和高风险回归点，避免重复或低价值用例。'
-const DEFAULT_REVIEW_PROMPT = `你是一名资深 QA 评审专家，负责对测试用例进行质量评审。
+const LEGACY_GENERATOR_CHECKLIST = '优先覆盖主流程、边界条件、异常分支和高风险回归点，避免重复或低价值用例。'
+const LEGACY_REVIEW_PROMPT = `你是一名资深 QA 评审专家，负责对测试用例进行质量评审。
 请从以下维度评审用例：
 1. 覆盖度：是否覆盖核心业务场景和边界条件
 2. 可执行性：步骤是否清晰、断言是否合理
 3. 冗余度：是否存在重复或低价值用例
 请给出评审结论和改进建议。`
-const DEFAULT_REVIEW_CHECKLIST = '优先检查主流程、边界、异常、重复场景，以及步骤与预期结果是否清晰可验证。'
+const LEGACY_REVIEW_CHECKLIST = '优先检查主流程、边界、异常、重复场景，以及步骤与预期结果是否清晰可验证。'
 
 const roleMeta: RoleCardMeta[] = [
   {
@@ -143,14 +173,15 @@ function createDefaultForm(roleType: RoleType): RoleForm {
   const detectedCapabilities = createUnknownCapabilities()
   const capabilityOverride: AiCapabilityOverride = {}
   const effectiveCapabilities = applyOverrideToCapabilities(detectedCapabilities, capabilityOverride)
+  const defaultTemperature = roleType === 'CASE_GENERATOR' ? 0.7 : 0.5
   return {
     id: null,
     providerConnectionId: null,
     model: '',
     promptTemplate: roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_PROMPT : DEFAULT_REVIEW_PROMPT,
     reviewChecklist: roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_CHECKLIST : DEFAULT_REVIEW_CHECKLIST,
-    temperature: 0.3,
-    maxCases: 20,
+    temperature: defaultTemperature,
+    maxCases: DEFAULT_SMART_MAX_CASES,
     status: 1,
     capabilityOverride,
     detectedCapabilities,
@@ -201,6 +232,30 @@ function defaultPromptForRole(roleType: RoleType) {
 
 function defaultChecklistForRole(roleType: RoleType) {
   return roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_CHECKLIST : DEFAULT_REVIEW_CHECKLIST
+}
+
+function legacyPromptForRole(roleType: RoleType) {
+  return roleType === 'CASE_GENERATOR' ? LEGACY_GENERATOR_PROMPT : LEGACY_REVIEW_PROMPT
+}
+
+function legacyChecklistForRole(roleType: RoleType) {
+  return roleType === 'CASE_GENERATOR' ? LEGACY_GENERATOR_CHECKLIST : LEGACY_REVIEW_CHECKLIST
+}
+
+function normalizePromptTemplate(roleType: RoleType, value: string | null | undefined) {
+  const normalized = value?.trim()
+  if (!normalized || normalized === legacyPromptForRole(roleType)) {
+    return defaultPromptForRole(roleType)
+  }
+  return value ?? defaultPromptForRole(roleType)
+}
+
+function normalizeReviewChecklist(roleType: RoleType, value: string | null | undefined) {
+  const normalized = value?.trim()
+  if (!normalized || normalized === legacyChecklistForRole(roleType)) {
+    return defaultChecklistForRole(roleType)
+  }
+  return value ?? defaultChecklistForRole(roleType)
 }
 
 function restoreDefaultPrompt(roleType: RoleType) {
@@ -306,10 +361,10 @@ function applyLoadedRole(roleType: RoleType, config: AiCaseConfig | null) {
   forms[roleType].id = config.id
   forms[roleType].providerConnectionId = config.providerConnectionId
   forms[roleType].model = config.model
-  forms[roleType].promptTemplate = config.promptTemplate
-  forms[roleType].reviewChecklist = config.reviewChecklist ?? ''
+  forms[roleType].promptTemplate = normalizePromptTemplate(roleType, config.promptTemplate)
+  forms[roleType].reviewChecklist = normalizeReviewChecklist(roleType, config.reviewChecklist)
   forms[roleType].temperature = config.temperature
-  forms[roleType].maxCases = config.maxCases
+  forms[roleType].maxCases = config.maxCases ?? DEFAULT_SMART_MAX_CASES
   forms[roleType].status = config.status
   forms[roleType].capabilityOverride = config.capabilityOverride ?? {}
   forms[roleType].detectedCapabilities = config.detectedCapabilities ?? createUnknownCapabilities()
@@ -378,8 +433,6 @@ function canSaveRole(roleType: RoleType) {
     && !!form.promptTemplate.trim()
     && form.temperature >= 0
     && form.temperature <= 1
-    && form.maxCases >= 1
-    && form.maxCases <= 100
 }
 
 function buildRolePayload(roleType: RoleType): SaveAiCaseConfigPayload {
@@ -392,7 +445,7 @@ function buildRolePayload(roleType: RoleType): SaveAiCaseConfigPayload {
     promptTemplate: form.promptTemplate.trim() || (roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_PROMPT : DEFAULT_REVIEW_PROMPT),
     reviewChecklist: form.reviewChecklist.trim() || (roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_CHECKLIST : DEFAULT_REVIEW_CHECKLIST),
     temperature: Number(form.temperature),
-    maxCases: Number(form.maxCases),
+    maxCases: DEFAULT_SMART_MAX_CASES,
     capabilityOverride: { ...form.capabilityOverride },
     status: form.status,
   }
@@ -406,13 +459,14 @@ async function saveRole(roleType: RoleType) {
   savingRole.value = roleType
   try {
     const payload = buildRolePayload(roleType)
+    let savedConfig: AiCaseConfig
     if (forms[roleType].id) {
-      await platformApi.updateAiCaseConfig('ALL', forms[roleType].id!, payload)
+      savedConfig = await platformApi.updateAiCaseConfig('ALL', forms[roleType].id!, payload)
     } else {
-      await platformApi.createAiCaseConfig('ALL', payload)
+      savedConfig = await platformApi.createAiCaseConfig('ALL', payload)
     }
+    applyLoadedRole(roleType, savedConfig)
     ElMessage.success(`${roleType === 'CASE_GENERATOR' ? '用例生成模型' : '用例评审模型'}已保存`)
-    await loadConfig()
   } catch (error) {
     ElMessage.error((error as Error).message)
   } finally {
@@ -558,7 +612,7 @@ onBeforeUnmount(() => {
                     控制回答的随机性与创意程度。
                     <br>• 偏低（精准）：回答更稳定、一致
                     <br>• 偏高（创意）：回答更多样、发散
-                    <br>建议生成任务用 0.5，评审任务用 0.3
+                    <br>建议生成任务用 0.7，评审任务用 0.5
                   </span>
                 </span>
               </div>
@@ -631,11 +685,6 @@ onBeforeUnmount(() => {
               <Info />
               提示词会附加在每次 AI 请求前，影响生成结果的风格和质量
             </p>
-          </div>
-
-          <div class="hidden-business-fields" aria-hidden="true">
-            <el-input v-model="forms[meta.roleType].reviewChecklist" type="hidden" />
-            <el-input-number v-model="forms[meta.roleType].maxCases" :min="1" :max="100" />
           </div>
 
           <button

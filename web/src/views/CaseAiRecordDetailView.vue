@@ -400,6 +400,59 @@ function getAiReviewStatusClass(row: DetailCaseRow | null | undefined) {
   return 'status-info'
 }
 
+function getAiReviewListLabel(row: DetailCaseRow | null | undefined) {
+  const status = getAiReviewStatus(row)
+  const recordStatus = activeRecord.value?.status
+  if (status === 'PENDING') {
+    if (recordStatus === 'REVIEWING') {
+      return '评审中'
+    }
+    if (recordStatus === 'PENDING' || recordStatus === 'GENERATING') {
+      return '初始生成'
+    }
+  }
+  if (getAiSource(row) === 'REVIEW_SUPPLEMENTED' || status === 'SUPPLEMENTED') {
+    return '已补充'
+  }
+  return getAiReviewStatusLabel(row)
+}
+
+function getAiReviewListClass(row: DetailCaseRow | null | undefined) {
+  const status = getAiReviewStatus(row)
+  const recordStatus = activeRecord.value?.status
+  if (status === 'PENDING') {
+    if (recordStatus === 'REVIEWING') {
+      return 'status-warning'
+    }
+    if (recordStatus === 'PENDING' || recordStatus === 'GENERATING') {
+      return 'status-neutral'
+    }
+  }
+  if (getAiSource(row) === 'REVIEW_SUPPLEMENTED' || status === 'SUPPLEMENTED') {
+    return 'status-info'
+  }
+  return getAiReviewStatusClass(row)
+}
+
+function formatAiDisplayText(value: string | null | undefined) {
+  const normalized = value?.trim()
+  if (!normalized) {
+    return '-'
+  }
+  return normalized.replace(/\b(?:caseIndex|itemIndex|Index|Case)\s*[:#=]?\s*(\d+)\b/gi, (_matched, indexText) => {
+    const parsed = Number.parseInt(indexText, 10)
+    return `第 ${Number.isFinite(parsed) ? parsed + 1 : 1} 条`
+  })
+}
+
+function formatOutputEventMessage(event: AiGenerationTaskEvent) {
+  const message = formatAiDisplayText(event.message)
+  if (event.itemTitle && event.itemIndex !== null && !message.includes(event.itemTitle)) {
+    return message.replace(/^第\s*(\d+)\s*条用例/, `第 $1 条：${event.itemTitle}`)
+  }
+  return message
+}
+
 function getOutputEventClass(event: AiGenerationTaskEvent) {
   if (event.level === 'ERROR') {
     return 'is-error'
@@ -1416,7 +1469,7 @@ onBeforeUnmount(() => {
               :class="getOutputEventClass(event)"
             >
               <span class="task-output-log-time">{{ formatEventTime(event.createdAt) }}</span>
-              <span class="task-output-log-message">{{ event.message }}</span>
+              <span class="task-output-log-message">{{ formatOutputEventMessage(event) }}</span>
             </div>
           </div>
         </div>
@@ -1500,13 +1553,10 @@ onBeforeUnmount(() => {
             <el-table-column v-else-if="column.key === 'aiReview'" label="AI评审" width="132" align="center" show-overflow-tooltip>
               <template #default="{ row }">
                 <div class="ai-review-cell">
-                  <span class="status-pill" :class="getAiSourceClass(row)">
-                    {{ getAiSourceLabel(row) }}
+                  <span class="status-pill" :class="getAiReviewListClass(row)">
+                    {{ getAiReviewListLabel(row) }}
                   </span>
-                  <span class="status-pill" :class="getAiReviewStatusClass(row)">
-                    {{ getAiReviewStatusLabel(row) }}
-                  </span>
-                  <span v-if="row.aiReviewSummary" class="ai-review-summary">{{ row.aiReviewSummary }}</span>
+                  <span v-if="row.aiReviewSummary" class="ai-review-summary">{{ formatAiDisplayText(row.aiReviewSummary) }}</span>
                 </div>
               </template>
             </el-table-column>
@@ -1675,27 +1725,27 @@ onBeforeUnmount(() => {
               <div class="case-ai-analysis-grid">
                 <div class="case-preview-item">
                   <div class="case-preview-label">测试角度</div>
-                  <div class="case-preview-content">{{ activeCase.testAngle || '-' }}</div>
+                  <div class="case-preview-content">{{ formatAiDisplayText(activeCase.testAngle) }}</div>
                 </div>
                 <div class="case-preview-item">
                   <div class="case-preview-label">生成依据</div>
-                  <div class="case-preview-content">{{ activeCase.requirementEvidence || '-' }}</div>
+                  <div class="case-preview-content">{{ formatAiDisplayText(activeCase.requirementEvidence) }}</div>
                 </div>
                 <div class="case-preview-item">
                   <div class="case-preview-label">生成原因</div>
-                  <div class="case-preview-content">{{ activeCase.generationReason || '-' }}</div>
+                  <div class="case-preview-content">{{ formatAiDisplayText(activeCase.generationReason) }}</div>
                 </div>
                 <div class="case-preview-item">
                   <div class="case-preview-label">评审意见</div>
-                  <div class="case-preview-content">{{ activeCase.reviewComment || activeCase.aiReviewSummary || '-' }}</div>
+                  <div class="case-preview-content">{{ formatAiDisplayText(activeCase.reviewComment || activeCase.aiReviewSummary) }}</div>
                 </div>
                 <div v-if="activeCase.optimizationReason" class="case-preview-item">
                   <div class="case-preview-label">优化原因</div>
-                  <div class="case-preview-content">{{ activeCase.optimizationReason }}</div>
+                  <div class="case-preview-content">{{ formatAiDisplayText(activeCase.optimizationReason) }}</div>
                 </div>
                 <div v-if="activeCase.supplementReason || activeCase.coverageGap" class="case-preview-item">
                   <div class="case-preview-label">补充原因 / 覆盖缺口</div>
-                  <div class="case-preview-content">{{ activeCase.supplementReason || activeCase.coverageGap }}</div>
+                  <div class="case-preview-content">{{ formatAiDisplayText(activeCase.supplementReason || activeCase.coverageGap) }}</div>
                 </div>
               </div>
               <div v-if="activeCase.originalCaseSnapshot" class="case-version-compare">

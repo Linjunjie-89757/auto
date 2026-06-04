@@ -656,25 +656,7 @@ public class AiCaseService {
 
         AiReviewResult reviewResult = buildStreamReviewResult(rawContent, updates);
         if (updates.isEmpty() && !request.generatedCases().isEmpty()) {
-            String fallbackStatus = normalizePerCaseReviewStatus(reviewResult.result());
-            for (int index = 0; index < request.generatedCases().size(); index += 1) {
-                ReviewCaseStreamUpdate update = new ReviewCaseStreamUpdate(
-                        index,
-                        fallbackStatus,
-                        reviewResult.summary(),
-                        reviewResult.summary(),
-                        "完整输出评审未返回逐条依据评价，请查看评审原始输出。",
-                        reviewResult.summary(),
-                        null,
-                        null,
-                        null,
-                        rawContent
-                );
-                updates.put(index, update);
-                if (reviewConsumer != null) {
-                    reviewConsumer.accept(update);
-                }
-            }
+            emitCompleteReviewResultAsUpdates(reviewResult, rawContent, request.generatedCases().size(), updates, reviewConsumer);
         }
         return new StreamedReviewResult(
                 resolved.profile().provider(),
@@ -1287,7 +1269,7 @@ public class AiCaseService {
                 ? (existing == null ? 0.3 : existing.getTemperature())
                 : request.temperature();
         Integer maxCases = request.maxCases() == null
-                ? (existing == null ? 20 : existing.getMaxCases())
+                ? (existing == null ? INITIAL_SMART_MAX_CASES : existing.getMaxCases())
                 : request.maxCases();
         return new AiProviderRequestProfile(
                 protocolType,
@@ -1454,22 +1436,31 @@ public class AiCaseService {
             builder.append("""
                     [Output Requirements]
                     1. Return NDJSON only. Do not return markdown, explanation, JSON array wrappers, or extra prose.
-                    2. Output one complete JSON object per line. Each line represents one reviewed existing case.
-                    3. Every line must contain:
-                       - caseIndex: the zero-based Index shown above
+                    2. You have the full candidate case set above. First evaluate overall coverage, duplicates, gaps, and priorities internally, then output results line by line.
+                    3. Output one complete JSON object per line. Flush each line immediately after the decision is ready. Do not wait until all lines are complete before emitting.
+                    4. Output reviewed existing-case lines in ascending caseIndex order, then output any supplement lines.
+                    5. Reviewed existing-case lines must contain:
+                       - caseIndex: the zero-based Index shown above. This is an internal mapping key only.
                        - status: APPROVED, OPTIMIZED, CONFIRM_REQUIRED, or NOT_RECOMMENDED
-                       - summary: one short actionable review summary
+                       - summary: one short actionable review summary. Do not mention internal labels such as "Index 0", "caseIndex", or "itemIndex"; refer to the case title or user-facing case number when needed.
                        - coverageComment: explain whether this case covers the intended requirement, risk, boundary, or scenario
                        - evidenceComment: judge whether requirementEvidence clearly maps to requirement text, business rule, image/prototype information, or a reasonable risk-based inference
                        - reviewComment: final quality judgment for this case
                        - optimizationReason: required when status is OPTIMIZED
                        - optimizedCase: required when status is OPTIMIZED, containing the full improved case fields
                        - coverageGap: optional gap this case relates to
-                    4. Use APPROVED when the case can be kept unchanged.
-                    5. Use OPTIMIZED when the case is valuable but should be rewritten; include optimizedCase.
-                    6. Use CONFIRM_REQUIRED when the case depends on unclear requirements or strong risk inference.
-                    7. Use NOT_RECOMMENDED when the case is duplicated, low-value, unexecutable, or misaligned.
-                    8. For streaming mode, do not output supplement cases in NDJSON. Instead, mention missing coverage in coverageComment or summary.
+                    6. Supplement lines must contain:
+                       - status: SUPPLEMENTED
+                       - summary: one short reason for adding the case
+                       - supplementCase: the full new case fields
+                       - supplementReason: what missing coverage this case fills
+                       - coverageGap: the gap being covered
+                    7. Use APPROVED when the case can be kept unchanged.
+                    8. Use OPTIMIZED when the case is valuable but should be rewritten; include optimizedCase.
+                    9. Do not use OPTIMIZED without optimizedCase. If you cannot provide a full rewritten case, use CONFIRM_REQUIRED.
+                    10. Use CONFIRM_REQUIRED only when requirement ambiguity prevents a reliable automatic rewrite.
+                    11. Use NOT_RECOMMENDED when the case is duplicated, low-value, unexecutable, or misaligned.
+                    12. Add SUPPLEMENTED lines only for important missing coverage. Do not pad the count.
                     """);
         } else {
             builder.append("""
@@ -1971,17 +1962,33 @@ public class AiCaseService {
         }
         try {
             JsonNode root = OBJECT_MAPPER.readTree(line);
-            Integer caseIndex = parseReviewCaseIndex(root, caseCount);
-            if (caseIndex == null) {
-                return;
-            }
             String status = normalizePerCaseReviewStatus(firstText(root, "status", "result", "reviewStatus"));
             String summary = firstText(root, "summary", "message", "reason", "suggestion");
             String coverageComment = firstText(root, "coverageComment", "coverage", "coverageReason");
             String evidenceComment = firstText(root, "evidenceComment", "evidence", "evidenceReason");
             String reviewComment = firstText(root, "reviewComment", "comment");
             String optimizationReason = firstText(root, "optimizationReason");
+            String supplementReason = firstText(root, "supplementReason");
             String coverageGap = firstText(root, "coverageGap");
+            GeneratedAiCaseItem supplementCase = parseStreamGeneratedCase(firstPresentNode(root, "supplementCase", "case", "newCase"), "REVIEW_SUPPLEMENTED", "SUPPLEMENTED");
+            if ("SUPPLEMENTED".equals(status)) {
+                if (supplementCase == null) {
+                    return;
+                }
+                if (summary == null || summary.isBlank()) {
+                    summary = firstNonBlank(supplementReason, coverageGap, "AI review supplemented a missing case.");
+                }
+                ReviewCaseStreamUpdate update = new ReviewCaseStreamUpdate(null, status, summary, coverageComment, evidenceComment, reviewComment, optimizationReason, supplementReason, coverageGap, null, supplementCase, rawOutput.toString());
+                updates.put(-(updates.size() + 1), update);
+                if (reviewConsumer != null) {
+                    reviewConsumer.accept(update);
+                }
+                return;
+            }
+            Integer caseIndex = parseReviewCaseIndex(root, caseCount);
+            if (caseIndex == null) {
+                return;
+            }
             GeneratedAiCaseItem optimizedCase = parseStreamGeneratedCase(root.path("optimizedCase"), "REVIEW_OPTIMIZED", status);
             if (summary == null || summary.isBlank()) {
                 summary = switch (status) {
@@ -1997,7 +2004,7 @@ public class AiCaseService {
             if (evidenceComment == null || evidenceComment.isBlank()) {
                 evidenceComment = firstText(root, "reason", "summary");
             }
-            ReviewCaseStreamUpdate update = new ReviewCaseStreamUpdate(caseIndex, status, summary, coverageComment, evidenceComment, reviewComment, optimizationReason, coverageGap, optimizedCase, rawOutput.toString());
+            ReviewCaseStreamUpdate update = new ReviewCaseStreamUpdate(caseIndex, status, summary, coverageComment, evidenceComment, reviewComment, optimizationReason, null, coverageGap, optimizedCase, null, rawOutput.toString());
             updates.put(caseIndex, update);
             if (reviewConsumer != null) {
                 reviewConsumer.accept(update);
@@ -2080,6 +2087,33 @@ public class AiCaseService {
         );
     }
 
+    private GeneratedAiCaseItem withSupplementReviewMetadata(GeneratedAiCaseItem item, String summary, String supplementReason, String coverageGap) {
+        return new GeneratedAiCaseItem(
+                item.title(),
+                item.caseType(),
+                item.priority(),
+                item.precondition(),
+                item.steps(),
+                item.expectedResult(),
+                item.riskNotes(),
+                item.testAngle(),
+                item.generationReason(),
+                item.requirementEvidence(),
+                "REVIEW_SUPPLEMENTED",
+                item.reviewComment(),
+                item.optimizationReason(),
+                firstNonBlank(item.supplementReason(), supplementReason),
+                firstNonBlank(item.coverageGap(), coverageGap),
+                null,
+                item.warnings(),
+                "SUPPLEMENTED",
+                firstNonBlank(item.aiReviewSummary(), summary, supplementReason, coverageGap),
+                item.manualEdited(),
+                item.manualEditedByName(),
+                item.manualEditedAt()
+        );
+    }
+
     private Integer optionalInt(JsonNode node) {
         if (node == null || node.isMissingNode() || node.isNull()) {
             return null;
@@ -2102,6 +2136,25 @@ public class AiCaseService {
             JsonNode node = root.path(fieldName);
             if (node.isTextual() && !node.asText().trim().isBlank()) {
                 return node.asText().trim();
+            }
+        }
+        return null;
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private JsonNode firstPresentNode(JsonNode root, String... fieldNames) {
+        for (String fieldName : fieldNames) {
+            JsonNode node = root.path(fieldName);
+            if (!node.isMissingNode() && !node.isNull()) {
+                return node;
             }
         }
         return null;
@@ -2134,11 +2187,12 @@ public class AiCaseService {
                 .map(item -> "Case " + (item.itemIndex() + 1) + ": " + item.summary())
                 .toList();
         List<String> suggestions = updates.values().stream()
-                .filter(item -> !"APPROVED".equals(item.status()) && !"NOT_RECOMMENDED".equals(item.status()))
+                .filter(item -> item.itemIndex() != null && !"APPROVED".equals(item.status()) && !"NOT_RECOMMENDED".equals(item.status()) && !"SUPPLEMENTED".equals(item.status()))
                 .map(item -> "Case " + (item.itemIndex() + 1) + ": " + item.summary())
                 .toList();
         String summary = "AI review completed for " + updates.size() + " generated cases.";
         return new AiReviewResult(result, summary, issues, suggestions, updates.values().stream()
+                .filter(item -> !"SUPPLEMENTED".equals(item.status()))
                 .map(item -> new AiReviewCaseDecision(
                         item.itemIndex(),
                         item.status(),
@@ -2150,7 +2204,88 @@ public class AiCaseService {
                         item.coverageGap(),
                         item.optimizedCase()
                 ))
-                .toList(), List.of(), List.of(), rawContent, true);
+                .toList(), updates.values().stream()
+                .filter(item -> "SUPPLEMENTED".equals(item.status()) && item.supplementCase() != null)
+                .map(item -> withSupplementReviewMetadata(item.supplementCase(), item.summary(), item.supplementReason(), item.coverageGap()))
+                .toList(), List.of(), rawContent, true);
+    }
+
+    private void emitCompleteReviewResultAsUpdates(
+            AiReviewResult reviewResult,
+            String rawContent,
+            int caseCount,
+            Map<Integer, ReviewCaseStreamUpdate> updates,
+            Consumer<ReviewCaseStreamUpdate> reviewConsumer
+    ) {
+        if (reviewResult.caseDecisions() != null && !reviewResult.caseDecisions().isEmpty()) {
+            for (AiReviewCaseDecision decision : reviewResult.caseDecisions()) {
+                if (decision.caseIndex() == null || decision.caseIndex() < 0 || decision.caseIndex() >= caseCount) {
+                    continue;
+                }
+                ReviewCaseStreamUpdate update = new ReviewCaseStreamUpdate(
+                        decision.caseIndex(),
+                        decision.status() == null ? "CONFIRM_REQUIRED" : decision.status(),
+                        decision.summary(),
+                        decision.coverageComment(),
+                        decision.evidenceComment(),
+                        decision.reviewComment(),
+                        decision.optimizationReason(),
+                        null,
+                        decision.coverageGap(),
+                        decision.optimizedCase(),
+                        null,
+                        rawContent
+                );
+                updates.put(decision.caseIndex(), update);
+                if (reviewConsumer != null) {
+                    reviewConsumer.accept(update);
+                }
+            }
+        }
+        if (reviewResult.supplementCases() != null && !reviewResult.supplementCases().isEmpty()) {
+            for (GeneratedAiCaseItem item : reviewResult.supplementCases()) {
+                ReviewCaseStreamUpdate update = new ReviewCaseStreamUpdate(
+                        null,
+                        "SUPPLEMENTED",
+                        firstNonBlank(item.aiReviewSummary(), item.supplementReason(), item.coverageGap()),
+                        null,
+                        null,
+                        item.reviewComment(),
+                        null,
+                        item.supplementReason(),
+                        item.coverageGap(),
+                        null,
+                        item,
+                        rawContent
+                );
+                updates.put(-(updates.size() + 1), update);
+                if (reviewConsumer != null) {
+                    reviewConsumer.accept(update);
+                }
+            }
+        }
+        if (updates.isEmpty()) {
+            for (int index = 0; index < caseCount; index += 1) {
+                ReviewCaseStreamUpdate update = new ReviewCaseStreamUpdate(
+                        index,
+                        "CONFIRM_REQUIRED",
+                        reviewResult.summary(),
+                        reviewResult.summary(),
+                        "完整输出评审未返回逐条依据评价，请查看评审原始输出。",
+                        reviewResult.summary(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        rawContent
+                );
+                updates.put(index, update);
+                if (reviewConsumer != null) {
+                    reviewConsumer.accept(update);
+                }
+            }
+        }
     }
 
     private String generationCoverageSummary(String rawContent) {
@@ -2233,8 +2368,10 @@ public class AiCaseService {
             String evidenceComment,
             String reviewComment,
             String optimizationReason,
+            String supplementReason,
             String coverageGap,
             GeneratedAiCaseItem optimizedCase,
+            GeneratedAiCaseItem supplementCase,
             String rawOutput
     ) {
     }

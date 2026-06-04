@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { SwitchButton } from '@element-plus/icons-vue'
-import { Bell, Bug, ChevronDown, ChevronLeft, FileText, Home, Layers, Monitor, Network, Settings, Smartphone } from '@lucide/vue'
+import { Bell, Bug, ChevronDown, ChevronLeft, FileText, Home, Layers, Monitor, Network, Settings, SlidersHorizontal, Smartphone } from '@lucide/vue'
 import { ElMessage } from 'element-plus'
 import { platformApi } from './api/platform'
 import { navigationItems } from './data/platform'
@@ -24,12 +24,16 @@ const iconMap = {
   api: Network,
   web: Monitor,
   app: Smartphone,
+  config: SlidersHorizontal,
   settings: Settings,
 }
 
 const activeMenu = computed(() => {
   if (route.path.startsWith('/cases')) {
     return '/cases'
+  }
+  if (route.path.startsWith('/config-center')) {
+    return '/config-center'
   }
   return route.path
 })
@@ -93,6 +97,7 @@ const currentPageTitle = computed(() => {
   if (path.startsWith('/automation/api')) return '接口自动化'
   if (path.startsWith('/automation/web')) return 'Web UI 自动化'
   if (path.startsWith('/automation/app')) return 'APP 自动化'
+  if (path.startsWith('/config-center')) return '配置中心'
   if (path.startsWith('/settings')) return '系统设置'
   if (path.startsWith('/dashboard')) return '工作台'
   return navigationItems.find(item => item.path === activeMenu.value)?.label ?? 'Auto Test Hub'

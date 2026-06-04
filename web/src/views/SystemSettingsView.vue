@@ -30,6 +30,12 @@ const { currentUser, isPlatformAdmin, isSuperAdmin } = useWorkspaceAccess()
 const route = useRoute()
 const router = useRouter()
 
+const props = withDefaults(defineProps<{
+  mode?: 'settings' | 'configCenter'
+}>(), {
+  mode: 'settings',
+})
+
 type SettingsTab = 'aiConnection' | 'env' | 'param' | 'dbConnection' | 'workspace' | 'member'
 
 const activeTab = ref<SettingsTab>('aiConnection')
@@ -211,10 +217,14 @@ const dbConnectionForm = reactive<CreateDbConnectionPayload & { id: number | nul
 const businessWorkspaces = computed(() => workspaces.value.filter(item => !item.allScope))
 const canManageSettings = computed(() => isPlatformAdmin.value)
 const canManageAdminUsers = computed(() => isSuperAdmin.value)
+const isConfigCenter = computed(() => props.mode === 'configCenter')
 const visibleTabs = computed<SettingsTab[]>(() => {
+  if (isConfigCenter.value) {
+    return canManageSettings.value ? ['env', 'param', 'dbConnection'] : []
+  }
   const base: SettingsTab[] = ['aiConnection']
   if (canManageSettings.value) {
-    base.push('env', 'param', 'dbConnection', 'workspace', 'member')
+    base.push('workspace', 'member')
   }
   return base
 })
@@ -231,10 +241,15 @@ const selectableMembersForWorkspace = computed(() => {
   return activeUsers.value.filter(item => item.roleCode !== 'ADMIN' && !existingUserIds.has(item.id))
 })
 const currentScopeText = computed(() => {
-  if (isAllScope.value) {
-    return '当前为全部空间视角。环境配置和参数配置会跨空间展示；新建或编辑时需要明确目标空间。'
+  if (!isConfigCenter.value) {
+    return canManageSettings.value
+      ? '管理个人 AI 连接、工作空间与成员权限。'
+      : '管理个人 AI 连接配置。'
   }
-  return `当前为 ${resolveWorkspaceName(workspaceCode.value)} 视角。环境配置和参数配置只展示当前空间数据。`
+  if (isAllScope.value) {
+    return '当前为全部空间视角。环境配置、参数配置和数据库连接会跨空间展示；新建或编辑时需要明确目标空间。'
+  }
+  return `当前为 ${resolveWorkspaceName(workspaceCode.value)} 视角。配置中心只展示当前空间的公共配置。`
 })
 
 const filteredWorkspaces = computed(() => {
@@ -320,7 +335,7 @@ function normalizeSettingsTab(tab: unknown): SettingsTab {
   if (visibleTabs.value.includes(candidate as SettingsTab)) {
     return candidate as SettingsTab
   }
-  return canManageSettings.value ? 'env' : 'aiConnection'
+  return visibleTabs.value[0] ?? (isConfigCenter.value ? 'env' : 'aiConnection')
 }
 
 function syncSettingsTabFromRoute() {
@@ -1039,6 +1054,9 @@ watch(memberWorkspaceCode, () => {
 })
 
 watch(() => workspaceCode.value, () => {
+  if (!isConfigCenter.value) {
+    return
+  }
   resetEnvForm()
   resetParamForm()
   resetDbConnectionForm()
@@ -1073,15 +1091,22 @@ watch(activeTab, (tab) => {
 
 onMounted(async () => {
   syncSettingsTabFromRoute()
-  workspaceFilterMemory.load()
-  userFilterMemory.load()
-  memberFilterMemory.load()
-  envFilterMemory.load()
-  paramFilterMemory.load()
-  dbConnectionFilterMemory.load()
-  memberWorkspaceCode.value = memberFilters.workspaceCode
+  if (isConfigCenter.value) {
+    envFilterMemory.load()
+    paramFilterMemory.load()
+    dbConnectionFilterMemory.load()
+  } else {
+    workspaceFilterMemory.load()
+    userFilterMemory.load()
+    memberFilterMemory.load()
+    memberWorkspaceCode.value = memberFilters.workspaceCode
+  }
   await loadBaseData()
-  await Promise.all([loadMembers(), loadScopedSettings()])
+  if (isConfigCenter.value) {
+    await loadScopedSettings()
+  } else {
+    await loadMembers()
+  }
 })
 </script>
 
@@ -1090,16 +1115,16 @@ onMounted(async () => {
     <article class="page-card" v-loading="pageLoading">
       <header class="page-header">
         <div>
-          <h1 class="page-title">系统设置</h1>
+          <h1 class="page-title">{{ isConfigCenter ? '配置中心' : '系统设置' }}</h1>
           <p class="page-subtitle">{{ currentScopeText }}</p>
         </div>
       </header>
 
       <el-tabs v-if="canManageSettings" v-model="activeTab" class="settings-tabs">
-        <el-tab-pane label="AI连接" name="aiConnection">
+        <el-tab-pane v-if="visibleTabs.includes('aiConnection')" label="AI连接" name="aiConnection">
           <AiConnectionSettingsPanel />
         </el-tab-pane>
-        <el-tab-pane label="环境配置" name="env">
+        <el-tab-pane v-if="visibleTabs.includes('env')" label="环境配置" name="env">
           <ListToolbar title="环境配置">
             <template #filters>
               <el-input v-model="envFilters.keyword" placeholder="搜索环境名称 / 地址 / 所属空间" clearable class="toolbar-filter-input" />
@@ -1152,7 +1177,7 @@ onMounted(async () => {
           </el-table>
         </el-tab-pane>
 
-        <el-tab-pane label="参数配置" name="param">
+        <el-tab-pane v-if="visibleTabs.includes('param')" label="参数配置" name="param">
           <ListToolbar title="参数配置">
             <template #filters>
               <el-input v-model="paramFilters.keyword" placeholder="搜索参数集 / 内容 / 所属空间" clearable class="toolbar-filter-input" />
@@ -1205,7 +1230,7 @@ onMounted(async () => {
           </el-table>
         </el-tab-pane>
 
-        <el-tab-pane label="数据库连接" name="dbConnection" data-testid="db-connection-tab-pane">
+        <el-tab-pane v-if="visibleTabs.includes('dbConnection')" label="数据库连接" name="dbConnection" data-testid="db-connection-tab-pane">
           <ListToolbar title="数据库连接">
             <template #filters>
               <el-input v-model="dbConnectionFilters.keyword" placeholder="搜索名称 / JDBC URL / 用户 / 空间" clearable class="toolbar-filter-input" />
@@ -1261,7 +1286,7 @@ onMounted(async () => {
           </el-table>
         </el-tab-pane>
 
-        <el-tab-pane label="工作空间" name="workspace">
+        <el-tab-pane v-if="visibleTabs.includes('workspace')" label="工作空间" name="workspace">
           <ListToolbar title="工作空间">
             <template #filters>
               <el-input v-model="workspaceFilters.keyword" placeholder="搜索空间名称 / 编码 / 描述" clearable class="toolbar-filter-input" />
@@ -1298,7 +1323,7 @@ onMounted(async () => {
           </el-table>
         </el-tab-pane>
 
-        <el-tab-pane label="成员权限" name="member">
+        <el-tab-pane v-if="visibleTabs.includes('member')" label="成员权限" name="member">
           <div class="mode-toolbar">
             <el-radio-group v-model="memberViewMode">
               <el-radio-button value="user">按成员看</el-radio-button>

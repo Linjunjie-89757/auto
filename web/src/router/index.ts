@@ -13,6 +13,7 @@ import AutomationView from '../views/AutomationView.vue'
 import BugManagementView from '../views/BugManagementView.vue'
 import BugCreateView from '../views/BugCreateView.vue'
 import BugDetailView from '../views/BugDetailView.vue'
+import ConfigCenterView from '../views/ConfigCenterView.vue'
 import SystemSettingsView from '../views/SystemSettingsView.vue'
 import LoginView from '../views/LoginView.vue'
 
@@ -117,6 +118,11 @@ const router = createRouter({
       props: {
         engine: 'app',
       },
+    },
+    {
+      path: '/config-center',
+      name: 'config-center',
+      component: ConfigCenterView,
     },
     {
       path: '/settings',

@@ -5,6 +5,7 @@ export const navigationItems = [
   { label: '接口自动化', path: '/automation/api', icon: 'api' },
   { label: 'Web UI 自动化', path: '/automation/web', icon: 'web' },
   { label: 'APP 自动化', path: '/automation/app', icon: 'app' },
+  { label: '配置中心', path: '/config-center', icon: 'config' },
   { label: '系统设置', path: '/settings', icon: 'settings' },
 ] as const
 

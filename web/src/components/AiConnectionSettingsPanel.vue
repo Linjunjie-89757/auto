@@ -2,10 +2,11 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
   AlertCircle,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Check,
   Database,
+  Download,
   Edit2,
   Eye,
   EyeOff,
@@ -20,6 +21,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
 import anthropicLogo from '../assets/ai-providers/anthropic.svg'
 import azureLogo from '../assets/ai-providers/azure.svg'
+import customLogo from '../assets/ai-providers/custom.svg'
 import deepseekLogo from '../assets/ai-providers/deepseek.svg'
 import googleLogo from '../assets/ai-providers/google.svg'
 import kimiLogo from '../assets/ai-providers/kimi.svg'
@@ -83,7 +85,7 @@ const providerBrands: ProviderBrand[] = [
     models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
     protocolType: 'OPENAI_COMPATIBLE_CHAT',
     apiKeyLabel: 'API Key',
-    aliases: ['openai', 'gpt', 'chatgpt'],
+    aliases: ['openai', 'api.openai.com', 'chatgpt'],
   },
   {
     id: 'anthropic',
@@ -265,6 +267,7 @@ const providerBrands: ProviderBrand[] = [
     border: '#e5e7eb',
     text: '#94a3b8',
     logoClass: 'provider-logo-custom',
+    logoSrc: customLogo,
     baseUrl: 'https://your-api-endpoint/v1',
     models: [],
     protocolType: 'OPENAI_COMPATIBLE_CHAT',
@@ -282,6 +285,7 @@ const providerTestingId = ref<number | null>(null)
 const dialogTesting = ref(false)
 const providerDialogModelLoading = ref(false)
 const providerDialogModelRequestSeq = ref(0)
+const providerDialogModelError = ref('')
 const showModelDropdown = ref(false)
 const apiKeyVisible = ref(false)
 const apiKeySecretLoading = ref(false)
@@ -309,12 +313,14 @@ const connectedCount = computed(() => providers.value.filter(item => item.status
 const errorCount = computed(() => providers.value.filter(item => item.status === 0).length)
 
 function providerSearchText(provider: AiProviderConnection) {
-  return `${provider.connectionName} ${provider.baseUrl} ${provider.modelName ?? ''} ${provider.protocolType}`.toLowerCase()
+  return `${provider.connectionName} ${provider.baseUrl} ${provider.modelName ?? ''}`.toLowerCase()
 }
 
 function inferProviderBrand(provider: AiProviderConnection) {
   const source = providerSearchText(provider)
-  return providerBrands.find(brand => brand.aliases.some(alias => source.includes(alias.toLowerCase()))) ?? providerBrands[0]
+  return providerBrands.find(brand => brand.aliases.some(alias => source.includes(alias.toLowerCase())))
+    ?? providerBrands.find(brand => brand.id === 'custom')
+    ?? providerBrands[0]
 }
 
 function providerHasConnection(brand: ProviderBrand) {
@@ -376,6 +382,7 @@ async function loadProviders() {
 function resetProviderDialog() {
   providerDialogModelRequestSeq.value += 1
   providerDialogModelLoading.value = false
+  providerDialogModelError.value = ''
   showModelDropdown.value = false
   dialogTesting.value = false
   apiKeyVisible.value = false
@@ -400,6 +407,7 @@ function applyBrandDefaults(brand: ProviderBrand) {
   providerDialogForm.protocolType = brand.protocolType
   providerDialogForm.baseUrl = brand.baseUrl
   providerDialogForm.modelName = brand.models[0] ?? ''
+  providerDialogModelError.value = ''
 }
 
 function selectBrand(brand: ProviderBrand) {
@@ -444,12 +452,9 @@ async function saveProvider() {
   }
   const payload: SaveAiProviderConnectionPayload = {
     connectionName: providerDialogForm.connectionName.trim(),
-    protocolType: selectedBrand.value.protocolType,
     baseUrl: providerDialogForm.baseUrl.trim(),
-    requestTimeoutSeconds: 180,
     modelName: providerDialogForm.modelName.trim(),
     apiKey: apiKeyUsingSavedSecret.value ? undefined : providerDialogForm.apiKey.trim() || undefined,
-    status: 1,
   }
   savingProvider.value = true
   try {
@@ -520,8 +525,10 @@ async function loadDialogModels(provider?: AiProviderConnection) {
   if (providerDialogModelLoading.value) {
     return
   }
+  providerDialogModelError.value = ''
+  showModelDropdown.value = false
   if (!providerDialogForm.baseUrl.trim() || (!providerDialogForm.id && !providerDialogForm.apiKey.trim())) {
-    ElMessage.error('请先填写 API URL 和 API Key')
+    providerDialogModelError.value = '请先填写 API URL 和 API Key'
     return
   }
   const requestSeq = providerDialogModelRequestSeq.value + 1
@@ -531,16 +538,14 @@ async function loadDialogModels(provider?: AiProviderConnection) {
     const response = providerDialogForm.id && (apiKeyUsingSavedSecret.value || !providerDialogForm.apiKey.trim())
       ? await platformApi.fetchAiProviderModels('ALL', providerDialogForm.id)
       : await platformApi.previewAiProviderModels('ALL', {
-          protocolType: providerDialogForm.protocolType,
           baseUrl: providerDialogForm.baseUrl.trim(),
-          requestTimeoutSeconds: providerDialogForm.requestTimeoutSeconds,
           apiKey: providerDialogForm.apiKey.trim(),
         })
     if (requestSeq !== providerDialogModelRequestSeq.value) {
       return
     }
     applyDialogModels(response.models)
-    ElMessage.success(response.message || `已获取到 ${response.models.length} 个模型`)
+    showModelDropdown.value = response.models.length > 0
   } catch (error) {
     if (requestSeq !== providerDialogModelRequestSeq.value) {
       return
@@ -548,12 +553,18 @@ async function loadDialogModels(provider?: AiProviderConnection) {
     if (provider?.modelName && !providerDialogForm.modelName.trim()) {
       providerDialogForm.modelName = provider.modelName
     }
-    ElMessage.error((error as Error).message)
+    providerDialogModelError.value = (error as Error).message
   } finally {
     if (requestSeq === providerDialogModelRequestSeq.value) {
       providerDialogModelLoading.value = false
     }
   }
+}
+
+function isMessageBoxCancel(error: unknown) {
+  return error === 'cancel'
+    || error === 'close'
+    || (error instanceof Error && (error.message === 'cancel' || error.message === 'close'))
 }
 
 async function testProvider(provider: AiProviderConnection) {
@@ -589,14 +600,31 @@ async function testDialogProvider() {
 
 async function deleteProvider(provider: AiProviderConnection) {
   try {
-    await ElMessageBox.confirm(`确定删除连接“${provider.connectionName}”吗？`, '删除 AI 连接', {
+    const usages: string[] = []
+    try {
+      const aiConfig = await platformApi.getAiCaseConfig('ALL')
+      if (aiConfig.generatorConfig?.providerConnectionId === provider.id) {
+        usages.push('AI 用例生成')
+      }
+      if (aiConfig.reviewerConfig?.providerConnectionId === provider.id) {
+        usages.push('AI 用例评审')
+      }
+    } catch (error) {
+      ElMessage.warning(`未能确认连接使用情况：${(error as Error).message}`)
+    }
+    const message = usages.length
+      ? `连接“${provider.connectionName}”正在用于：${usages.join('、')}。删除后这些配置将失效，需要重新选择模型。是否确认删除？`
+      : `确定删除连接“${provider.connectionName}”吗？`
+    await ElMessageBox.confirm(message, '删除 AI 连接', {
       type: 'warning',
+      confirmButtonText: '确认删除',
+      cancelButtonText: '取消',
     })
     await platformApi.deleteAiProviderConnection('ALL', provider.id)
     ElMessage.success('AI 连接已删除')
     await loadProviders()
   } catch (error) {
-    if ((error as Error).message !== 'cancel') {
+    if (!isMessageBoxCancel(error)) {
       ElMessage.error((error as Error).message)
     }
   }
@@ -750,7 +778,6 @@ onMounted(() => {
                 :key="brand.id"
                 type="button"
                 class="provider-select-card"
-                :style="{ backgroundColor: brand.bg, borderColor: brand.border }"
                 @click="selectBrand(brand)"
               >
                 <div class="provider-logo" :class="[brand.logoClass, { 'has-logo-image': brand.logoSrc }]">
@@ -767,7 +794,7 @@ onMounted(() => {
           </section>
 
           <section v-else class="connection-form-step">
-            <div class="selected-provider-card" :style="{ backgroundColor: selectedBrand.bg, borderColor: selectedBrand.border }">
+            <div class="selected-provider-card">
               <div class="provider-logo provider-logo-medium" :class="[selectedBrand.logoClass, { 'has-logo-image': selectedBrand.logoSrc }]">
                 <img v-if="selectedBrand.logoSrc" :src="selectedBrand.logoSrc" :alt="selectedBrand.name" />
                 <span>{{ selectedBrand.shortName.slice(0, 1) }}</span>
@@ -813,7 +840,8 @@ onMounted(() => {
               <span class="field-label-row">
                 模型名称
                 <button type="button" class="fetch-model-button" :disabled="providerDialogModelLoading" @click="loadDialogModels()">
-                  <RefreshCw :size="13" :class="{ 'is-pulsing': providerDialogModelLoading }" />
+                  <RefreshCw v-if="providerDialogModelLoading" :size="13" class="is-spinning" />
+                  <Download v-else :size="13" />
                   {{ providerDialogModelLoading ? '获取中...' : '获取模型列表' }}
                 </button>
               </span>
@@ -829,7 +857,7 @@ onMounted(() => {
                   class="model-dropdown-toggle"
                   @click="showModelDropdown = !showModelDropdown"
                 >
-                  <ChevronDown :size="15" :class="{ 'is-open': showModelDropdown }" />
+                  <ChevronRight :size="14" :class="{ 'is-open': showModelDropdown }" />
                 </button>
                 <div v-if="showModelDropdown && providerDialogModels.length" class="model-dropdown-panel">
                   <div class="model-dropdown-head">
@@ -845,10 +873,15 @@ onMounted(() => {
                       @click="providerDialogForm.modelName = item.modelName; showModelDropdown = false"
                     >
                       <span>{{ item.displayName || item.modelName }}</span>
+                      <Check v-if="item.modelName === providerDialogForm.modelName" class="model-dropdown-check" :size="14" />
                     </button>
                   </div>
                 </div>
               </div>
+              <p v-if="providerDialogModelError" class="model-fetch-message is-error">
+                <AlertCircle :size="13" />
+                {{ providerDialogModelError }}
+              </p>
             </label>
           </section>
         </div>
@@ -1399,8 +1432,7 @@ onMounted(() => {
 }
 
 .back-provider-button,
-.field-label-row button,
-.fetch-model-button {
+.field-label-row button {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1410,6 +1442,33 @@ onMounted(() => {
   color: #2563eb;
   font-size: 12px;
   cursor: pointer;
+}
+
+.fetch-model-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 5px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 16px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease, background-color 0.18s ease;
+}
+
+.fetch-model-button:hover:not(:disabled) {
+  border-color: #93c5fd;
+  background: #f8fbff;
+  color: #3b82f6;
+}
+
+.fetch-model-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .back-provider-button {
@@ -1440,21 +1499,29 @@ onMounted(() => {
 }
 
 .provider-select-card {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 14px;
   min-height: 82px;
   padding: 16px;
-  border: 2px solid;
+  border: 1px solid #e5e7eb;
   border-radius: 14px;
+  background: #fff;
   text-align: left;
   cursor: pointer;
-  transition: box-shadow 0.18s ease, transform 0.18s ease;
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
 
 .provider-select-card:hover {
+  border-color: #93c5fd;
+  background: #f8fbff;
   transform: translateY(-1px);
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 14px 34px rgba(37, 99, 235, 0.1);
+}
+
+.provider-select-card:hover .provider-select-arrow {
+  color: #2563eb;
 }
 
 .provider-select-card strong,
@@ -1482,6 +1549,11 @@ onMounted(() => {
   flex: 0 0 auto;
   margin-left: auto;
   color: #9ca3af;
+  transition: color 0.18s ease, transform 0.18s ease;
+}
+
+.provider-select-card:hover .provider-select-arrow {
+  transform: translateX(2px);
 }
 
 .connection-form-step {
@@ -1494,8 +1566,10 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   padding: 12px;
-  border: 1px solid;
+  border: 1px solid #dbeafe;
   border-radius: 14px;
+  background: #f8fbff;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.03);
 }
 
 .form-field {
@@ -1581,7 +1655,7 @@ onMounted(() => {
 .model-dropdown-toggle {
   position: absolute;
   right: 10px;
-  top: 8px;
+  top: 50%;
   display: inline-flex;
   width: 26px;
   height: 26px;
@@ -1592,6 +1666,7 @@ onMounted(() => {
   background: #f3f4f6;
   color: #6b7280;
   cursor: pointer;
+  transform: translateY(-50%);
   transition: background-color 0.18s ease;
 }
 
@@ -1601,10 +1676,11 @@ onMounted(() => {
 
 .model-dropdown-toggle svg {
   transition: transform 0.18s ease;
+  transform: rotate(90deg);
 }
 
 .model-dropdown-toggle svg.is-open {
-  transform: rotate(180deg);
+  transform: rotate(-90deg);
 }
 
 .model-dropdown-panel {
@@ -1617,7 +1693,7 @@ onMounted(() => {
   border: 1px solid #e5e7eb;
   border-radius: 12px;
   background: #fff;
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.16);
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.16);
 }
 
 .model-dropdown-head {
@@ -1649,6 +1725,8 @@ onMounted(() => {
   width: 100%;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+  min-height: 40px;
   padding: 10px 12px;
   border: 0;
   background: #fff;
@@ -1657,6 +1735,7 @@ onMounted(() => {
   font-size: 14px;
   text-align: left;
   cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .model-dropdown-list button:hover,
@@ -1666,9 +1745,34 @@ onMounted(() => {
 }
 
 .model-dropdown-list span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.model-dropdown-check {
+  flex: 0 0 auto;
+  color: #1d4ed8;
+}
+
+.model-fetch-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 0 0;
+  color: #2563eb;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.model-fetch-message svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.model-fetch-message.is-error {
+  color: #ef4444;
 }
 
 .form-row {
@@ -1718,6 +1822,16 @@ onMounted(() => {
 
 .is-pulsing {
   animation: pulse 1s ease-in-out infinite;
+}
+
+.is-spinning {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes pulse {

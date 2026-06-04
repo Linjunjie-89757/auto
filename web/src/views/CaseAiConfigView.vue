@@ -131,10 +131,6 @@ const testingRole = ref<RoleType | null>(null)
 const openModelRole = ref<RoleType | null>(null)
 
 const providers = ref<AiProviderConnection[]>([])
-const topPValues = ref<Record<RoleType, number>>({
-  CASE_GENERATOR: 0.9,
-  CASE_REVIEWER: 0.7,
-})
 
 const forms = reactive<Record<RoleType, RoleForm>>({
   CASE_GENERATOR: createDefaultForm('CASE_GENERATOR'),
@@ -194,10 +190,6 @@ function resetRoleForm(roleType: RoleType) {
   Object.assign(forms[roleType], createDefaultForm(roleType))
 }
 
-function statusText(status: number) {
-  return status === 1 ? '启用中' : '已停用'
-}
-
 function temperatureLabel(roleType: RoleType) {
   const value = forms[roleType].temperature
   if (value <= 0.3) return '保守'
@@ -208,20 +200,6 @@ function temperatureLabel(roleType: RoleType) {
 function temperatureTone(roleType: RoleType) {
   const value = forms[roleType].temperature
   if (value <= 0.3) return 'safe'
-  if (value <= 0.7) return 'balanced'
-  return 'creative'
-}
-
-function topPLabel(roleType: RoleType) {
-  const value = topPValues.value[roleType]
-  if (value <= 0.4) return '聚焦'
-  if (value <= 0.7) return '均衡'
-  return '发散'
-}
-
-function topPTone(roleType: RoleType) {
-  const value = topPValues.value[roleType]
-  if (value <= 0.4) return 'safe'
   if (value <= 0.7) return 'balanced'
   return 'creative'
 }
@@ -280,11 +258,6 @@ const modelPoolOptions = computed<ModelPoolOption[]>(() => {
 })
 const totalModelCount = computed(() => modelPoolOptions.value.length)
 
-function getProviderById(id: number | null) {
-  if (!id) return null
-  return providers.value.find(item => item.id === id) ?? null
-}
-
 function selectedModelKey(roleType: RoleType) {
   const form = forms[roleType]
   if (!form.providerConnectionId || !form.model) return ''
@@ -326,10 +299,6 @@ function providerOptionText(option: Pick<ModelPoolOption, 'providerName' | 'mode
 
 function toggleModelSelect(roleType: RoleType) {
   openModelRole.value = openModelRole.value === roleType ? null : roleType
-}
-
-function toggleRoleStatus(roleType: RoleType) {
-  forms[roleType].status = forms[roleType].status === 1 ? 0 : 1
 }
 
 function selectModelOption(roleType: RoleType, option: ModelPoolOption) {
@@ -440,14 +409,10 @@ function buildRolePayload(roleType: RoleType): SaveAiCaseConfigPayload {
   return {
     roleType,
     providerConnectionId: form.providerConnectionId,
-    protocolType: getProviderById(form.providerConnectionId)?.protocolType ?? 'OPENAI_COMPATIBLE_CHAT',
     model: form.model.trim(),
     promptTemplate: form.promptTemplate.trim() || (roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_PROMPT : DEFAULT_REVIEW_PROMPT),
     reviewChecklist: form.reviewChecklist.trim() || (roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_CHECKLIST : DEFAULT_REVIEW_CHECKLIST),
     temperature: Number(form.temperature),
-    maxCases: DEFAULT_SMART_MAX_CASES,
-    capabilityOverride: { ...form.capabilityOverride },
-    status: form.status,
   }
 }
 
@@ -512,7 +477,6 @@ onBeforeUnmount(() => {
         v-for="meta in roleMeta"
         :key="meta.roleType"
         class="ai-role-card"
-        :class="{ 'is-disabled': forms[meta.roleType].status !== 1 }"
       >
         <header class="ai-role-card-header">
           <div class="role-heading">
@@ -524,16 +488,6 @@ onBeforeUnmount(() => {
               <h3>{{ meta.title }}</h3>
               <p>{{ meta.subtitle }}</p>
             </div>
-          </div>
-          <div class="role-status">
-            <span>{{ statusText(forms[meta.roleType].status).replace('启用中', '已启用') }}</span>
-            <button
-              type="button"
-              class="native-toggle"
-              :class="{ 'is-on': forms[meta.roleType].status === 1 }"
-              :aria-pressed="forms[meta.roleType].status === 1"
-              @click="toggleRoleStatus(meta.roleType)"
-            />
           </div>
         </header>
 
@@ -634,38 +588,6 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div class="slider-block">
-            <div class="slider-header">
-              <div class="slider-label">
-                <span>采样范围 (Top-p)</span>
-                <span class="field-tooltip">
-                  <Info class="inline-info-icon" />
-                  <span class="field-tooltip-popover">
-                    控制 AI 选词的候选范围（核采样）。
-                    <br>• 偏低（聚焦）：用词更精准、克制
-                    <br>• 偏高（发散）：表达更丰富、多样
-                    <br>建议生成任务用 0.9，评审任务用 0.7
-                  </span>
-                </span>
-              </div>
-              <span class="slider-value" :class="`tone-${topPTone(meta.roleType)}`">
-                {{ topPLabel(meta.roleType) }} ({{ topPValues[meta.roleType].toFixed(1) }})
-              </span>
-            </div>
-            <input
-              v-model.number="topPValues[meta.roleType]"
-              type="range"
-              min="0.1"
-              max="1"
-              step="0.1"
-              class="native-range"
-            >
-            <div class="slider-scale">
-              <span>聚焦</span>
-              <span>发散</span>
-            </div>
-          </div>
-
           <div class="prompt-block">
             <div class="prompt-header">
               <label class="field-label">角色提示词</label>
@@ -747,7 +669,6 @@ onBeforeUnmount(() => {
   text-underline-offset: 2px;
 }
 
-.native-toggle,
 .model-select-trigger,
 .model-select-option,
 .test-button,
@@ -786,11 +707,6 @@ onBeforeUnmount(() => {
 
 .ai-role-card:hover {
   box-shadow: 0 10px 20px -8px rgba(59, 130, 246, 0.18);
-}
-
-.ai-role-card.is-disabled .ai-role-card-body {
-  opacity: 0.4;
-  pointer-events: none;
 }
 
 .ai-role-card-header {
@@ -848,47 +764,6 @@ onBeforeUnmount(() => {
   color: #9ca3af;
   font-size: 12px;
   line-height: 16px;
-}
-
-.role-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding-top: 2px;
-  color: #6b7280;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.native-toggle {
-  position: relative;
-  width: 40px;
-  height: 20px;
-  flex: 0 0 40px;
-  border-radius: 999px;
-  background: #d1d5db;
-  transition: background-color 0.2s ease;
-}
-
-.native-toggle::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 999px;
-  background: #ffffff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.18);
-  transition: transform 0.2s ease;
-}
-
-.native-toggle.is-on {
-  background: #3b82f6;
-}
-
-.native-toggle.is-on::after {
-  transform: translateX(20px);
 }
 
 .ai-role-card-body {

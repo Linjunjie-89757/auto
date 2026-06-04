@@ -2,8 +2,6 @@ package com.company.autoplatform.ai;
 
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
-import jakarta.validation.constraints.Max;
-import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
@@ -22,9 +20,6 @@ public record SaveAiCaseConfigRequest(
         @DecimalMin(value = "0.0", message = "Temperature must be >= 0")
         @DecimalMax(value = "1.0", message = "Temperature must be <= 1")
         Double temperature,
-        @NotNull(message = "Max cases is required")
-        @Min(value = 1, message = "Max cases must be >= 1")
-        @Max(value = 100, message = "Max cases must be <= 100")
         Integer maxCases,
         AiCapabilityOverride capabilityOverride,
         Boolean supportsImageInput,

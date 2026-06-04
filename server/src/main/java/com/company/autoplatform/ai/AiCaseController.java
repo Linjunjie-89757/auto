@@ -81,7 +81,7 @@ public class AiCaseController {
     @PostMapping("/providers")
     public ApiResponse<AiProviderConnectionItem> createProvider(
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
-            @Valid @RequestBody SaveAiProviderConnectionRequest request
+            @RequestBody SaveAiProviderConnectionRequest request
     ) {
         return ApiResponse.ok(aiCaseService.createProvider(workspaceCode, request), "AI provider created");
     }
@@ -89,7 +89,7 @@ public class AiCaseController {
     @PostMapping("/providers/preview-models")
     public ApiResponse<PreviewAiProviderModelsResponse> previewProviderModels(
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
-            @Valid @RequestBody PreviewAiProviderModelsRequest request
+            @RequestBody PreviewAiProviderModelsRequest request
     ) {
         return ApiResponse.ok(aiCaseService.previewProviderModels(workspaceCode, request), "AI provider models previewed");
     }
@@ -98,7 +98,7 @@ public class AiCaseController {
     public ApiResponse<AiProviderConnectionItem> updateProvider(
             @PathVariable Long id,
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
-            @Valid @RequestBody SaveAiProviderConnectionRequest request
+            @RequestBody SaveAiProviderConnectionRequest request
     ) {
         return ApiResponse.ok(aiCaseService.updateProvider(id, workspaceCode, request), "AI provider updated");
     }

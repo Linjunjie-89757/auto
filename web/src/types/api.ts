@@ -243,7 +243,7 @@ export interface SaveAiCaseConfigPayload {
   workspaceCode?: string
   roleType: 'CASE_GENERATOR' | 'CASE_REVIEWER'
   providerConnectionId?: number | null
-  protocolType: AiProtocolType
+  protocolType?: AiProtocolType
   provider?: string
   model: string
   baseUrl?: string
@@ -251,7 +251,7 @@ export interface SaveAiCaseConfigPayload {
   promptTemplate: string
   reviewChecklist?: string
   temperature: number
-  maxCases: number
+  maxCases?: number
   capabilityOverride?: AiCapabilityOverride | null
   supportsImageInput?: boolean
   status?: number
@@ -362,7 +362,7 @@ export interface AiProviderConnection {
 export interface SaveAiProviderConnectionPayload {
   workspaceCode?: string
   connectionName: string
-  protocolType: AiProtocolType
+  protocolType?: AiProtocolType
   baseUrl: string
   requestTimeoutSeconds?: number | null
   modelName?: string | null
@@ -371,7 +371,7 @@ export interface SaveAiProviderConnectionPayload {
 }
 
 export interface PreviewAiProviderModelsPayload {
-  protocolType: AiProtocolType
+  protocolType?: AiProtocolType
   baseUrl: string
   requestTimeoutSeconds?: number | null
   apiKey: string

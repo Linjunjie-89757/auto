@@ -1,6 +1,7 @@
 package com.company.autoplatform.ai;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.company.autoplatform.auth.CurrentUserContext;
 import com.company.autoplatform.casecenter.CaseDetailResponse;
 import com.company.autoplatform.common.BadRequestException;
@@ -19,6 +20,7 @@ import org.apache.poi.xwpf.usermodel.XWPFTableRow;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -129,6 +131,18 @@ public class AiCaseService {
     public TestAiCaseConfigResponse testConfig(String headerWorkspaceCode, SaveAiCaseConfigRequest request) {
         Long ownerUserId = CurrentUserContext.get();
         String roleType = normalizeRoleType(request.roleType());
+        if (request.providerConnectionId() != null) {
+            AiProviderConnectionEntity connection = requireProviderConnection(request.providerConnectionId());
+            String apiKey = requireProviderApiKey(connection);
+            AiProviderRequestProfile profile = buildProviderProfile(
+                    connection,
+                    request.model().trim(),
+                    request.temperature(),
+                    request.maxCases()
+            );
+            aiProviderClient.testConnection(profile, apiKey);
+            return new TestAiCaseConfigResponse(true, profile.provider(), profile.model(), "AI connection is available");
+        }
         String apiKey = blankToNull(request.apiKey());
         if (apiKey == null) {
             AiCaseConfigEntity existing = findByOwnerUserIdAndRoleType(ownerUserId, roleType);
@@ -408,14 +422,18 @@ public class AiCaseService {
         );
     }
 
+    @Transactional
     public void deleteProvider(Long id, String headerWorkspaceCode) {
         requireProviderConnection(id);
-        Long bindingCount = aiCaseConfigMapper.selectCount(new LambdaQueryWrapper<AiCaseConfigEntity>()
+        aiCaseConfigMapper.update(null, new LambdaUpdateWrapper<AiCaseConfigEntity>()
                 .eq(AiCaseConfigEntity::getOwnerUserId, CurrentUserContext.get())
-                .eq(AiCaseConfigEntity::getProviderConnectionId, id));
-        if (bindingCount != null && bindingCount > 0) {
-            throw new BadRequestException("当前连接已被用例生成或评审角色绑定，不能删除");
-        }
+                .eq(AiCaseConfigEntity::getProviderConnectionId, id)
+                .set(AiCaseConfigEntity::getProviderConnectionId, null)
+                .set(AiCaseConfigEntity::getApiKeyCipherText, null)
+                .set(AiCaseConfigEntity::getCapabilityOverrideJson, null)
+                .set(AiCaseConfigEntity::getSupportsImageInput, 0)
+                .set(AiCaseConfigEntity::getStatus, 0)
+                .set(AiCaseConfigEntity::getUpdatedAt, LocalDateTime.now()));
         aiProviderModelMapper.delete(new LambdaQueryWrapper<AiProviderModelEntity>()
                 .eq(AiProviderModelEntity::getConnectionId, id));
         aiProviderConnectionMapper.deleteById(id);
@@ -732,7 +750,7 @@ public class AiCaseService {
         entity.setPromptTemplate(request.promptTemplate().trim());
         entity.setReviewChecklist(blankToNull(request.reviewChecklist()));
         entity.setTemperature(request.temperature());
-        entity.setMaxCases(request.maxCases());
+        entity.setMaxCases(normalizeRoleMaxCases(request.maxCases()));
         entity.setStatus(normalizeStatus(request.status()));
         AiProviderConnectionEntity connection = resolveRequestedConnection(request, existing, creating);
         entity.setProviderConnectionId(connection.getId());
@@ -822,11 +840,19 @@ public class AiCaseService {
     }
 
     private void applyProviderRequest(AiProviderConnectionEntity entity, SaveAiProviderConnectionRequest request, boolean creating) {
+        String connectionName = blankToNull(request.connectionName());
+        String baseUrl = blankToNull(request.baseUrl());
+        if (connectionName == null) {
+            throw new BadRequestException("AI 连接名称不能为空");
+        }
+        if (baseUrl == null) {
+            throw new BadRequestException("AI API URL 不能为空");
+        }
         entity.setWorkspaceId(PERSONAL_SCOPE_WORKSPACE_ID);
         entity.setOwnerUserId(CurrentUserContext.get());
-        entity.setConnectionName(request.connectionName().trim());
-        entity.setProtocolType(normalizeProtocolType(request.protocolType(), null, request.baseUrl()));
-        entity.setBaseUrl(request.baseUrl().trim());
+        entity.setConnectionName(connectionName);
+        entity.setProtocolType(resolveProviderProtocolType(request.protocolType(), connectionName, baseUrl, request.modelName()));
+        entity.setBaseUrl(baseUrl);
         entity.setRequestTimeoutSeconds(normalizeRequestTimeoutSeconds(request.requestTimeoutSeconds()));
         entity.setSelectedModelName(blankToNull(request.modelName()));
         if (creating) {
@@ -1227,7 +1253,12 @@ public class AiCaseService {
             Double temperature,
             Integer maxCases
     ) {
-        String protocolType = normalizeProtocolType(connection.getProtocolType(), null, connection.getBaseUrl());
+        String protocolType = resolveProviderProtocolType(
+                connection.getProtocolType(),
+                connection.getConnectionName(),
+                connection.getBaseUrl(),
+                model
+        );
         return new AiProviderRequestProfile(
                 protocolType,
                 providerForProtocolType(protocolType),
@@ -1240,12 +1271,16 @@ public class AiCaseService {
     }
 
     private AiProviderRequestProfile buildPreviewProviderProfile(PreviewAiProviderModelsRequest request) {
-        String protocolType = normalizeProtocolType(request.protocolType(), null, request.baseUrl());
+        String baseUrl = blankToNull(request.baseUrl());
+        if (baseUrl == null) {
+            throw new BadRequestException("AI API URL 不能为空");
+        }
+        String protocolType = resolveProviderProtocolType(request.protocolType(), null, baseUrl, null);
         return new AiProviderRequestProfile(
                 protocolType,
                 providerForProtocolType(protocolType),
                 "model-probe",
-                request.baseUrl().trim(),
+                baseUrl,
                 0.3,
                 null,
                 resolveRequestTimeoutSeconds(request.requestTimeoutSeconds())
@@ -1550,6 +1585,24 @@ public class AiCaseService {
         return mapLegacyProviderToProtocolType(provider, baseUrl);
     }
 
+    private String resolveProviderProtocolType(String protocolType, String connectionName, String baseUrl, String modelName) {
+        if (blankToNull(protocolType) != null) {
+            return normalizeProtocolType(protocolType, null, baseUrl);
+        }
+        String source = String.join(" ",
+                blankToNull(connectionName) == null ? "" : connectionName,
+                blankToNull(baseUrl) == null ? "" : baseUrl,
+                blankToNull(modelName) == null ? "" : modelName
+        ).toLowerCase(Locale.ROOT);
+        if (source.contains("azure") || source.contains(".openai.azure.com")) {
+            return PROTOCOL_AZURE_OPENAI;
+        }
+        if (source.contains("/responses")) {
+            return PROTOCOL_OPENAI_RESPONSES;
+        }
+        return PROTOCOL_OPENAI_CHAT;
+    }
+
     private String resolveProtocolType(AiCaseConfigEntity entity) {
         return normalizeProtocolType(entity.getProtocolType(), entity.getProvider(), entity.getBaseUrl());
     }
@@ -1590,6 +1643,16 @@ public class AiCaseService {
             throw new BadRequestException("AI config status must be 0 or 1");
         }
         return status;
+    }
+
+    private Integer normalizeRoleMaxCases(Integer maxCases) {
+        if (maxCases == null) {
+            return INITIAL_SMART_MAX_CASES;
+        }
+        if (maxCases < 1 || maxCases > 100) {
+            throw new BadRequestException("Max cases must be between 1 and 100");
+        }
+        return Math.min(maxCases, INITIAL_SMART_MAX_CASES);
     }
 
     private Integer normalizeRequestTimeoutSeconds(Integer requestTimeoutSeconds) {

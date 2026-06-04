@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Plus, RefreshRight } from '@element-plus/icons-vue'
+import { Bell, Database, Palette, Settings, Shield, Users } from '@lucide/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
 import AiConnectionSettingsPanel from '../components/AiConnectionSettingsPanel.vue'
@@ -36,7 +37,7 @@ const props = withDefaults(defineProps<{
   mode: 'settings',
 })
 
-type SettingsTab = 'aiConnection' | 'env' | 'param' | 'dbConnection' | 'workspace' | 'member'
+type SettingsTab = 'aiConnection' | 'env' | 'param' | 'dbConnection' | 'workspace' | 'member' | 'general' | 'team' | 'notify' | 'security' | 'theme'
 
 const activeTab = ref<SettingsTab>('aiConnection')
 const memberViewMode = ref<'user' | 'workspace'>('user')
@@ -218,15 +219,26 @@ const businessWorkspaces = computed(() => workspaces.value.filter(item => !item.
 const canManageSettings = computed(() => isPlatformAdmin.value)
 const canManageAdminUsers = computed(() => isSuperAdmin.value)
 const isConfigCenter = computed(() => props.mode === 'configCenter')
+const settingsNavItems = computed(() => {
+  const base = [
+    { id: 'aiConnection' as SettingsTab, label: 'AI 连接', desc: '配置 AI 大模型连接池', icon: Database },
+  ]
+  if (canManageSettings.value) {
+    base.push(
+      { id: 'general' as SettingsTab, label: '通用设置', desc: '平台基础配置', icon: Settings },
+      { id: 'team' as SettingsTab, label: '团队管理', desc: '成员与权限管理', icon: Users },
+      { id: 'notify' as SettingsTab, label: '通知设置', desc: '消息推送与告警', icon: Bell },
+      { id: 'security' as SettingsTab, label: '安全设置', desc: '密钥与访问控制', icon: Shield },
+      { id: 'theme' as SettingsTab, label: '外观设置', desc: '主题与显示偏好', icon: Palette },
+    )
+  }
+  return base
+})
 const visibleTabs = computed<SettingsTab[]>(() => {
   if (isConfigCenter.value) {
     return canManageSettings.value ? ['env', 'param', 'dbConnection'] : []
   }
-  const base: SettingsTab[] = ['aiConnection']
-  if (canManageSettings.value) {
-    base.push('workspace', 'member')
-  }
-  return base
+  return settingsNavItems.value.map(item => item.id)
 })
 const visibleWorkspaceCodes = computed(() => currentUser.value?.workspaceCodes ?? [])
 const writableWorkspaceOptions = computed(() => {
@@ -1111,8 +1123,38 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="page-shell">
-    <article class="page-card" v-loading="pageLoading">
+  <section :class="isConfigCenter ? 'page-shell' : 'settings-page-shell'">
+    <div v-if="!isConfigCenter" class="settings-figma-shell" v-loading="pageLoading">
+      <aside class="settings-category-sidebar">
+        <p>设置分类</p>
+        <button
+          v-for="item in settingsNavItems"
+          :key="item.id"
+          type="button"
+          class="settings-category-item"
+          :class="{ 'is-active': activeTab === item.id }"
+          @click="activeTab = item.id"
+        >
+          <component :is="item.icon" :size="17" />
+          <span>
+            <strong>{{ item.label }}</strong>
+            <small>{{ item.desc }}</small>
+          </span>
+        </button>
+      </aside>
+
+      <main class="settings-figma-content">
+        <AiConnectionSettingsPanel v-if="activeTab === 'aiConnection'" />
+        <div v-else class="settings-placeholder">
+          <div>
+            <component :is="settingsNavItems.find(item => item.id === activeTab)?.icon ?? Settings" :size="34" />
+            <p>{{ settingsNavItems.find(item => item.id === activeTab)?.label ?? '设置' }} 页面建设中...</p>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <article v-else class="page-card" v-loading="pageLoading">
       <header class="page-header">
         <div>
           <h1 class="page-title">{{ isConfigCenter ? '配置中心' : '系统设置' }}</h1>
@@ -1432,7 +1474,7 @@ onMounted(async () => {
       </el-tabs>
 
       <div v-else class="settings-single-panel">
-        <AiConnectionSettingsPanel />
+        暂无权限访问配置中心。
       </div>
     </article>
 
@@ -1679,6 +1721,132 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.settings-page-shell {
+  height: 100%;
+  min-height: 0;
+}
+
+.settings-figma-shell {
+  display: flex;
+  min-height: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #f9fafb;
+}
+
+.settings-category-sidebar {
+  width: 224px;
+  flex: 0 0 224px;
+  padding: 16px 12px 0;
+  overflow-y: auto;
+  border-right: 1px solid #e5e7eb;
+  background: #fff;
+  scrollbar-width: none;
+}
+
+.settings-category-sidebar::-webkit-scrollbar {
+  display: none;
+}
+
+.settings-category-sidebar > p {
+  margin: 0 0 8px;
+  padding: 0 12px;
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.settings-category-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  margin-bottom: 2px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: #4b5563;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.settings-category-item:hover {
+  background: #f9fafb;
+  color: #111827;
+}
+
+.settings-category-item.is-active {
+  border-color: transparent;
+  background: #eff6ff;
+  color: #2563eb;
+  box-shadow: none;
+}
+
+.settings-category-item svg {
+  flex: 0 0 auto;
+  color: #9ca3af;
+}
+
+.settings-category-item.is-active svg {
+  color: #2563eb;
+}
+
+.settings-category-item span {
+  min-width: 0;
+}
+
+.settings-category-item strong,
+.settings-category-item small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-category-item strong {
+  color: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.settings-category-item small {
+  margin-top: 2px;
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.settings-figma-content {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.settings-placeholder {
+  display: flex;
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: #9ca3af;
+  font-size: 14px;
+  text-align: center;
+}
+
+.settings-placeholder div {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+}
+
+.settings-placeholder p {
+  margin: 0;
+}
+
 .settings-tabs :deep(.el-tabs__header) {
   margin-bottom: 8px;
 }
@@ -1786,6 +1954,18 @@ onMounted(async () => {
 }
 
 @media (max-width: 900px) {
+  .settings-figma-shell {
+    min-height: auto;
+    flex-direction: column;
+  }
+
+  .settings-category-sidebar {
+    width: auto;
+    flex-basis: auto;
+    border-right: 0;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
   .table-toolbar {
     grid-template-columns: 1fr;
   }

@@ -45,6 +45,7 @@ const mainClass = computed(() => [
   {
     'app-main-workbench': route.path.startsWith('/automation/api'),
     'app-main-cases': route.path.startsWith('/cases'),
+    'app-main-settings': route.path.startsWith('/settings'),
   },
 ])
 

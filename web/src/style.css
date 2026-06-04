@@ -677,6 +677,12 @@ a {
   background: #f9fafb;
 }
 
+.app-main-settings {
+  padding: 0;
+  overflow: hidden;
+  background: #f9fafb;
+}
+
 .page-shell {
   display: flex;
   flex-direction: column;

@@ -320,24 +320,6 @@ function formatColumnValue(row: BugSummary, key: BugColumnKey) {
   }
 }
 
-function formatCompactDateTime(value: string | null | undefined) {
-  if (!value) {
-    return '-'
-  }
-  return value.slice(5, 16).replace('T', ' ')
-}
-
-function rowTitleMeta(row: BugSummary) {
-  const meta: string[] = []
-  if (isAllScope.value && row.workspaceName) {
-    meta.push(row.workspaceName)
-  }
-  if (row.updatedAt) {
-    meta.push(`更新于 ${formatCompactDateTime(row.updatedAt)}`)
-  }
-  return meta.join(' · ')
-}
-
 function statusTone(status: string | null | undefined) {
   switch (status) {
     case 'ASSIGNED':
@@ -935,7 +917,6 @@ onMounted(() => {
                     <el-tooltip :content="row.title" placement="top">
                       <span class="bug-title-text">{{ row.title }}</span>
                     </el-tooltip>
-                    <span v-if="rowTitleMeta(row)" class="bug-title-meta">{{ rowTitleMeta(row) }}</span>
                   </div>
 
                   <span
@@ -1291,8 +1272,8 @@ onMounted(() => {
 }
 
 .bug-grid-row {
-  height: 74px;
-  min-height: 74px;
+  height: 56px;
+  min-height: 56px;
   border-bottom: 1px solid #e5e7eb;
   font-size: 14px;
   background: #fff;
@@ -1306,7 +1287,7 @@ onMounted(() => {
 .bug-cell {
   display: flex;
   align-items: center;
-  padding: 16px 24px;
+  padding: 12px 24px;
   min-width: 0;
 }
 
@@ -1331,7 +1312,6 @@ onMounted(() => {
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  gap: 3px;
   width: 100%;
   min-width: 0;
 }
@@ -1344,16 +1324,6 @@ onMounted(() => {
   color: #111827;
   font-weight: 400;
   font-size: 14px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.bug-title-meta {
-  display: block;
-  width: 100%;
-  overflow: hidden;
-  color: #94a3b8;
-  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1513,8 +1483,8 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 74px;
-  min-height: 74px;
+  height: 56px;
+  min-height: 56px;
   padding: 0 6px;
   border-bottom: 1px solid #e5e7eb;
 }

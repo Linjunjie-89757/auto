@@ -1,0 +1,5 @@
+ALTER TABLE tb_sys_workspace
+  ADD COLUMN IF NOT EXISTS workspace_type VARCHAR(32) NOT NULL DEFAULT 'PROJECT';
+
+ALTER TABLE tb_sys_workspace
+  ADD COLUMN IF NOT EXISTS owner_user_id BIGINT;

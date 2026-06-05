@@ -895,6 +895,7 @@ public class ApiAiCaseGenerationService {
                 resolvedModel,
                 connection.getBaseUrl(),
                 0.2,
+                1.0,
                 1,
                 connection.getRequestTimeoutSeconds() == null ? defaultRequestTimeoutSeconds : connection.getRequestTimeoutSeconds()
         ), apiKey);

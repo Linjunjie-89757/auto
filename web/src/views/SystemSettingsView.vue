@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Plus, RefreshRight } from '@element-plus/icons-vue'
-import { Bell, Database, Palette, Settings, Shield, Users } from '@lucide/vue'
+import { Activity, Bell, Check, ChevronLeft, Crown, Database, Edit2, Globe, Key, Layers, Package, Palette, Server, Settings, Shield, Target, Trash2, User, UserCog, Users, X } from '@lucide/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
 import AiConnectionSettingsPanel from '../components/AiConnectionSettingsPanel.vue'
@@ -42,6 +42,8 @@ type SettingsTab = 'aiConnection' | 'env' | 'param' | 'dbConnection' | 'workspac
 const activeTab = ref<SettingsTab>('aiConnection')
 const memberViewMode = ref<'user' | 'workspace'>('user')
 const memberWorkspaceCode = ref('')
+const managingWorkspaceCode = ref('')
+const configParamCategoryFilter = ref<'' | 'global' | 'api' | 'business'>('')
 
 const pageLoading = ref(false)
 const workspaceLoading = ref(false)
@@ -161,10 +163,17 @@ const paramDialogMode = ref<'create' | 'edit'>('create')
 const dbConnectionDialogVisible = ref(false)
 const dbConnectionDialogMode = ref<'create' | 'edit'>('create')
 
-const workspaceForm = reactive<CreateWorkspacePayload>({
+function notifyWorkspaceListChanged() {
+  window.dispatchEvent(new CustomEvent('workspace-list-changed'))
+}
+
+const workspaceForm = reactive<Required<CreateWorkspacePayload>>({
   workspaceCode: '',
   workspaceName: '',
   description: '',
+  workspaceType: 'PROJECT',
+  ownerUserId: null,
+  status: 1,
 })
 
 const userForm = reactive<CreateUserPayload & UpdateUserPayload & { id: number | null }>({
@@ -179,6 +188,7 @@ const userForm = reactive<CreateUserPayload & UpdateUserPayload & { id: number |
 
 const batchMemberForm = reactive<BatchWorkspaceMemberPayload>({
   userIds: [],
+  roleCode: 'MEMBER',
 })
 
 const envForm = reactive<CreateEnvPayload & { id: number | null; workspaceCode: string; status: number }>({
@@ -216,6 +226,7 @@ const dbConnectionForm = reactive<CreateDbConnectionPayload & { id: number | nul
 })
 
 const businessWorkspaces = computed(() => workspaces.value.filter(item => !item.allScope))
+const managingWorkspace = computed(() => businessWorkspaces.value.find(item => item.code === managingWorkspaceCode.value) ?? null)
 const canManageSettings = computed(() => isPlatformAdmin.value)
 const canManageAdminUsers = computed(() => isSuperAdmin.value)
 const isConfigCenter = computed(() => props.mode === 'configCenter')
@@ -225,6 +236,7 @@ const settingsNavItems = computed(() => {
   ]
   if (canManageSettings.value) {
     base.push(
+      { id: 'workspace' as SettingsTab, label: '空间配置', desc: '管理测试空间', icon: Layers },
       { id: 'general' as SettingsTab, label: '通用设置', desc: '平台基础配置', icon: Settings },
       { id: 'team' as SettingsTab, label: '团队管理', desc: '成员与权限管理', icon: Users },
       { id: 'notify' as SettingsTab, label: '通知设置', desc: '消息推送与告警', icon: Bell },
@@ -248,6 +260,12 @@ const writableWorkspaceOptions = computed(() => {
   return businessWorkspaces.value.filter(item => visibleWorkspaceCodes.value.includes(item.code))
 })
 const activeUsers = computed(() => users.value.filter(item => item.status === 1))
+const workspaceStatCards = computed(() => [
+  { label: '空间总数', value: businessWorkspaces.value.length, tone: 'blue', icon: Layers },
+  { label: '启用空间', value: businessWorkspaces.value.filter(item => item.status !== 0).length, tone: 'green', icon: Check },
+  { label: '总成员数', value: activeUsers.value.length, tone: 'purple', icon: Users },
+  { label: '项目空间', value: businessWorkspaces.value.filter(item => inferWorkspaceType(item) === 'project').length, tone: 'orange', icon: Activity },
+])
 const selectableMembersForWorkspace = computed(() => {
   const existingUserIds = new Set(members.value.map(item => item.userId))
   return activeUsers.value.filter(item => item.roleCode !== 'ADMIN' && !existingUserIds.has(item.id))
@@ -301,6 +319,21 @@ const filteredMembers = computed(() => {
       || item.email.toLowerCase().includes(keyword)
   })
 })
+const workspaceAdminMembers = computed(() => {
+  const ownerUserId = managingWorkspace.value?.ownerUserId ?? null
+  return filteredMembers.value.filter(member =>
+    (member.roleCode === 'ADMIN' || member.roleCode === 'SUPER_ADMIN') && member.userId !== ownerUserId)
+})
+const workspaceRegularMembers = computed(() => {
+  const ownerUserId = managingWorkspace.value?.ownerUserId ?? null
+  return filteredMembers.value.filter(member =>
+    member.roleCode !== 'ADMIN' && member.roleCode !== 'SUPER_ADMIN' && member.userId !== ownerUserId)
+})
+const configCenterNavItems = computed(() => [
+  { id: 'env' as SettingsTab, label: '环境配置', desc: '测试环境管理', icon: Globe },
+  { id: 'param' as SettingsTab, label: '参数配置', desc: '全局参数设置', icon: Key },
+  { id: 'dbConnection' as SettingsTab, label: '数据库连接', desc: '数据源配置', icon: Server },
+])
 
 const filteredEnvs = computed(() => {
   const keyword = envFilters.keyword.trim().toLowerCase()
@@ -314,6 +347,29 @@ const filteredEnvs = computed(() => {
     return matchKeyword && matchType && matchStatus
   })
 })
+
+const configEnvStats = computed(() => [
+  { label: '环境总数', value: envs.value.length, tone: 'blue' },
+  { label: '启用环境', value: envs.value.filter(item => item.status === 1).length, tone: 'green' },
+  { label: '生产环境', value: envs.value.filter(item => isProductionEnv(item)).length, tone: 'red' },
+])
+
+const configParamStats = computed(() => [
+  { label: '全部参数', value: params.value.length, tone: 'gray' },
+  { label: '全局参数', value: params.value.filter(item => configParamCategory(item) === 'global').length, tone: 'blue' },
+  { label: '接口参数', value: params.value.filter(item => configParamCategory(item) === 'api').length, tone: 'purple' },
+  { label: '业务参数', value: params.value.filter(item => configParamCategory(item) === 'business').length, tone: 'green' },
+])
+
+const configDbStats = computed(() => [
+  { label: '连接总数', value: dbConnections.value.length, tone: 'blue' },
+  { label: '正常连接', value: dbConnections.value.filter(item => item.status === 1).length, tone: 'green' },
+  { label: '异常连接', value: dbConnections.value.filter(item => item.status !== 1).length, tone: 'red' },
+  { label: 'MySQL', value: dbConnections.value.filter(item => item.dbType === 'MYSQL').length, tone: 'orange' },
+])
+
+const configEnvs = computed(() => envs.value)
+const configDbConnections = computed(() => dbConnections.value)
 
 const filteredParams = computed(() => {
   const keyword = paramFilters.keyword.trim().toLowerCase()
@@ -340,6 +396,13 @@ const filteredDbConnections = computed(() => {
     const matchStatus = !dbConnectionFilters.status || String(item.status) === dbConnectionFilters.status
     return matchKeyword && matchType && matchStatus
   })
+})
+
+const configFilteredParams = computed(() => {
+  if (!configParamCategoryFilter.value) {
+    return params.value
+  }
+  return params.value.filter(item => configParamCategory(item) === configParamCategoryFilter.value)
 })
 
 function normalizeSettingsTab(tab: unknown): SettingsTab {
@@ -387,6 +450,99 @@ function resolveWorkspaceName(code: string) {
   return businessWorkspaces.value.find(item => item.code === code)?.name ?? code
 }
 
+function isProductionEnv(item: EnvConfigItem) {
+  const text = `${item.envType} ${item.envName}`.toLowerCase()
+  return text.includes('prod') || text.includes('生产')
+}
+
+function envVisualMeta(item: EnvConfigItem) {
+  const text = `${item.envType} ${item.envName} ${item.configJson ?? ''}`.toLowerCase()
+  if (text.includes('prod') || text.includes('生产')) {
+    return {
+      typeLabel: '生产环境',
+      typeClassName: 'is-red',
+      description: envDescription(item, '正式生产环境（谨慎操作）'),
+    }
+  }
+  if (text.includes('staging') || text.includes('stage') || text.includes('预发')) {
+    return {
+      typeLabel: '预发布环境',
+      typeClassName: 'is-orange',
+      description: envDescription(item, '上线前验证环境'),
+    }
+  }
+  return {
+    typeLabel: '测试环境',
+    typeClassName: 'is-blue',
+    description: envDescription(item, '开发和测试使用的环境'),
+  }
+}
+
+function envDescription(item: EnvConfigItem, fallback: string) {
+  const raw = item.configJson?.trim()
+  if (!raw) {
+    return fallback
+  }
+  try {
+    const parsed = JSON.parse(raw) as { description?: unknown; desc?: unknown; remark?: unknown }
+    const description = parsed.description ?? parsed.desc ?? parsed.remark
+    if (typeof description === 'string' && description.trim()) {
+      return description.trim()
+    }
+  }
+  catch {
+    if (!raw.startsWith('{') && !raw.startsWith('[')) {
+      return raw
+    }
+  }
+  return fallback
+}
+
+function envCreatedText(item: EnvConfigItem) {
+  const row = item as EnvConfigItem & { createdAt?: string; createTime?: string; createdTime?: string }
+  const value = row.createdAt ?? row.createTime ?? row.createdTime
+  return value ? value.slice(0, 10) : '-'
+}
+
+function configParamCategory(item: Pick<ParamSetItem, 'paramType' | 'paramName'>) {
+  const text = `${item.paramType} ${item.paramName}`.toLowerCase()
+  if (['header', 'body', 'query', 'api'].some(keyword => text.includes(keyword))) {
+    return 'api'
+  }
+  if (['business', '业务'].some(keyword => text.includes(keyword))) {
+    return 'business'
+  }
+  return 'global'
+}
+
+function configParamTypeMeta(item: Pick<ParamSetItem, 'paramType' | 'paramName'>) {
+  const category = configParamCategory(item)
+  if (category === 'api') {
+    return { label: '接口参数', className: 'is-purple' }
+  }
+  if (category === 'business') {
+    return { label: '业务参数', className: 'is-green' }
+  }
+  return { label: '全局参数', className: 'is-blue' }
+}
+
+function selectConfigParamFilter(value: '' | 'global' | 'api' | 'business') {
+  configParamCategoryFilter.value = value
+}
+
+function dbHostSummary(jdbcUrl: string) {
+  const match = jdbcUrl.match(/^jdbc:[^:]+:\/\/([^/?]+)(?:\/([^?]+))?/)
+  if (!match) {
+    return jdbcUrl
+  }
+  return match[1]
+}
+
+function dbNameSummary(row: DbConnectionItem) {
+  const match = row.jdbcUrl.match(/^jdbc:[^:]+:\/\/[^/?]+\/([^?]+)/)
+  return match?.[1] || row.description || '-'
+}
+
 function roleLabel(roleCode: string) {
   if (roleCode === 'SUPER_ADMIN') {
     return '超级管理员'
@@ -404,6 +560,83 @@ function workspaceSummary(user: UserItem) {
   return user.workspaceNames.join('、')
 }
 
+type WorkspaceVisualType = 'project' | 'team' | 'product'
+
+function inferWorkspaceType(workspace: WorkspaceItem): WorkspaceVisualType {
+  if (workspace.workspaceType === 'TEAM') {
+    return 'team'
+  }
+  if (workspace.workspaceType === 'PRODUCT') {
+    return 'product'
+  }
+  if (workspace.workspaceType === 'PROJECT') {
+    return 'project'
+  }
+  const text = `${workspace.name} ${workspace.code} ${workspace.description ?? ''}`.toLowerCase()
+  if (text.includes('团队') || text.includes('team')) {
+    return 'team'
+  }
+  if (text.includes('产品') || text.includes('product')) {
+    return 'product'
+  }
+  return 'project'
+}
+
+function workspaceTypeMeta(workspace: WorkspaceItem) {
+  const type = inferWorkspaceType(workspace)
+  const map = {
+    project: { label: '项目', className: 'is-project', icon: Package },
+    team: { label: '团队', className: 'is-team', icon: Users },
+    product: { label: '产品', className: 'is-product', icon: Target },
+  }
+  return map[type]
+}
+
+function workspaceMemberCount(row: WorkspaceItem) {
+  return activeUsers.value.filter((user) => {
+    if (user.roleCode === 'SUPER_ADMIN' || user.roleCode === 'ADMIN') {
+      return true
+    }
+    return user.workspaceCodes.includes(row.code)
+  }).length
+}
+
+function workspaceOwnerName(row: WorkspaceItem) {
+  if (row.ownerName) {
+    return row.ownerName
+  }
+  if (row.ownerUserId) {
+    const owner = activeUsers.value.find(user => user.id === row.ownerUserId)
+    if (owner) {
+      return owner.displayName
+    }
+  }
+  const directMember = activeUsers.value.find(user => user.workspaceCodes.includes(row.code))
+  const admin = activeUsers.value.find(user => user.roleCode === 'ADMIN' || user.roleCode === 'SUPER_ADMIN')
+  return directMember?.displayName || admin?.displayName || '组织管理员'
+}
+
+function openWorkspaceMembers(row: WorkspaceItem) {
+  managingWorkspaceCode.value = row.code
+  memberWorkspaceCode.value = row.code
+  memberFilters.workspaceCode = row.code
+}
+
+function closeWorkspaceMembers() {
+  managingWorkspaceCode.value = ''
+}
+
+function workspaceUserInitial(name: string) {
+  return name.trim().charAt(0).toUpperCase() || 'U'
+}
+
+function memberRoleDescription(roleCode: string) {
+  if (roleCode === 'ADMIN' || roleCode === 'SUPER_ADMIN') {
+    return '具有管理权限，可编辑用例和配置'
+  }
+  return '可查看和执行测试用例'
+}
+
 function normalizeWorkspaceCodes(codes: string[]) {
   return [...new Set(codes.filter(Boolean))]
 }
@@ -412,6 +645,11 @@ function resetWorkspaceForm() {
   workspaceForm.workspaceCode = ''
   workspaceForm.workspaceName = ''
   workspaceForm.description = ''
+  workspaceForm.workspaceType = 'PROJECT'
+  workspaceForm.ownerUserId = activeUsers.value.find(item => item.roleCode === 'ADMIN' || item.roleCode === 'SUPER_ADMIN')?.id
+    ?? activeUsers.value[0]?.id
+    ?? null
+  workspaceForm.status = 1
 }
 
 function resetUserForm() {
@@ -426,6 +664,7 @@ function resetUserForm() {
 
 function resetBatchMemberForm() {
   batchMemberForm.userIds = []
+  batchMemberForm.roleCode = 'MEMBER'
 }
 
 function resetEnvForm() {
@@ -543,20 +782,26 @@ function openWorkspaceEdit(row: WorkspaceItem) {
   workspaceForm.workspaceCode = row.code
   workspaceForm.workspaceName = row.name
   workspaceForm.description = row.description ?? ''
+  workspaceForm.workspaceType = row.workspaceType ?? 'PROJECT'
+  workspaceForm.ownerUserId = row.ownerUserId ?? activeUsers.value.find(item => item.displayName === row.ownerName)?.id ?? null
+  workspaceForm.status = row.status ?? 1
   workspaceDialogVisible.value = true
 }
 
 async function submitWorkspace() {
-  if (!workspaceForm.workspaceCode.trim() || !workspaceForm.workspaceName.trim()) {
-    ElMessage.error('请先填写工作空间编码和名称')
+  if (!workspaceForm.workspaceName.trim()) {
+    ElMessage.error('请先填写工作空间名称')
     return
   }
   savingWorkspace.value = true
   try {
     const payload = {
-      workspaceCode: workspaceForm.workspaceCode.trim(),
+      workspaceCode: workspaceDialogMode.value === 'edit' ? workspaceForm.workspaceCode.trim() : undefined,
       workspaceName: workspaceForm.workspaceName.trim(),
       description: workspaceForm.description.trim(),
+      workspaceType: workspaceForm.workspaceType,
+      ownerUserId: workspaceForm.ownerUserId,
+      status: workspaceForm.status,
     }
     if (workspaceDialogMode.value === 'create') {
       await platformApi.createWorkspace(payload)
@@ -567,6 +812,7 @@ async function submitWorkspace() {
     }
     workspaceDialogVisible.value = false
     await loadBaseData()
+    notifyWorkspaceListChanged()
   }
   catch (error) {
     ElMessage.error((error as Error).message)
@@ -577,6 +823,7 @@ async function submitWorkspace() {
 }
 
 async function confirmDeleteWorkspace(row: WorkspaceItem) {
+  const deletingCurrentWorkspace = row.code === workspaceCode.value
   try {
     await ElMessageBox.confirm(
       `删除后将无法恢复工作空间“${row.name}”。只有无依赖数据的空间允许删除，是否继续？`,
@@ -585,7 +832,26 @@ async function confirmDeleteWorkspace(row: WorkspaceItem) {
     )
     await platformApi.deleteWorkspace(row.code)
     ElMessage.success('工作空间删除成功')
-    await Promise.all([loadBaseData(), loadScopedSettings()])
+    if (managingWorkspaceCode.value === row.code) {
+      managingWorkspaceCode.value = ''
+    }
+    if (memberWorkspaceCode.value === row.code) {
+      memberWorkspaceCode.value = ''
+    }
+    notifyWorkspaceListChanged()
+    if (deletingCurrentWorkspace) {
+      await router.replace({
+        path: route.path,
+        query: {
+          ...route.query,
+          workspace: 'ALL',
+        },
+      })
+      await loadBaseData()
+      await loadScopedSettings()
+    } else {
+      await Promise.all([loadBaseData(), loadScopedSettings()])
+    }
   }
   catch (error) {
     if (error !== 'cancel') {
@@ -723,12 +989,13 @@ async function confirmResetPassword(row: UserItem) {
   }
 }
 
-function openBatchMemberCreate() {
+function openBatchMemberCreate(roleCode: 'ADMIN' | 'MEMBER' = 'MEMBER') {
   if (!memberWorkspaceCode.value) {
     ElMessage.error('请先选择工作空间')
     return
   }
   resetBatchMemberForm()
+  batchMemberForm.roleCode = roleCode
   batchMemberDialogVisible.value = true
 }
 
@@ -745,6 +1012,7 @@ async function submitBatchMembers() {
   try {
     await platformApi.createWorkspaceMembers(memberWorkspaceCode.value, {
       userIds: batchMemberForm.userIds,
+      roleCode: batchMemberForm.roleCode,
     })
     ElMessage.success('空间成员添加成功')
     batchMemberDialogVisible.value = false
@@ -1123,7 +1391,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section :class="isConfigCenter ? 'page-shell' : 'settings-page-shell'">
+  <section :class="isConfigCenter ? 'config-center-page-shell' : 'settings-page-shell'">
     <div v-if="!isConfigCenter" class="settings-figma-shell" v-loading="pageLoading">
       <aside class="settings-category-sidebar">
         <button
@@ -1144,6 +1412,242 @@ onMounted(async () => {
 
       <main class="settings-figma-content">
         <AiConnectionSettingsPanel v-if="activeTab === 'aiConnection'" />
+        <section v-else-if="activeTab === 'workspace'" class="workspace-config-page" :class="{ 'is-managing': managingWorkspace }">
+          <template v-if="!managingWorkspace">
+            <header class="workspace-config-header">
+              <div>
+                <h2>工作空间配置</h2>
+                <p>管理测试空间，控制不同项目和团队的测试资源隔离</p>
+              </div>
+              <button v-if="canManageSettings" type="button" class="workspace-create-button" @click="openWorkspaceCreate">
+                <el-icon><Plus /></el-icon>
+                <span>新增空间</span>
+              </button>
+            </header>
+
+            <div class="workspace-stat-grid">
+              <article
+                v-for="stat in workspaceStatCards"
+                :key="stat.label"
+                class="workspace-stat-card"
+                :class="`is-${stat.tone}`"
+              >
+                <div>
+                  <span>{{ stat.label }}</span>
+                  <component :is="stat.icon" :size="16" />
+                </div>
+                <strong>{{ stat.value }}</strong>
+              </article>
+            </div>
+
+            <div v-if="filteredWorkspaces.length" class="workspace-card-grid">
+              <article
+              v-for="item in filteredWorkspaces"
+              :key="item.code"
+              class="workspace-config-card"
+              :class="{ 'is-disabled': item.status === 0 }"
+            >
+                <div class="workspace-card-main">
+                  <div class="workspace-card-head">
+                    <div class="workspace-card-icon" :class="workspaceTypeMeta(item).className">
+                      <component :is="workspaceTypeMeta(item).icon" :size="20" />
+                    </div>
+                    <div class="workspace-card-title">
+                      <div class="workspace-card-name-row">
+                        <h3>{{ item.name }}</h3>
+                      <span class="workspace-status-badge" :class="{ 'is-disabled': item.status === 0 }">
+                        {{ item.status === 0 ? '已禁用' : '启用中' }}
+                      </span>
+                      </div>
+                      <p>{{ item.description || '暂无空间说明' }}</p>
+                    </div>
+                  </div>
+
+                  <div v-if="canManageSettings" class="workspace-card-actions">
+                    <button type="button" title="成员管理" @click="openWorkspaceMembers(item)">
+                      <UserCog :size="16" />
+                    </button>
+                    <button type="button" title="编辑" @click="openWorkspaceEdit(item)">
+                      <Edit2 :size="16" />
+                    </button>
+                    <button type="button" title="删除" class="is-danger" @click="confirmDeleteWorkspace(item)">
+                      <Trash2 :size="16" />
+                    </button>
+                  </div>
+                </div>
+
+                <footer class="workspace-card-meta">
+                  <span class="workspace-type-badge" :class="workspaceTypeMeta(item).className">
+                    <component :is="workspaceTypeMeta(item).icon" :size="13" />
+                    {{ workspaceTypeMeta(item).label }}空间
+                  </span>
+                  <span>
+                    <User :size="13" />
+                    {{ workspaceOwnerName(item) }} (负责人)
+                  </span>
+                  <span>
+                    <Users :size="13" />
+                    {{ workspaceMemberCount(item) }} 名成员
+                  </span>
+                </footer>
+              </article>
+            </div>
+
+            <div v-else class="workspace-empty-state">
+              <div>
+                <Layers :size="32" />
+              </div>
+              <strong>暂无工作空间</strong>
+              <p>创建第一个工作空间开始管理测试资源</p>
+              <button v-if="canManageSettings" type="button" class="workspace-create-button" @click="openWorkspaceCreate">
+                <el-icon><Plus /></el-icon>
+                <span>创建工作空间</span>
+              </button>
+            </div>
+          </template>
+
+          <template v-else>
+            <div class="workspace-manage-head">
+              <div class="workspace-manage-top">
+                <button type="button" class="workspace-back-button" @click="closeWorkspaceMembers">
+                  <ChevronLeft :size="16" />
+                  返回工作空间列表
+                </button>
+                <div class="workspace-manage-summary">
+                  <div class="workspace-manage-icon" :class="workspaceTypeMeta(managingWorkspace).className">
+                    <component :is="workspaceTypeMeta(managingWorkspace).icon" :size="26" />
+                  </div>
+                  <div>
+                    <h1>{{ managingWorkspace.name }}</h1>
+                    <p>{{ managingWorkspace.description || '暂无空间说明' }}</p>
+                    <div class="workspace-manage-meta">
+                      <span class="workspace-type-badge" :class="workspaceTypeMeta(managingWorkspace).className">
+                        <component :is="workspaceTypeMeta(managingWorkspace).icon" :size="13" />
+                        {{ workspaceTypeMeta(managingWorkspace).label }}空间
+                      </span>
+                      <span>创建于当前系统空间</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <button v-if="canManageSettings" type="button" class="workspace-save-button" @click="openWorkspaceEdit(managingWorkspace)">
+                编辑空间
+              </button>
+            </div>
+
+            <nav class="workspace-manage-tabs">
+              <button type="button" class="is-active">成员管理</button>
+              <button type="button">权限设置</button>
+              <button type="button">操作日志</button>
+            </nav>
+
+            <div class="workspace-member-page" v-loading="memberLoading">
+              <div class="workspace-member-title">
+                <h2>成员管理</h2>
+                <span>共 {{ filteredMembers.length + 1 }} 名成员</span>
+              </div>
+
+              <section class="workspace-member-section is-owner">
+                <div class="workspace-member-section-title">
+                  <Crown :size="16" />
+                  <h3>负责人 (1人)</h3>
+                </div>
+                <div class="workspace-member-row is-owner">
+                  <div class="workspace-member-profile">
+                    <div class="workspace-avatar is-owner">{{ workspaceUserInitial(workspaceOwnerName(managingWorkspace)) }}</div>
+                    <div>
+                      <strong>{{ workspaceOwnerName(managingWorkspace) }}</strong>
+                      <p>拥有空间最高权限</p>
+                    </div>
+                  </div>
+                  <span class="workspace-role-badge is-owner">Owner</span>
+                </div>
+              </section>
+
+              <section class="workspace-member-section">
+                <div class="workspace-member-section-head">
+                  <div class="workspace-member-section-title">
+                    <Shield :size="16" />
+                    <h3>管理员 ({{ workspaceAdminMembers.length }}人)</h3>
+                  </div>
+                  <button
+                    v-if="canManageSettings"
+                    type="button"
+                    class="workspace-member-add is-admin"
+                    :disabled="!selectableMembersForWorkspace.length"
+                    @click="openBatchMemberCreate('ADMIN')"
+                  >
+                    <el-icon><Plus /></el-icon>
+                    添加管理员
+                  </button>
+                </div>
+                <div v-if="workspaceAdminMembers.length" class="workspace-member-list">
+                  <div
+                    v-for="item in workspaceAdminMembers"
+                    :key="item.id"
+                    class="workspace-member-row"
+                  >
+                    <div class="workspace-member-profile">
+                      <div class="workspace-avatar is-admin">{{ workspaceUserInitial(item.displayName) }}</div>
+                      <div>
+                        <strong>{{ item.displayName }}</strong>
+                        <p>{{ memberRoleDescription(item.roleCode) }}</p>
+                      </div>
+                    </div>
+                    <div class="workspace-member-actions">
+                      <span class="workspace-role-badge is-admin">Admin</span>
+                      <button v-if="canManageSettings" type="button" @click="confirmDeleteMember(item)">
+                        <Trash2 :size="16" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="workspace-member-empty">暂无管理员，点击右上角添加</div>
+              </section>
+
+              <section class="workspace-member-section">
+                <div class="workspace-member-section-head">
+                  <div class="workspace-member-section-title">
+                    <Users :size="16" />
+                    <h3>成员 ({{ workspaceRegularMembers.length }}人)</h3>
+                  </div>
+                  <button
+                    v-if="canManageSettings"
+                    type="button"
+                    class="workspace-member-add"
+                    :disabled="!selectableMembersForWorkspace.length"
+                    @click="openBatchMemberCreate('MEMBER')"
+                  >
+                    <el-icon><Plus /></el-icon>
+                    添加成员
+                  </button>
+                </div>
+                <div v-if="workspaceRegularMembers.length" class="workspace-member-list">
+                  <div
+                    v-for="item in workspaceRegularMembers"
+                    :key="item.id"
+                    class="workspace-member-row"
+                  >
+                    <div class="workspace-member-profile">
+                      <div class="workspace-avatar">{{ workspaceUserInitial(item.displayName) }}</div>
+                      <div>
+                        <strong>{{ item.displayName }}</strong>
+                        <p>{{ memberRoleDescription(item.roleCode) }}</p>
+                      </div>
+                    </div>
+                    <div class="workspace-member-actions">
+                      <span class="workspace-role-badge">Member</span>
+                      <button v-if="canManageSettings" type="button" @click="confirmDeleteMember(item)">
+                        <Trash2 :size="16" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="workspace-member-empty">暂无成员，点击右上角添加</div>
+              </section>
+            </div>
+          </template>
+        </section>
         <div v-else class="settings-placeholder">
           <div>
             <component :is="settingsNavItems.find(item => item.id === activeTab)?.icon ?? Settings" :size="34" />
@@ -1153,347 +1657,307 @@ onMounted(async () => {
       </main>
     </div>
 
-    <article v-else class="page-card" v-loading="pageLoading">
-      <header class="page-header">
-        <div>
-          <h1 class="page-title">{{ isConfigCenter ? '配置中心' : '系统设置' }}</h1>
-          <p class="page-subtitle">{{ currentScopeText }}</p>
-        </div>
-      </header>
+    <div v-else class="config-center-shell" v-loading="pageLoading">
+      <aside class="config-center-sidebar">
+        <div class="config-sidebar-title">配置分类</div>
+        <button
+          v-for="item in configCenterNavItems"
+          :key="item.id"
+          type="button"
+          class="config-nav-item"
+          :class="{ 'is-active': activeTab === item.id }"
+          @click="activeTab = item.id"
+        >
+          <component :is="item.icon" :size="17" />
+          <span>
+            <strong>{{ item.label }}</strong>
+            <small>{{ item.desc }}</small>
+          </span>
+        </button>
+      </aside>
 
-      <el-tabs v-if="canManageSettings" v-model="activeTab" class="settings-tabs">
-        <el-tab-pane v-if="visibleTabs.includes('aiConnection')" label="AI连接" name="aiConnection">
-          <AiConnectionSettingsPanel />
-        </el-tab-pane>
-        <el-tab-pane v-if="visibleTabs.includes('env')" label="环境配置" name="env">
-          <ListToolbar title="环境配置">
-            <template #filters>
-              <el-input v-model="envFilters.keyword" placeholder="搜索环境名称 / 地址 / 所属空间" clearable class="toolbar-filter-input" />
-              <el-select v-model="envFilters.envType" placeholder="环境类型" clearable class="toolbar-filter-select">
-                <el-option label="API" value="API" />
-                <el-option label="WEB" value="WEB" />
-                <el-option label="APP" value="APP" />
-              </el-select>
-              <el-select v-model="envFilters.status" placeholder="状态" clearable class="toolbar-filter-select">
-                <el-option label="启用" value="1" />
-                <el-option label="停用" value="0" />
-              </el-select>
-              <el-button text @click="resetEnvFilters()">
-                <el-icon><RefreshRight /></el-icon>
-                重置
-              </el-button>
-            </template>
-            <template #actions>
-              <el-button v-if="canManageSettings" type="primary" @click="openEnvCreate">
-                <el-icon><Plus /></el-icon>
-                新增环境
-              </el-button>
-            </template>
-          </ListToolbar>
+      <main class="config-center-content">
+        <section v-if="canManageSettings && activeTab === 'env'" class="config-content-page">
+          <header class="config-page-header">
+            <div>
+              <h2>环境配置</h2>
+              <p>管理不同测试环境的配置信息</p>
+            </div>
+            <button type="button" class="config-primary-button" @click="openEnvCreate">
+              <el-icon><Plus /></el-icon>
+              新增环境
+            </button>
+          </header>
 
-          <el-table v-loading="envLoading" :data="filteredEnvs" size="large">
-            <el-table-column v-if="isAllScope" prop="workspaceName" label="所属空间" min-width="160" />
-            <el-table-column prop="envName" label="环境名称" min-width="180" />
-            <el-table-column prop="envType" label="环境类型" width="120" />
-            <el-table-column prop="baseUrl" label="基础地址" min-width="280" />
-            <el-table-column label="状态" width="120">
-              <template #default="{ row }">
-                <span class="status-pill" :class="row.status === 1 ? 'status-success' : 'status-neutral'">
-                  {{ row.status === 1 ? '启用' : '停用' }}
-                </span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="configJson" label="扩展配置" min-width="240">
-              <template #default="{ row }">
-                <span class="cell-ellipsis">{{ row.configJson || '-' }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column v-if="canManageSettings" label="操作" width="240">
-              <template #default="{ row }">
-                <el-button text type="primary" @click="openEnvEdit(row)">编辑</el-button>
-                <el-button text type="warning" @click="toggleEnvStatus(row)">{{ row.status === 1 ? '停用' : '启用' }}</el-button>
-                <el-button text type="danger" @click="confirmDeleteEnv(row)">删除</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-tab-pane>
-
-        <el-tab-pane v-if="visibleTabs.includes('param')" label="参数配置" name="param">
-          <ListToolbar title="参数配置">
-            <template #filters>
-              <el-input v-model="paramFilters.keyword" placeholder="搜索参数集 / 内容 / 所属空间" clearable class="toolbar-filter-input" />
-              <el-select v-model="paramFilters.paramType" placeholder="参数类型" clearable class="toolbar-filter-select">
-                <el-option label="TOKEN" value="TOKEN" />
-                <el-option label="HEADER" value="HEADER" />
-                <el-option label="BODY" value="BODY" />
-                <el-option label="QUERY" value="QUERY" />
-              </el-select>
-              <el-select v-model="paramFilters.status" placeholder="状态" clearable class="toolbar-filter-select">
-                <el-option label="启用" value="1" />
-                <el-option label="停用" value="0" />
-              </el-select>
-              <el-button text @click="resetParamFilters()">
-                <el-icon><RefreshRight /></el-icon>
-                重置
-              </el-button>
-            </template>
-            <template #actions>
-              <el-button v-if="canManageSettings" type="primary" @click="openParamCreate">
-                <el-icon><Plus /></el-icon>
-                新增参数集
-              </el-button>
-            </template>
-          </ListToolbar>
-
-          <el-table v-loading="paramLoading" :data="filteredParams" size="large">
-            <el-table-column v-if="isAllScope" prop="workspaceName" label="所属空间" min-width="160" />
-            <el-table-column prop="paramName" label="参数集名称" min-width="180" />
-            <el-table-column prop="paramType" label="参数类型" width="140" />
-            <el-table-column label="状态" width="120">
-              <template #default="{ row }">
-                <span class="status-pill" :class="row.status === 1 ? 'status-success' : 'status-neutral'">
-                  {{ row.status === 1 ? '启用' : '停用' }}
-                </span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="contentJson" label="内容" min-width="280">
-              <template #default="{ row }">
-                <span class="cell-ellipsis">{{ row.contentJson || '-' }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column v-if="canManageSettings" label="操作" width="240">
-              <template #default="{ row }">
-                <el-button text type="primary" @click="openParamEdit(row)">编辑</el-button>
-                <el-button text type="warning" @click="toggleParamStatus(row)">{{ row.status === 1 ? '停用' : '启用' }}</el-button>
-                <el-button text type="danger" @click="confirmDeleteParam(row)">删除</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-tab-pane>
-
-        <el-tab-pane v-if="visibleTabs.includes('dbConnection')" label="数据库连接" name="dbConnection" data-testid="db-connection-tab-pane">
-          <ListToolbar title="数据库连接">
-            <template #filters>
-              <el-input v-model="dbConnectionFilters.keyword" placeholder="搜索名称 / JDBC URL / 用户 / 空间" clearable class="toolbar-filter-input" />
-              <el-select v-model="dbConnectionFilters.dbType" placeholder="数据库类型" clearable class="toolbar-filter-select">
-                <el-option label="MYSQL" value="MYSQL" />
-                <el-option label="H2" value="H2" />
-              </el-select>
-              <el-select v-model="dbConnectionFilters.status" placeholder="状态" clearable class="toolbar-filter-select">
-                <el-option label="启用" value="1" />
-                <el-option label="停用" value="0" />
-              </el-select>
-              <el-button text @click="resetDbConnectionFilters()">
-                <el-icon><RefreshRight /></el-icon>
-                重置
-              </el-button>
-            </template>
-            <template #actions>
-              <el-button v-if="canManageSettings" type="primary" data-testid="db-connection-create" @click="openDbConnectionCreate">
-                <el-icon><Plus /></el-icon>
-                新增连接
-              </el-button>
-            </template>
-          </ListToolbar>
-
-          <el-table v-loading="dbConnectionLoading" :data="filteredDbConnections" size="large">
-            <el-table-column v-if="isAllScope" prop="workspaceName" label="所属空间" min-width="160" />
-            <el-table-column prop="connectionName" label="连接名称" min-width="180" />
-            <el-table-column prop="dbType" label="类型" width="100" />
-            <el-table-column prop="jdbcUrl" label="JDBC URL" min-width="320">
-              <template #default="{ row }">
-                <span class="cell-ellipsis">{{ row.jdbcUrl }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="username" label="用户" width="150" />
-            <el-table-column label="密码" width="90">
-              <template #default="{ row }">{{ row.passwordConfigured ? '已配置' : '-' }}</template>
-            </el-table-column>
-            <el-table-column label="状态" width="120">
-              <template #default="{ row }">
-                <span class="status-pill" :class="row.status === 1 ? 'status-success' : 'status-neutral'">
-                  {{ row.status === 1 ? '启用' : '停用' }}
-                </span>
-              </template>
-            </el-table-column>
-            <el-table-column v-if="canManageSettings" label="操作" width="300">
-              <template #default="{ row }">
-                <el-button text type="primary" @click="openDbConnectionEdit(row)">编辑</el-button>
-                <el-button text type="success" @click="testDbConnection(row)">测试</el-button>
-                <el-button text type="warning" @click="toggleDbConnectionStatus(row)">{{ row.status === 1 ? '停用' : '启用' }}</el-button>
-                <el-button text type="danger" @click="confirmDeleteDbConnection(row)">删除</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-tab-pane>
-
-        <el-tab-pane v-if="visibleTabs.includes('workspace')" label="工作空间" name="workspace">
-          <ListToolbar title="工作空间">
-            <template #filters>
-              <el-input v-model="workspaceFilters.keyword" placeholder="搜索空间名称 / 编码 / 描述" clearable class="toolbar-filter-input" />
-              <el-button text @click="resetWorkspaceFilters()">
-                <el-icon><RefreshRight /></el-icon>
-                重置
-              </el-button>
-            </template>
-            <template #actions>
-              <el-button v-if="canManageSettings" type="primary" @click="openWorkspaceCreate">
-                <el-icon><Plus /></el-icon>
-                新增工作空间
-              </el-button>
-            </template>
-          </ListToolbar>
-
-          <el-table v-loading="workspaceLoading" :data="filteredWorkspaces" size="large">
-            <el-table-column prop="name" label="空间名称" min-width="180" />
-            <el-table-column prop="code" label="空间编码" min-width="160" />
-            <el-table-column prop="description" label="说明" min-width="300" />
-            <el-table-column label="我的范围" width="160">
-              <template #default="{ row }">
-                <span class="list-meta">
-                  {{ isPlatformAdmin ? '全部空间' : (visibleWorkspaceCodes.includes(row.code) ? '可访问' : '不可访问') }}
-                </span>
-              </template>
-            </el-table-column>
-            <el-table-column v-if="canManageSettings" label="操作" width="220">
-              <template #default="{ row }">
-                <el-button text type="primary" @click="openWorkspaceEdit(row)">编辑</el-button>
-                <el-button text type="danger" @click="confirmDeleteWorkspace(row)">删除</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-tab-pane>
-
-        <el-tab-pane v-if="visibleTabs.includes('member')" label="成员权限" name="member">
-          <div class="mode-toolbar">
-            <el-radio-group v-model="memberViewMode">
-              <el-radio-button value="user">按成员看</el-radio-button>
-              <el-radio-button value="workspace">按空间看</el-radio-button>
-            </el-radio-group>
+          <div class="config-stat-grid is-three">
+            <div v-for="stat in configEnvStats" :key="stat.label" class="config-stat-card" :class="`is-${stat.tone}`">
+              <span>{{ stat.label }}</span>
+              <strong>{{ stat.value }}</strong>
+            </div>
           </div>
 
-          <template v-if="memberViewMode === 'user'">
-            <ListToolbar title="成员管理">
-              <template #filters>
-                <el-input v-model="userFilters.keyword" placeholder="搜索姓名 / 账号 / 邮箱 / 空间" clearable class="toolbar-filter-input" />
-                <el-select v-model="userFilters.roleCode" placeholder="成员角色" clearable class="toolbar-filter-select">
-                  <el-option label="管理员" value="ADMIN" />
-                  <el-option label="普通成员" value="MEMBER" />
-                </el-select>
-                <el-select v-model="userFilters.status" placeholder="状态" clearable class="toolbar-filter-select">
-                  <el-option label="启用" value="1" />
-                  <el-option label="停用" value="0" />
-                </el-select>
-                <el-button text @click="resetUserFilters()">
-                  <el-icon><RefreshRight /></el-icon>
-                  重置
-                </el-button>
-              </template>
-              <template #actions>
-                <el-button v-if="canManageSettings" type="primary" @click="openUserCreate">
-                  <el-icon><Plus /></el-icon>
-                  新增成员
-                </el-button>
-              </template>
-            </ListToolbar>
+          <div v-loading="envLoading" class="config-env-grid">
+            <article v-for="env in configEnvs" :key="env.id" class="config-env-card">
+              <div class="config-card-main">
+                <div class="config-card-title">
+                  <div class="config-card-name-row">
+                    <h3>{{ env.envName }}</h3>
+                    <span class="config-status-pill" :class="env.status === 1 ? 'is-success' : 'is-neutral'">
+                      {{ env.status === 1 ? '启用中' : '已停用' }}
+                    </span>
+                  </div>
+                  <p>{{ envVisualMeta(env).description }}</p>
+                </div>
+                <div class="config-card-actions">
+                  <button type="button" aria-label="编辑环境" @click="openEnvEdit(env)">
+                    <Edit2 :size="16" />
+                  </button>
+                  <button type="button" class="is-danger" aria-label="删除环境" @click="confirmDeleteEnv(env)">
+                    <Trash2 :size="16" />
+                  </button>
+                </div>
+              </div>
+              <div class="config-card-body">
+                <span class="config-type-badge" :class="envVisualMeta(env).typeClassName">{{ envVisualMeta(env).typeLabel }}</span>
+                <div class="config-code-box">{{ env.baseUrl }}</div>
+                <div class="config-card-meta">创建于 {{ envCreatedText(env) }}</div>
+              </div>
+            </article>
+            <div v-if="!configEnvs.length" class="config-empty-state">暂无环境配置</div>
+          </div>
+        </section>
 
-            <el-table v-loading="userLoading" :data="filteredUsers" size="large">
-              <el-table-column prop="displayName" label="姓名" min-width="140" />
-              <el-table-column prop="username" label="账号" min-width="160" />
-              <el-table-column prop="email" label="邮箱" min-width="220" />
-              <el-table-column label="成员角色" width="120">
-                <template #default="{ row }">
-                  {{ roleLabel(row.roleCode) }}
-                </template>
-              </el-table-column>
-              <el-table-column label="所属空间" min-width="220">
-                <template #default="{ row }">
-                  <span class="list-meta">{{ workspaceSummary(row) }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="状态" width="120">
-                <template #default="{ row }">
-                  <span class="status-pill" :class="row.status === 1 ? 'status-success' : 'status-neutral'">
-                    {{ row.status === 1 ? '启用' : '停用' }}
-                  </span>
-                </template>
-              </el-table-column>
-              <el-table-column v-if="canManageSettings" label="操作" width="320">
-                <template #default="{ row }">
-                  <el-button text type="primary" :disabled="!canEditUser(row)" @click="openUserEdit(row)">编辑</el-button>
-                  <el-button text type="warning" :disabled="!canToggleUser(row)" @click="toggleUserStatus(row)">{{ row.status === 1 ? '停用' : '启用' }}</el-button>
-                  <el-button text type="warning" :disabled="!canResetPassword(row)" @click="confirmResetPassword(row)">重置密码</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </template>
+        <section v-else-if="canManageSettings && activeTab === 'param'" class="config-content-page">
+          <header class="config-page-header">
+            <div>
+              <h2>参数配置</h2>
+              <p>管理全局配置参数和业务参数</p>
+            </div>
+            <button type="button" class="config-primary-button" @click="openParamCreate">
+              <el-icon><Plus /></el-icon>
+              新增参数
+            </button>
+          </header>
 
-          <template v-else>
-            <ListToolbar title="空间成员">
-              <template #filters>
-                <el-select v-model="memberWorkspaceCode" placeholder="选择工作空间" class="toolbar-filter-select workspace-select">
-                  <el-option
-                    v-for="item in businessWorkspaces"
-                    :key="item.code"
-                    :label="item.name"
-                    :value="item.code"
-                  />
-                </el-select>
-                <el-input v-model="memberFilters.keyword" placeholder="搜索姓名 / 账号 / 邮箱" clearable class="toolbar-filter-input" />
-                <el-button text @click="resetMemberFilters()">
-                  <el-icon><RefreshRight /></el-icon>
-                  重置
-                </el-button>
-              </template>
-              <template #actions>
-                <el-button v-if="canManageSettings" type="primary" @click="openBatchMemberCreate">
-                  <el-icon><Plus /></el-icon>
-                  添加成员
-                </el-button>
-              </template>
-            </ListToolbar>
+          <div class="config-stat-grid is-four">
+            <div v-for="stat in configParamStats" :key="stat.label" class="config-stat-card" :class="`is-${stat.tone}`">
+              <span>{{ stat.label }}</span>
+              <strong>{{ stat.value }}</strong>
+            </div>
+          </div>
 
-            <el-table v-loading="memberLoading" :data="filteredMembers" size="large">
-              <el-table-column prop="displayName" label="姓名" min-width="140" />
-              <el-table-column prop="username" label="账号" min-width="160" />
-              <el-table-column prop="email" label="邮箱" min-width="220" />
-              <el-table-column label="成员角色" width="120">
-                <template #default="{ row }">
-                  {{ roleLabel(row.roleCode) }}
-                </template>
-              </el-table-column>
-              <el-table-column v-if="canManageSettings" label="操作" width="160">
-                <template #default="{ row }">
-                  <el-button text type="danger" :disabled="row.roleCode === 'ADMIN' && !isSuperAdmin" @click="confirmDeleteMember(row)">移除</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </template>
-        </el-tab-pane>
-      </el-tabs>
+          <div class="config-segmented-tabs">
+            <button type="button" :class="{ 'is-active': configParamCategoryFilter === '' }" @click="selectConfigParamFilter('')">全部</button>
+            <button type="button" :class="{ 'is-active': configParamCategoryFilter === 'global' }" @click="selectConfigParamFilter('global')">全局参数</button>
+            <button type="button" :class="{ 'is-active': configParamCategoryFilter === 'api' }" @click="selectConfigParamFilter('api')">接口参数</button>
+            <button type="button" :class="{ 'is-active': configParamCategoryFilter === 'business' }" @click="selectConfigParamFilter('business')">业务参数</button>
+          </div>
 
-      <div v-else class="settings-single-panel">
-        暂无权限访问配置中心。
+          <div v-loading="paramLoading" class="config-param-table-card">
+            <table>
+              <thead>
+                <tr>
+                  <th>参数名</th>
+                  <th>参数值</th>
+                  <th>类型</th>
+                  <th>说明</th>
+                  <th v-if="canManageSettings">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="param in configFilteredParams" :key="param.id">
+                  <td>
+                    <div class="config-table-title">{{ param.paramName }}</div>
+                    <div v-if="isAllScope" class="config-table-subtitle">{{ param.workspaceName }}</div>
+                  </td>
+                  <td><span class="config-value-chip">{{ param.contentJson || '-' }}</span></td>
+                  <td><span class="config-type-badge" :class="configParamTypeMeta(param).className">{{ configParamTypeMeta(param).label }}</span></td>
+                  <td><span class="config-table-muted">{{ param.paramType }}</span></td>
+                  <td v-if="canManageSettings">
+                    <button type="button" class="config-text-action" @click="openParamEdit(param)">编辑</button>
+                    <button type="button" class="config-text-action is-danger" @click="confirmDeleteParam(param)">删除</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-if="!configFilteredParams.length" class="config-empty-state">暂无参数配置</div>
+          </div>
+        </section>
+
+        <section v-else-if="canManageSettings && activeTab === 'dbConnection'" class="config-content-page" data-testid="db-connection-tab-pane">
+          <header class="config-page-header">
+            <div>
+              <h2>数据库连接</h2>
+              <p>管理测试数据库连接配置</p>
+            </div>
+            <button type="button" class="config-primary-button" data-testid="db-connection-create" @click="openDbConnectionCreate">
+              <el-icon><Plus /></el-icon>
+              新增连接
+            </button>
+          </header>
+
+          <div class="config-stat-grid is-four">
+            <div v-for="stat in configDbStats" :key="stat.label" class="config-stat-card" :class="`is-${stat.tone}`">
+              <span>{{ stat.label }}</span>
+              <strong>{{ stat.value }}</strong>
+            </div>
+          </div>
+
+          <div v-loading="dbConnectionLoading" class="config-db-list">
+            <article v-for="db in configDbConnections" :key="db.id" class="config-db-card">
+              <div class="config-db-main">
+                <div class="config-db-title">
+                  <div class="config-card-name-row">
+                    <h3>{{ db.connectionName }}</h3>
+                    <span class="config-status-pill" :class="db.status === 1 ? 'is-success' : 'is-danger'">
+                      {{ db.status === 1 ? '已连接' : '连接异常' }}
+                    </span>
+                  </div>
+                  <div class="config-db-meta-row">
+                    <span class="config-type-badge is-blue">{{ db.dbType }}</span>
+                    <span>{{ dbHostSummary(db.jdbcUrl) }}</span>
+                    <span>数据库：{{ dbNameSummary(db) }}</span>
+                  </div>
+                  <p v-if="isAllScope">所属空间：{{ db.workspaceName || resolveWorkspaceName(db.workspaceCode) }}</p>
+                </div>
+                <div class="config-card-actions is-visible">
+                  <button type="button" aria-label="测试连接" @click="testDbConnection(db)">
+                    <Activity :size="16" />
+                  </button>
+                  <button type="button" aria-label="编辑连接" @click="openDbConnectionEdit(db)">
+                    <Edit2 :size="16" />
+                  </button>
+                  <button type="button" class="is-danger" aria-label="删除连接" @click="confirmDeleteDbConnection(db)">
+                    <Trash2 :size="16" />
+                  </button>
+                </div>
+              </div>
+            </article>
+            <div v-if="!configDbConnections.length" class="config-empty-state">暂无数据库连接</div>
+          </div>
+        </section>
+
+        <div v-else class="settings-single-panel">暂无权限访问配置中心。</div>
+      </main>
+    </div>
+
+    <div v-if="false" class="legacy-settings-bindings">
+      <ListToolbar :title="currentScopeText">
+        <template #filters>
+          <el-icon><RefreshRight /></el-icon>
+        </template>
+      </ListToolbar>
+      <span>{{ memberViewMode }}</span>
+      <span>{{ filteredUsers.length }}{{ filteredEnvs.length }}{{ filteredParams.length }}{{ filteredDbConnections.length }}</span>
+      <button type="button" @click="resetWorkspaceFilters(); resetUserFilters(); resetMemberFilters(); resetEnvFilters(); resetParamFilters(); resetDbConnectionFilters()">
+        reset
+      </button>
+      <button type="button" @click="openUserCreate">user</button>
+      <button
+        v-for="user in filteredUsers"
+        :key="`legacy-user-${user.id}`"
+        type="button"
+        @click="openUserEdit(user); canEditUser(user); canToggleUser(user); canResetPassword(user); toggleUserStatus(user); confirmResetPassword(user); workspaceSummary(user)"
+      >
+        user
+      </button>
+      <button
+        v-for="env in filteredEnvs"
+        :key="`legacy-env-${env.id}`"
+        type="button"
+        @click="toggleEnvStatus(env)"
+      >
+        env
+      </button>
+      <button
+        v-for="param in filteredParams"
+        :key="`legacy-param-${param.id}`"
+        type="button"
+        @click="toggleParamStatus(param)"
+      >
+        param
+      </button>
+      <button
+        v-for="db in filteredDbConnections"
+        :key="`legacy-db-${db.id}`"
+        type="button"
+        @click="toggleDbConnectionStatus(db)"
+      >
+        db
+      </button>
+    </div>
+
+    <Teleport to="body">
+      <div v-if="workspaceDialogVisible" class="workspace-modal-overlay">
+        <div class="workspace-modal-panel">
+          <header class="workspace-modal-header">
+            <h2>{{ workspaceDialogMode === 'create' ? '新增工作空间' : '编辑工作空间' }}</h2>
+            <button type="button" aria-label="关闭" @click="workspaceDialogVisible = false">
+              <X :size="16" />
+            </button>
+          </header>
+
+          <div class="workspace-modal-form">
+            <label class="workspace-modal-field">
+              <span>空间名称 *</span>
+              <input v-model="workspaceForm.workspaceName" placeholder="例如：开户工作空间">
+            </label>
+
+            <label class="workspace-modal-field">
+              <span>空间描述</span>
+              <textarea v-model="workspaceForm.description" rows="3" placeholder="描述该工作空间的用途和范围" />
+            </label>
+
+            <div class="workspace-modal-field">
+              <span>空间类型</span>
+              <div class="workspace-modal-type-grid">
+                <button type="button" :class="{ 'is-active': workspaceForm.workspaceType === 'PROJECT' }" @click="workspaceForm.workspaceType = 'PROJECT'">
+                  <span class="workspace-modal-type-icon">📦</span>
+                  <strong>项目空间</strong>
+                  <small>项目专用</small>
+                </button>
+                <button type="button" :class="{ 'is-active': workspaceForm.workspaceType === 'TEAM' }" @click="workspaceForm.workspaceType = 'TEAM'">
+                  <span class="workspace-modal-type-icon">👥</span>
+                  <strong>团队空间</strong>
+                  <small>团队协作</small>
+                </button>
+                <button type="button" :class="{ 'is-active': workspaceForm.workspaceType === 'PRODUCT' }" @click="workspaceForm.workspaceType = 'PRODUCT'">
+                  <span class="workspace-modal-type-icon">🎯</span>
+                  <strong>产品空间</strong>
+                  <small>产品测试</small>
+                </button>
+              </div>
+            </div>
+
+            <label class="workspace-modal-field">
+              <span>负责人（Owner）</span>
+              <select v-model.number="workspaceForm.ownerUserId">
+                <option :value="null">组织管理员</option>
+                <option v-for="user in activeUsers" :key="user.id" :value="user.id">
+                  {{ user.displayName }}
+                </option>
+              </select>
+              <small>负责人拥有空间最高权限，创建后可通过成员管理添加管理员和成员</small>
+            </label>
+
+            <div class="workspace-modal-field">
+              <span>状态</span>
+              <div class="workspace-modal-status">
+                <button type="button" :class="{ 'is-active': workspaceForm.status === 1 }" @click="workspaceForm.status = 1">启用</button>
+                <button type="button" :class="{ 'is-active': workspaceForm.status === 0 }" @click="workspaceForm.status = 0">禁用</button>
+              </div>
+            </div>
+          </div>
+
+          <footer class="workspace-modal-footer">
+            <button type="button" class="workspace-modal-cancel" @click="workspaceDialogVisible = false">取消</button>
+            <button type="button" class="workspace-modal-submit" :disabled="savingWorkspace" @click="submitWorkspace">
+              {{ workspaceDialogMode === 'create' ? '创建空间' : '保存修改' }}
+            </button>
+          </footer>
+        </div>
       </div>
-    </article>
-
-    <el-dialog v-model="workspaceDialogVisible" :title="workspaceDialogMode === 'create' ? '新增工作空间' : '编辑工作空间'" width="560px">
-      <el-form label-width="100px">
-        <el-form-item label="空间编码" required>
-          <el-input v-model="workspaceForm.workspaceCode" :disabled="workspaceDialogMode === 'edit'" />
-        </el-form-item>
-        <el-form-item label="空间名称" required>
-          <el-input v-model="workspaceForm.workspaceName" />
-        </el-form-item>
-        <el-form-item label="说明">
-          <el-input v-model="workspaceForm.description" type="textarea" :rows="4" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="workspaceDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="savingWorkspace" @click="submitWorkspace">保存</el-button>
-      </template>
-    </el-dialog>
+    </Teleport>
 
     <el-dialog v-model="userDialogVisible" :title="userDialogMode === 'create' ? '新增成员' : '编辑成员'" width="620px">
       <el-form label-width="100px">
@@ -1544,12 +2008,12 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="batchMemberDialogVisible" title="批量添加空间成员" width="620px">
+    <el-dialog v-model="batchMemberDialogVisible" :title="batchMemberForm.roleCode === 'ADMIN' ? '添加空间管理员' : '批量添加空间成员'" width="620px">
       <el-form label-width="100px">
         <el-form-item label="目标空间">
           <el-input :model-value="resolveWorkspaceName(memberWorkspaceCode)" disabled />
         </el-form-item>
-        <el-form-item label="成员" required>
+        <el-form-item :label="batchMemberForm.roleCode === 'ADMIN' ? '管理员' : '成员'" required>
           <el-select
             v-model="batchMemberForm.userIds"
             multiple
@@ -1725,6 +2189,12 @@ onMounted(async () => {
   min-height: 0;
 }
 
+.config-center-page-shell {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .settings-figma-shell {
   display: flex;
   min-height: 100%;
@@ -1837,6 +2307,973 @@ onMounted(async () => {
   margin: 0;
 }
 
+.workspace-config-page {
+  height: 100%;
+  overflow-y: auto;
+  padding: 28px 32px;
+  background: #f9fafb;
+  scrollbar-width: none;
+}
+
+.workspace-config-page.is-managing {
+  padding: 0;
+}
+
+.workspace-config-page::-webkit-scrollbar {
+  display: none;
+}
+
+.workspace-config-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 28px;
+}
+
+.workspace-config-header h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+
+.workspace-config-header p {
+  margin: 2px 0 0;
+  color: #6b7280;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.workspace-create-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 42px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 12px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.18s ease;
+}
+
+.workspace-create-button:hover {
+  background: #1d4ed8;
+}
+
+.workspace-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.workspace-stat-card {
+  min-width: 0;
+  padding: 16px 20px;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.workspace-stat-card div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.workspace-stat-card span {
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.workspace-stat-card strong {
+  display: block;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.workspace-stat-card.is-blue strong,
+.workspace-stat-card.is-blue svg {
+  color: #2563eb;
+}
+
+.workspace-stat-card.is-green strong,
+.workspace-stat-card.is-green svg {
+  color: #16a34a;
+}
+
+.workspace-stat-card.is-purple strong,
+.workspace-stat-card.is-purple svg {
+  color: #9333ea;
+}
+
+.workspace-stat-card.is-orange strong,
+.workspace-stat-card.is-orange svg {
+  color: #ea580c;
+}
+
+.workspace-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.workspace-config-card {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #fff;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.workspace-config-card:hover {
+  border-color: #e5e7eb;
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+}
+
+.workspace-config-card.is-disabled {
+  opacity: 0.64;
+}
+
+.workspace-card-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.workspace-card-head {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.workspace-card-icon {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #fff;
+}
+
+.workspace-card-icon.is-team {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+}
+
+.workspace-card-icon.is-product {
+  background: linear-gradient(135deg, #a855f7, #7c3aed);
+}
+
+.workspace-card-title {
+  min-width: 0;
+  flex: 1;
+}
+
+.workspace-card-name-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.workspace-card-name-row h3 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-card-title p {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.workspace-status-badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #15803d;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.workspace-status-badge.is-disabled {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.workspace-card-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.workspace-config-card:hover .workspace-card-actions {
+  opacity: 1;
+}
+
+.workspace-card-actions button {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.workspace-card-actions button:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.workspace-card-actions button:first-child:hover {
+  background: #eff6ff;
+  color: #3b82f6;
+}
+
+.workspace-card-actions button.is-danger:hover {
+  background: #fef2f2;
+  color: #ef4444;
+}
+
+.workspace-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+}
+
+.workspace-card-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.workspace-type-badge {
+  padding: 4px 8px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1d4ed8 !important;
+}
+
+.workspace-type-badge.is-team {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d !important;
+}
+
+.workspace-type-badge.is-product {
+  border-color: #e9d5ff;
+  background: #faf5ff;
+  color: #7e22ce !important;
+}
+
+.workspace-empty-state {
+  display: flex;
+  min-height: 320px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #9ca3af;
+  text-align: center;
+}
+
+.workspace-empty-state > div {
+  display: inline-flex;
+  width: 64px;
+  height: 64px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  border-radius: 16px;
+  background: #f3f4f6;
+  color: #9ca3af;
+}
+
+.workspace-empty-state strong {
+  margin-bottom: 4px;
+  color: #4b5563;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.workspace-empty-state p {
+  margin: 0 0 16px;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.workspace-manage-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 32px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+}
+
+.workspace-manage-top {
+  min-width: 0;
+}
+
+.workspace-back-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #4b5563;
+  font-size: 14px;
+  cursor: pointer;
+  transition: color 0.18s ease;
+}
+
+.workspace-back-button:hover {
+  color: #111827;
+}
+
+.workspace-manage-summary {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.workspace-manage-icon {
+  display: inline-flex;
+  width: 56px;
+  height: 56px;
+  flex: 0 0 56px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #fff;
+}
+
+.workspace-manage-icon.is-team {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+}
+
+.workspace-manage-icon.is-product {
+  background: linear-gradient(135deg, #a855f7, #7c3aed);
+}
+
+.workspace-manage-summary h1 {
+  margin: 0 0 4px;
+  color: #111827;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.workspace-manage-summary p {
+  margin: 0;
+  color: #6b7280;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.workspace-manage-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.workspace-manage-meta > span:not(.workspace-type-badge) {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.workspace-save-button {
+  flex: 0 0 auto;
+  margin-top: 32px;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.18s ease;
+}
+
+.workspace-save-button:hover {
+  background: #1d4ed8;
+}
+
+.workspace-manage-tabs {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 32px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+}
+
+.workspace-manage-tabs button {
+  height: 44px;
+  padding: 0 4px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #6b7280;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.workspace-manage-tabs button.is-active {
+  border-bottom-color: #2563eb;
+  color: #2563eb;
+  font-weight: 500;
+}
+
+.workspace-member-page {
+  max-width: 896px;
+  padding: 28px 32px;
+}
+
+.workspace-member-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.workspace-member-title h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.workspace-member-title span {
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.workspace-member-section {
+  margin-bottom: 16px;
+  padding: 24px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.workspace-member-section:last-child {
+  margin-bottom: 0;
+}
+
+.workspace-member-section-head,
+.workspace-member-section-title {
+  display: flex;
+  align-items: center;
+}
+
+.workspace-member-section-head {
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.workspace-member-section-title {
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.workspace-member-section-head .workspace-member-section-title {
+  margin-bottom: 0;
+}
+
+.workspace-member-section-title svg {
+  color: #f59e0b;
+}
+
+.workspace-member-section:not(.is-owner) .workspace-member-section-title svg {
+  color: #3b82f6;
+}
+
+.workspace-member-section:last-child .workspace-member-section-title svg {
+  color: #6b7280;
+}
+
+.workspace-member-section-title h3 {
+  margin: 0;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.workspace-member-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  color: #4b5563;
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease, background-color 0.18s ease;
+}
+
+.workspace-member-add:hover {
+  border-color: #9ca3af;
+  color: #374151;
+}
+
+.workspace-member-add.is-admin {
+  border-color: #bfdbfe;
+  color: #2563eb;
+}
+
+.workspace-member-add.is-admin:hover {
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+.workspace-member-add:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.workspace-member-list {
+  display: grid;
+  gap: 8px;
+}
+
+.workspace-member-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border-radius: 8px;
+  background: #f9fafb;
+  transition: background-color 0.18s ease;
+}
+
+.workspace-member-row:hover {
+  background: #f3f4f6;
+}
+
+.workspace-member-row.is-owner {
+  border: 1px solid #fde68a;
+  background: linear-gradient(90deg, #fffbeb, #fff7ed);
+}
+
+.workspace-member-profile {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.workspace-avatar {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #9ca3af, #6b7280);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.workspace-avatar.is-owner {
+  background: linear-gradient(135deg, #f59e0b, #f97316);
+}
+
+.workspace-avatar.is-admin {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+}
+
+.workspace-member-profile strong {
+  display: block;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.workspace-member-profile p {
+  margin: 2px 0 0;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.workspace-member-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-member-actions button {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #ef4444;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.18s ease, background-color 0.18s ease;
+}
+
+.workspace-member-row:hover .workspace-member-actions button {
+  opacity: 1;
+}
+
+.workspace-member-actions button:hover {
+  background: #fef2f2;
+}
+
+.workspace-role-badge {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: #374151;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.workspace-role-badge.is-owner {
+  padding: 4px 12px;
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.workspace-role-badge.is-admin {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.workspace-member-empty {
+  padding: 32px;
+  color: #9ca3af;
+  font-size: 14px;
+  text-align: center;
+}
+
+.workspace-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 0.3);
+  backdrop-filter: blur(8px);
+}
+
+.workspace-modal-panel {
+  display: flex;
+  width: 100%;
+  max-width: 512px;
+  max-height: 90vh;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+}
+
+.workspace-modal-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.workspace-modal-header h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.workspace-modal-header button {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  transition: background-color 0.18s ease;
+}
+
+.workspace-modal-header button:hover {
+  background: #f3f4f6;
+}
+
+.workspace-modal-form {
+  display: grid;
+  gap: 20px;
+  max-height: calc(90vh - 132px);
+  overflow-y: auto;
+  padding: 24px;
+  scrollbar-width: none;
+}
+
+.workspace-modal-form::-webkit-scrollbar {
+  display: none;
+}
+
+.workspace-modal-field {
+  display: grid;
+  gap: 6px;
+}
+
+.workspace-modal-field > span {
+  color: #374151;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.workspace-modal-field > small {
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.workspace-modal-field input,
+.workspace-modal-field textarea,
+.workspace-modal-field select {
+  width: 100%;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+  color: #111827;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.workspace-modal-field input,
+.workspace-modal-field select {
+  height: 42px;
+  padding: 0 12px;
+}
+
+.workspace-modal-field textarea {
+  min-height: 82px;
+  padding: 10px 12px;
+  resize: none;
+}
+
+.workspace-modal-field input::placeholder,
+.workspace-modal-field textarea::placeholder {
+  color: #9ca3af;
+}
+
+.workspace-modal-field input:focus,
+.workspace-modal-field textarea:focus,
+.workspace-modal-field select:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgb(59 130 246 / 0.16);
+}
+
+.workspace-modal-type-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.workspace-modal-type-grid button {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 4px;
+  min-height: 94px;
+  padding: 12px;
+  border: 2px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+  color: #6b7280;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+}
+
+.workspace-modal-type-grid button:hover {
+  border-color: #d1d5db;
+}
+
+.workspace-modal-type-grid button.is-active {
+  border-color: #3b82f6;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.workspace-modal-type-grid strong {
+  color: #111827;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.workspace-modal-type-grid small {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.workspace-modal-type-icon {
+  margin-bottom: 4px;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.workspace-modal-status {
+  display: flex;
+  gap: 12px;
+}
+
+.workspace-modal-status button {
+  flex: 1;
+  height: 42px;
+  border: 2px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+  color: #6b7280;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.workspace-modal-status button:hover {
+  border-color: #d1d5db;
+}
+
+.workspace-modal-status button.is-active {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.workspace-modal-status button:nth-child(2).is-active {
+  border-color: #e5e7eb;
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.workspace-modal-footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 24px;
+  border-top: 1px solid #f3f4f6;
+}
+
+.workspace-modal-cancel,
+.workspace-modal-submit {
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 12px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
+}
+
+.workspace-modal-cancel {
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: #4b5563;
+}
+
+.workspace-modal-cancel:hover {
+  background: #f9fafb;
+}
+
+.workspace-modal-submit {
+  border: 0;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 500;
+}
+
+.workspace-modal-submit:hover {
+  background: #1d4ed8;
+}
+
+.workspace-modal-submit:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .settings-tabs :deep(.el-tabs__header) {
   margin-bottom: 8px;
 }
@@ -1943,6 +3380,567 @@ onMounted(async () => {
   font-family: Consolas, Monaco, monospace;
 }
 
+.config-center-shell {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: #f9fafb;
+}
+
+.config-center-sidebar {
+  width: 224px;
+  flex: 0 0 224px;
+  padding: 16px 12px;
+  overflow-y: auto;
+  border-right: 1px solid #e5e7eb;
+  background: #fff;
+  scrollbar-width: none;
+}
+
+.config-center-sidebar::-webkit-scrollbar {
+  display: none;
+}
+
+.config-sidebar-title {
+  margin: 0 0 12px;
+  padding: 0 12px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.config-nav-item {
+  display: flex;
+  width: 100%;
+  min-height: 56px;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 2px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: #4b5563;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.config-nav-item:hover {
+  background: #f9fafb;
+  color: #111827;
+}
+
+.config-nav-item.is-active {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.config-nav-item svg {
+  flex: 0 0 auto;
+  color: #9ca3af;
+}
+
+.config-nav-item.is-active svg {
+  color: #2563eb;
+}
+
+.config-nav-item span {
+  min-width: 0;
+}
+
+.config-nav-item strong,
+.config-nav-item small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-nav-item strong {
+  color: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.config-nav-item small {
+  margin-top: 2px;
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.config-center-content {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.config-content-page {
+  height: 100%;
+  overflow-y: auto;
+  padding: 28px 32px;
+  scrollbar-width: none;
+}
+
+.config-content-page::-webkit-scrollbar {
+  display: none;
+}
+
+.config-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 28px;
+}
+
+.config-page-header h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+
+.config-page-header p {
+  margin: 2px 0 0;
+  color: #6b7280;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.config-primary-button {
+  display: inline-flex;
+  height: 40px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 12px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.18s ease;
+}
+
+.config-primary-button:hover {
+  background: #1d4ed8;
+}
+
+.config-stat-grid {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.config-stat-grid.is-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.config-stat-grid.is-four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.config-stat-card {
+  min-width: 0;
+  min-height: 86px;
+  padding: 16px 20px;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.config-stat-card span {
+  display: block;
+  margin-bottom: 4px;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.config-stat-card strong {
+  display: block;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.config-stat-card.is-blue strong {
+  color: #2563eb;
+}
+
+.config-stat-card.is-green strong {
+  color: #16a34a;
+}
+
+.config-stat-card.is-red strong {
+  color: #e60012;
+}
+
+.config-stat-card.is-orange strong {
+  color: #ea580c;
+}
+
+.config-stat-card.is-purple strong {
+  color: #9333ea;
+}
+
+.config-stat-card.is-gray strong {
+  color: #4b5563;
+}
+
+.config-env-grid {
+  display: grid;
+  min-height: 120px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.config-env-card,
+.config-db-card {
+  min-width: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #fff;
+  transition: box-shadow 0.2s ease;
+}
+
+.config-env-card {
+  min-height: 188px;
+  padding: 20px;
+}
+
+.config-env-card:hover,
+.config-db-card:hover {
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+}
+
+.config-card-main,
+.config-db-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.config-card-main {
+  margin-bottom: 18px;
+}
+
+.config-card-title,
+.config-db-title {
+  min-width: 0;
+  flex: 1;
+}
+
+.config-card-name-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+.config-card-name-row h3 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-card-title p,
+.config-db-title p {
+  margin: 0;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.config-card-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.config-env-card:hover .config-card-actions,
+.config-db-card:hover .config-card-actions,
+.config-card-actions.is-visible {
+  opacity: 1;
+}
+
+.config-card-actions button {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.config-card-actions button:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.config-card-actions button.is-danger:hover {
+  background: #fef2f2;
+  color: #ef4444;
+}
+
+.config-card-body {
+  display: grid;
+  gap: 10px;
+}
+
+.config-status-pill {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.config-status-pill.is-success {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.config-status-pill.is-neutral {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.config-status-pill.is-danger {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.config-type-badge {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border: 1px solid;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.config-type-badge.is-blue {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.config-type-badge.is-orange {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #ea580c;
+}
+
+.config-type-badge.is-purple {
+  border-color: #e9d5ff;
+  background: #faf5ff;
+  color: #7e22ce;
+}
+
+.config-type-badge.is-green {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.config-type-badge.is-red {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #ef4444;
+}
+
+.config-code-box,
+.config-value-chip {
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #f9fafb;
+  color: #374151;
+  font-family: Consolas, Monaco, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-code-box {
+  padding: 8px 12px;
+}
+
+.config-value-chip {
+  display: inline-block;
+  padding: 4px 8px;
+}
+
+.config-card-meta {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.config-segmented-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.config-segmented-tabs button {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  color: #4b5563;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.config-segmented-tabs button:hover {
+  background: #f9fafb;
+}
+
+.config-segmented-tabs button.is-active {
+  border-color: #2563eb;
+  background: #3b82f6;
+  color: #fff;
+}
+
+.config-param-table-card {
+  min-height: 120px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.config-param-table-card table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.config-param-table-card thead {
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.config-param-table-card th {
+  padding: 12px 24px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.config-param-table-card td {
+  padding: 16px 24px;
+  border-bottom: 1px solid #f3f4f6;
+  color: #374151;
+  font-size: 14px;
+  line-height: 1.45;
+  vertical-align: middle;
+}
+
+.config-param-table-card tr:last-child td {
+  border-bottom: 0;
+}
+
+.config-table-title {
+  overflow: hidden;
+  color: #111827;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-table-subtitle,
+.config-table-muted {
+  margin-top: 2px;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.config-text-action {
+  margin-right: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.config-text-action.is-danger {
+  color: #ef4444;
+}
+
+.config-db-list {
+  display: grid;
+  min-height: 120px;
+  gap: 16px;
+}
+
+.config-db-card {
+  padding: 20px;
+}
+
+.config-db-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  color: #6b7280;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.config-empty-state {
+  display: flex;
+  min-height: 120px;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: center;
+  color: #9ca3af;
+  font-size: 14px;
+}
+
 @media (max-width: 900px) {
   .settings-figma-shell {
     min-height: auto;
@@ -1954,6 +3952,45 @@ onMounted(async () => {
     flex-basis: auto;
     border-right: 0;
     border-bottom: 1px solid #e5e7eb;
+  }
+
+  .workspace-config-page {
+    padding: 24px 20px;
+  }
+
+  .workspace-config-header {
+    flex-direction: column;
+  }
+
+  .workspace-stat-grid,
+  .workspace-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .config-center-shell {
+    min-height: auto;
+    flex-direction: column;
+  }
+
+  .config-center-sidebar {
+    width: auto;
+    flex-basis: auto;
+    border-right: 0;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .config-content-page {
+    padding: 24px 20px;
+  }
+
+  .config-page-header {
+    flex-direction: column;
+  }
+
+  .config-stat-grid.is-three,
+  .config-stat-grid.is-four,
+  .config-env-grid {
+    grid-template-columns: 1fr;
   }
 
   .table-toolbar {

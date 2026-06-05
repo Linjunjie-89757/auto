@@ -2156,6 +2156,9 @@ onMounted(bootstrap)
   color: #2563eb;
   font-weight: 500;
 }
+.case-grid-header .case-cell-caseNo {
+  color: inherit;
+}
 .case-cell-title {
   color: #111827;
 }

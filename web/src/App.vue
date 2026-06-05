@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { SwitchButton } from '@element-plus/icons-vue'
 import { Bell, Bug, ChevronDown, ChevronLeft, FileText, Home, Layers, Monitor, Network, Settings, SlidersHorizontal, Smartphone } from '@lucide/vue'
@@ -45,7 +45,7 @@ const mainClass = computed(() => [
   {
     'app-main-workbench': route.path.startsWith('/automation/api'),
     'app-main-cases': route.path.startsWith('/cases'),
-    'app-main-settings': route.path.startsWith('/settings'),
+    'app-main-settings': route.path.startsWith('/settings') || route.path.startsWith('/config-center'),
   },
 ])
 
@@ -135,8 +135,10 @@ async function handleLogout() {
   router.replace('/login')
 }
 
-async function loadWorkspaces() {
-  workspaceReady.value = false
+async function loadWorkspaces(options: { silent?: boolean } = {}) {
+  if (!options.silent) {
+    workspaceReady.value = false
+  }
 
   if (isPublicRoute.value) {
     workspaceReady.value = true
@@ -160,7 +162,16 @@ async function loadWorkspaces() {
   }
 }
 
-watch(() => authStore.currentUser?.id, loadWorkspaces)
+function handleWorkspaceListChanged() {
+  if (!authStore.isAuthenticated || isPublicRoute.value) {
+    return
+  }
+  void loadWorkspaces({ silent: true })
+}
+
+watch(() => authStore.currentUser?.id, () => {
+  void loadWorkspaces()
+})
 watch(isPublicRoute, (publicRoute) => {
   if (!publicRoute) {
     void loadWorkspaces()
@@ -174,7 +185,13 @@ watch(() => route.query.workspace, async () => {
   await ensureValidWorkspaceRoute()
   workspaceReady.value = true
 })
-onMounted(loadWorkspaces)
+onMounted(() => {
+  window.addEventListener('workspace-list-changed', handleWorkspaceListChanged)
+  void loadWorkspaces()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('workspace-list-changed', handleWorkspaceListChanged)
+})
 </script>
 
 <template>

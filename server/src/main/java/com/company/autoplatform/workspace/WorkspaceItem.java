@@ -1,4 +1,15 @@
 package com.company.autoplatform.workspace;
 
-public record WorkspaceItem(String code, String name, String description, boolean allScope) {
+public record WorkspaceItem(
+        String code,
+        String name,
+        String description,
+        boolean allScope,
+        String workspaceType,
+        Long ownerUserId,
+        String ownerName,
+        Integer status,
+        String createdAt,
+        String updatedAt
+) {
 }

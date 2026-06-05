@@ -3,6 +3,12 @@ export interface WorkspaceItem {
   name: string
   description: string
   allScope: boolean
+  workspaceType?: 'PROJECT' | 'TEAM' | 'PRODUCT' | null
+  ownerUserId?: number | null
+  ownerName?: string | null
+  status?: number | null
+  createdAt?: string | null
+  updatedAt?: string | null
 }
 
 export interface ApiResponse<T> {
@@ -1309,17 +1315,22 @@ export interface DbConnectionItem {
 }
 
 export interface CreateWorkspacePayload {
-  workspaceCode: string
+  workspaceCode?: string
   workspaceName: string
   description: string
+  workspaceType?: 'PROJECT' | 'TEAM' | 'PRODUCT'
+  ownerUserId?: number | null
+  status?: number
 }
 
 export interface CreateWorkspaceMemberPayload {
   userId: number | null
+  roleCode?: 'ADMIN' | 'MEMBER'
 }
 
 export interface BatchWorkspaceMemberPayload {
   userIds: number[]
+  roleCode?: 'ADMIN' | 'MEMBER'
 }
 
 export interface UpdateWorkspaceMemberPayload {

@@ -16,6 +16,7 @@ public record AiCaseConfigItem(
         String promptTemplate,
         String reviewChecklist,
         Double temperature,
+        Double topP,
         Integer maxCases,
         AiModelCapabilities detectedCapabilities,
         AiModelCapabilities effectiveCapabilities,

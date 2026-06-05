@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
@@ -96,10 +96,16 @@ const savingCaseEdit = ref(false)
 const requirementExpanded = ref(false)
 const casePreviewActiveTab = ref<'detail' | 'analysis'>('detail')
 const casePreviewScrollRef = ref<HTMLElement | null>(null)
+const taskOutputLogRef = ref<HTMLElement | null>(null)
+const taskOutputAutoFollow = ref(true)
+const detailCaseTableRef = ref<{
+  toggleRowSelection?: (row: DetailCaseRow, selected?: boolean) => void
+} | null>(null)
 const streamConnected = ref(false)
 const exporting = ref(false)
 const selectedCaseIndexes = ref<number[]>([])
 const adoptDialogMode = ref<'all' | 'selected'>('all')
+const adoptDialogCaseSnapshot = ref<DetailCaseRow[]>([])
 const casePreviewEditing = ref(false)
 let pollingTimer: number | null = null
 let streamAbortController: AbortController | null = null
@@ -187,7 +193,9 @@ const supplementedCaseCount = computed(() => availableCases.value.filter(item =>
 const confirmRequiredCaseCount = computed(() => availableCases.value.filter(item => getAiReviewStatus(item) === 'CONFIRM_REQUIRED').length)
 const notRecommendedCaseCount = computed(() => availableCases.value.filter(item => getAiReviewStatus(item) === 'NOT_RECOMMENDED').length)
 const adoptDialogCases = computed(() => (
-  adoptDialogMode.value === 'selected' ? selectedAdoptableCases.value : adoptableCases.value
+  adoptDialogCaseSnapshot.value.length
+    ? adoptDialogCaseSnapshot.value
+    : adoptDialogMode.value === 'selected' ? selectedAdoptableCases.value : adoptableCases.value
 ))
 const outputEvents = computed(() => [...(activeRecord.value?.events ?? [])].sort((left, right) => (left.seq ?? 0) - (right.seq ?? 0)))
 const showRealtimeOutputBoard = computed(() => {
@@ -293,17 +301,28 @@ function getModelDisplayInfo(provider?: string | null, model?: string | null) {
   const normalizedModel = model && model !== '-' ? model : ''
   const normalizedProvider = provider && provider !== '-' ? provider : ''
   const providerMap: Record<string, { label: string, className: string }> = {
-    OPENAI_COMPATIBLE_CHAT: { label: '兼容接口', className: 'provider-compatible' },
-    OPENAI_COMPATIBLE_RESPONSES: { label: '兼容接口', className: 'provider-compatible' },
     AZURE_OPENAI: { label: 'Azure OpenAI', className: 'provider-openai' },
     OPENAI: { label: 'OpenAI', className: 'provider-openai' },
     DEEPSEEK: { label: 'DeepSeek', className: 'provider-deepseek' },
-    DASHSCOPE: { label: '通义千问', className: 'provider-qwen' },
-    QWEN: { label: '通义千问', className: 'provider-qwen' },
+    DASHSCOPE: { label: '阿里云', className: 'provider-qwen' },
+    QWEN: { label: '阿里云', className: 'provider-qwen' },
     ANTHROPIC: { label: 'Anthropic', className: 'provider-anthropic' },
   }
   const normalizedKey = normalizedProvider.toUpperCase()
-  const matchedProvider = providerMap[normalizedKey]
+  const source = `${normalizedProvider} ${normalizedModel}`.toLowerCase()
+  const inferredProvider = (() => {
+    if (source.includes('deepseek')) return { label: 'DeepSeek', className: 'provider-deepseek' }
+    if (source.includes('qwen') || source.includes('通义') || source.includes('dashscope') || source.includes('aliyun') || source.includes('alibaba') || source.includes('阿里')) {
+      return { label: '阿里云', className: 'provider-qwen' }
+    }
+    if (source.includes('claude') || source.includes('anthropic')) return { label: 'Anthropic', className: 'provider-anthropic' }
+    if (source.includes('gemini') || source.includes('google')) return { label: 'Google', className: 'provider-google' }
+    if (source.includes('kimi') || source.includes('moonshot')) return { label: 'Kimi', className: 'provider-kimi' }
+    if (source.includes('minimax')) return { label: 'MiniMax', className: 'provider-minimax' }
+    if (source.includes('xiaomi') || source.includes('小米') || source.includes('mimo')) return { label: '小米', className: 'provider-xiaomi' }
+    return null
+  })()
+  const matchedProvider = providerMap[normalizedKey] ?? inferredProvider
   return {
     providerLabel: matchedProvider?.label || normalizedProvider || '未就绪',
     providerClass: matchedProvider?.className || 'provider-default',
@@ -481,6 +500,37 @@ function shouldRefreshForEvent(event: AiGenerationTaskEvent) {
   ].includes(event.eventType)
 }
 
+function isTaskOutputLogAtBottom(element: HTMLElement) {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= 24
+}
+
+function scrollTaskOutputLogToBottom() {
+  const element = taskOutputLogRef.value
+  if (!element) {
+    return
+  }
+  element.scrollTop = element.scrollHeight
+}
+
+function scheduleTaskOutputAutoScroll(force = false) {
+  if (!force && !taskOutputAutoFollow.value) {
+    return
+  }
+  void nextTick(() => {
+    if (force || taskOutputAutoFollow.value) {
+      scrollTaskOutputLogToBottom()
+    }
+  })
+}
+
+function handleTaskOutputLogScroll() {
+  const element = taskOutputLogRef.value
+  if (!element) {
+    return
+  }
+  taskOutputAutoFollow.value = isTaskOutputLogAtBottom(element)
+}
+
 function canEditCase(row: DetailCaseRow | null | undefined) {
   return !!row && getCaseReviewState(row) !== 'ADOPTED'
 }
@@ -521,6 +571,7 @@ function mergeTaskEvent(event: AiGenerationTaskEvent) {
     ...activeRecord.value,
     events: nextEvents.sort((left, right) => (left.seq ?? 0) - (right.seq ?? 0)),
   }
+  scheduleTaskOutputAutoScroll()
   if (shouldRefreshForEvent(event)) {
     scheduleRecordRefresh()
   }
@@ -745,6 +796,20 @@ function handleSelectionChange(rows: DetailCaseRow[]) {
   selectedCaseIndexes.value = rows.map(item => item.index)
 }
 
+function restoreTableSelection(indexes: number[]) {
+  selectedCaseIndexes.value = [...indexes]
+  void nextTick(() => {
+    const table = detailCaseTableRef.value
+    if (!table?.toggleRowSelection) {
+      return
+    }
+    const selectedIndexSet = new Set(indexes)
+    availableCases.value.forEach((row) => {
+      table.toggleRowSelection?.(row, selectedIndexSet.has(row.index))
+    })
+  })
+}
+
 async function loadDirectoryOptions(record: AiGenerationTaskRecord) {
   loadingAdoptDirectories.value = true
   try {
@@ -912,15 +977,23 @@ function openProcessDialog() {
 }
 
 async function openAdoptDialog(record: AiGenerationTaskRecord, mode: 'all' | 'selected' = 'selected') {
+  const selectedIndexesSnapshot = [...selectedCaseIndexes.value]
   activeRecord.value = await getAiGenerationRecord(workspaceCode.value, record.id) ?? record
   if (!activeRecord.value) {
     return
   }
-  if (mode === 'selected' && !selectedAdoptableCases.value.length) {
-    ElMessage.info(selectedCount.value ? '当前选中的用例里没有可采纳项' : '请先勾选需要采纳的用例')
+  if (mode === 'selected') {
+    restoreTableSelection(selectedIndexesSnapshot)
+  }
+  const nextDialogCases = mode === 'selected'
+    ? availableCases.value.filter(item => selectedIndexesSnapshot.includes(item.index) && getCaseReviewState(item) === 'PENDING')
+    : adoptableCases.value
+  if (mode === 'selected' && !nextDialogCases.length) {
+    ElMessage.info(selectedIndexesSnapshot.length ? '当前选中的用例里没有可采纳项' : '请先勾选需要采纳的用例')
     return
   }
   adoptDialogMode.value = mode
+  adoptDialogCaseSnapshot.value = nextDialogCases
   adoptPathTouched.value = false
   await loadDirectoryOptions(activeRecord.value)
   adoptDialogVisible.value = true
@@ -1007,15 +1080,16 @@ async function confirmAdoptAll() {
     ElMessage.warning('请先选择保存路径')
     return
   }
-  if (!adoptDialogCases.value.length) {
+  const casesToAdopt = [...adoptDialogCases.value]
+  if (!casesToAdopt.length) {
     ElMessage.info(adoptDialogMode.value === 'selected' ? '当前选中的用例里没有可采纳项' : '当前没有可采纳的用例')
     return
   }
 
-  const adoptCount = adoptDialogCases.value.length
+  const adoptCount = casesToAdopt.length
   adopting.value = true
   try {
-    for (const item of adoptDialogCases.value) {
+    for (const item of casesToAdopt) {
       const payload: CreateCasePayload = {
         directoryId: adoptForm.directoryId,
         title: item.title,
@@ -1033,11 +1107,11 @@ async function confirmAdoptAll() {
 
     const adopted = new Set(activeRecord.value.adoptedCaseIndexes ?? [])
     const discarded = new Set(activeRecord.value.deletedCaseIndexes ?? [])
-    adoptDialogCases.value.forEach(item => adopted.add(item.index))
-    adoptDialogCases.value.forEach(item => discarded.delete(item.index))
+    casesToAdopt.forEach(item => adopted.add(item.index))
+    casesToAdopt.forEach(item => discarded.delete(item.index))
     const selectedOption = adoptDirectoryOptions.value.find(item => item.value === adoptForm.directoryId)
     const directoryName = formatDirectoryNameFromOption(selectedOption) ?? activeRecord.value.directoryName
-    const adoptedCaseIndexes = adoptDialogCases.value.map(item => item.index)
+    const adoptedCaseIndexes = casesToAdopt.map(item => item.index)
     activeRecord.value = await patchAiGenerationRecord(workspaceCode.value, activeRecord.value.id, {
       directoryId: adoptForm.directoryId,
       directoryName,
@@ -1051,8 +1125,9 @@ async function confirmAdoptAll() {
       savedCaseCount: adopted.size,
     })
 
-    selectedCaseIndexes.value = selectedCaseIndexes.value.filter(index => !adoptDialogCases.value.some(item => item.index === index))
+    selectedCaseIndexes.value = selectedCaseIndexes.value.filter(index => !casesToAdopt.some(item => item.index === index))
     adoptDialogVisible.value = false
+    adoptDialogCaseSnapshot.value = []
     ElMessage.success(`已采纳 ${adoptCount} 条用例到用例管理`)
     await loadRecord()
   } catch (error) {
@@ -1322,6 +1397,12 @@ watch(casePreviewVisible, (visible) => {
   }
 })
 
+watch(adoptDialogVisible, (visible) => {
+  if (!visible) {
+    adoptDialogCaseSnapshot.value = []
+  }
+})
+
 watch(availableCases, (rows) => {
   if (!rows.length) {
     if (casePreviewVisible.value) {
@@ -1338,10 +1419,19 @@ watch(availableCases, (rows) => {
   }
 })
 
+watch(
+  () => {
+    const latestEvent = outputEvents.value.at(-1)
+    return `${outputEvents.value.length}:${latestEvent?.seq ?? ''}`
+  },
+  () => scheduleTaskOutputAutoScroll(),
+)
+
 onMounted(() => {
   detailTableSettings.load()
   seedRecordSnapshot(route.params.taskId?.toString())
   void loadRecord()
+  scheduleTaskOutputAutoScroll(true)
 })
 
 onBeforeUnmount(() => {
@@ -1460,7 +1550,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </div>
-          <div class="task-output-log">
+          <div ref="taskOutputLogRef" class="task-output-log" @scroll="handleTaskOutputLogScroll">
             <div v-if="!outputEvents.length" class="task-output-empty">等待任务输出事件...</div>
             <div
               v-for="event in outputEvents"
@@ -1516,8 +1606,15 @@ onBeforeUnmount(() => {
 
     <div v-if="activeRecord" class="panel-card detail-table-card">
       <div class="detail-table-wrap">
-        <el-table :data="availableCases" class="detail-case-table" border @selection-change="handleSelectionChange">
-          <el-table-column type="selection" width="52" />
+        <el-table
+          ref="detailCaseTableRef"
+          :data="availableCases"
+          class="detail-case-table"
+          border
+          row-key="index"
+          @selection-change="handleSelectionChange"
+        >
+          <el-table-column type="selection" width="52" reserve-selection />
           <el-table-column label="序号" type="index" width="72" align="center" />
           <template v-for="column in detailTableSettings.visibleColumns.value" :key="column.key">
             <el-table-column v-if="column.key === 'title'" label="用例标题" min-width="220" show-overflow-tooltip>
@@ -2314,6 +2411,26 @@ onBeforeUnmount(() => {
 .task-output-provider.provider-anthropic {
   background: rgba(250, 245, 255, 0.95);
   color: #7e22ce;
+}
+
+.task-output-provider.provider-google {
+  background: rgba(239, 246, 255, 0.95);
+  color: #2563eb;
+}
+
+.task-output-provider.provider-kimi {
+  background: #111827;
+  color: #ffffff;
+}
+
+.task-output-provider.provider-minimax {
+  background: rgba(245, 243, 255, 0.95);
+  color: #6d28d9;
+}
+
+.task-output-provider.provider-xiaomi {
+  background: rgba(255, 247, 237, 0.95);
+  color: #ea580c;
 }
 
 .task-output-provider.provider-default {

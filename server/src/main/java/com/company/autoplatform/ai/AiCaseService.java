@@ -52,6 +52,8 @@ public class AiCaseService {
     public static final int INITIAL_SMART_MAX_CASES = 50;
     public static final int REVIEW_SUPPLEMENT_MAX_CASES = 30;
     public static final int FINAL_MAX_CASES = 80;
+    private static final double DEFAULT_GENERATOR_TOP_P = 0.9;
+    private static final double DEFAULT_REVIEWER_TOP_P = 0.7;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final AiCaseConfigMapper aiCaseConfigMapper;
@@ -138,6 +140,7 @@ public class AiCaseService {
                     connection,
                     request.model().trim(),
                     request.temperature(),
+                    normalizeTopP(request.roleType(), request.topP()),
                     request.maxCases()
             );
             aiProviderClient.testConnection(profile, apiKey);
@@ -445,7 +448,7 @@ public class AiCaseService {
         String modelName = resolvePreferredModelForConnection(entity.getId());
         if (blankToNull(modelName) == null) {
             AiModelFetchResult fetched = aiProviderClient.fetchModels(
-                    buildProviderProfile(entity, "model-probe", 0.3, null),
+                    buildProviderProfile(entity, "model-probe", 0.3, DEFAULT_REVIEWER_TOP_P, null),
                     apiKey
             );
             if (!fetched.models().isEmpty()) {
@@ -456,8 +459,16 @@ public class AiCaseService {
         if (blankToNull(modelName) == null) {
             throw new BadRequestException("当前连接还没有可用模型，请先获取模型列表或在角色绑定里手工指定模型");
         }
-        AiProviderRequestProfile profile = buildProviderProfile(entity, modelName, 0.3, null);
-        aiProviderClient.testConnection(profile, apiKey);
+        AiProviderRequestProfile profile = buildProviderProfile(entity, modelName, 0.3, DEFAULT_REVIEWER_TOP_P, null);
+        try {
+            aiProviderClient.testConnection(profile, apiKey);
+        } catch (RuntimeException exception) {
+            entity.setStatus(0);
+            entity.setUpdatedAt(LocalDateTime.now());
+            aiProviderConnectionMapper.updateById(entity);
+            throw exception;
+        }
+        entity.setStatus(1);
         entity.setLastVerifiedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
         aiProviderConnectionMapper.updateById(entity);
@@ -475,7 +486,7 @@ public class AiCaseService {
         AiProviderConnectionEntity entity = requireProviderConnection(id);
         String apiKey = requireProviderApiKey(entity);
         AiModelFetchResult fetchResult = aiProviderClient.fetchModels(
-                buildProviderProfile(entity, "gpt-4o-mini", 0.3, null),
+                buildProviderProfile(entity, "gpt-4o-mini", 0.3, DEFAULT_REVIEWER_TOP_P, null),
                 apiKey
         );
         LocalDateTime now = LocalDateTime.now();
@@ -500,7 +511,7 @@ public class AiCaseService {
     public AiProviderModelItem probeProviderModel(Long id, String headerWorkspaceCode, ProbeAiProviderModelRequest request) {
         AiProviderConnectionEntity entity = requireProviderConnection(id);
         String apiKey = requireProviderApiKey(entity);
-        AiProviderRequestProfile profile = buildProviderProfile(entity, request.modelName().trim(), 0.3, null);
+        AiProviderRequestProfile profile = buildProviderProfile(entity, request.modelName().trim(), 0.3, DEFAULT_REVIEWER_TOP_P, null);
         AiModelCapabilities capabilities = aiProviderClient.probeCapabilities(profile, apiKey);
         LocalDateTime now = LocalDateTime.now();
         AiProviderModelEntity modelEntity = findProviderModelByName(id, request.modelName().trim());
@@ -750,6 +761,7 @@ public class AiCaseService {
         entity.setPromptTemplate(request.promptTemplate().trim());
         entity.setReviewChecklist(blankToNull(request.reviewChecklist()));
         entity.setTemperature(request.temperature());
+        entity.setTopP(normalizeTopP(entity.getRoleType(), request.topP()));
         entity.setMaxCases(normalizeRoleMaxCases(request.maxCases()));
         entity.setStatus(normalizeStatus(request.status()));
         AiProviderConnectionEntity connection = resolveRequestedConnection(request, existing, creating);
@@ -795,6 +807,7 @@ public class AiCaseService {
                 entity.getPromptTemplate(),
                 entity.getReviewChecklist(),
                 entity.getTemperature(),
+                normalizeTopP(entity.getRoleType(), entity.getTopP()),
                 entity.getMaxCases(),
                 detectedCapabilities,
                 effectiveCapabilities,
@@ -945,6 +958,7 @@ public class AiCaseService {
         cloned.setPromptTemplate(legacyConfig.getPromptTemplate());
         cloned.setReviewChecklist(legacyConfig.getReviewChecklist());
         cloned.setTemperature(legacyConfig.getTemperature());
+        cloned.setTopP(normalizeTopP(roleType, legacyConfig.getTopP()));
         cloned.setMaxCases(legacyConfig.getMaxCases());
         cloned.setProviderConnectionId(personalConnection.getId());
         cloned.setCapabilityOverrideJson(legacyConfig.getCapabilityOverrideJson());
@@ -1202,7 +1216,13 @@ public class AiCaseService {
         AiProviderRequestProfile profile;
         if (connection != null) {
             apiKey = requireProviderApiKey(connection);
-            profile = buildProviderProfile(connection, roleConfig.getModel(), roleConfig.getTemperature(), roleConfig.getMaxCases());
+            profile = buildProviderProfile(
+                    connection,
+                    roleConfig.getModel(),
+                    roleConfig.getTemperature(),
+                    normalizeTopP(roleConfig.getRoleType(), roleConfig.getTopP()),
+                    roleConfig.getMaxCases()
+            );
         } else {
             apiKey = requireConfigApiKey(roleConfig);
             profile = buildLegacyProfile(roleType, new SaveAiCaseConfigRequest(
@@ -1217,6 +1237,7 @@ public class AiCaseService {
                     roleConfig.getPromptTemplate(),
                     roleConfig.getReviewChecklist(),
                     roleConfig.getTemperature(),
+                    roleConfig.getTopP(),
                     roleConfig.getMaxCases(),
                     readCapabilityOverride(roleConfig),
                     roleConfig.getSupportsImageInput() != null && roleConfig.getSupportsImageInput() == 1,
@@ -1251,6 +1272,7 @@ public class AiCaseService {
             AiProviderConnectionEntity connection,
             String model,
             Double temperature,
+            Double topP,
             Integer maxCases
     ) {
         String protocolType = resolveProviderProtocolType(
@@ -1265,6 +1287,7 @@ public class AiCaseService {
                 model,
                 connection.getBaseUrl(),
                 temperature == null ? 0.3 : temperature,
+                topP == null ? DEFAULT_REVIEWER_TOP_P : normalizeTopP(null, topP),
                 maxCases,
                 resolveRequestTimeoutSeconds(connection.getRequestTimeoutSeconds())
         );
@@ -1282,6 +1305,7 @@ public class AiCaseService {
                 "model-probe",
                 baseUrl,
                 0.3,
+                DEFAULT_REVIEWER_TOP_P,
                 null,
                 resolveRequestTimeoutSeconds(request.requestTimeoutSeconds())
         );
@@ -1303,6 +1327,9 @@ public class AiCaseService {
         Double temperature = request.temperature() == null
                 ? (existing == null ? 0.3 : existing.getTemperature())
                 : request.temperature();
+        Double topP = request.topP() == null
+                ? (existing == null ? defaultTopPForRole(roleType) : normalizeTopP(roleType, existing.getTopP()))
+                : normalizeTopP(roleType, request.topP());
         Integer maxCases = request.maxCases() == null
                 ? (existing == null ? INITIAL_SMART_MAX_CASES : existing.getMaxCases())
                 : request.maxCases();
@@ -1312,6 +1339,7 @@ public class AiCaseService {
                 request.model().trim(),
                 baseUrl,
                 temperature,
+                topP,
                 maxCases,
                 defaultRequestTimeoutSeconds
         );
@@ -1653,6 +1681,23 @@ public class AiCaseService {
             throw new BadRequestException("Max cases must be between 1 and 100");
         }
         return Math.min(maxCases, INITIAL_SMART_MAX_CASES);
+    }
+
+    private Double normalizeTopP(String roleType, Double topP) {
+        if (topP == null) {
+            return defaultTopPForRole(roleType);
+        }
+        if (topP < 0.1 || topP > 1.0) {
+            throw new BadRequestException("Top-p must be between 0.1 and 1.0");
+        }
+        return Math.round(topP * 10.0) / 10.0;
+    }
+
+    private double defaultTopPForRole(String roleType) {
+        if (roleType == null || roleType.isBlank()) {
+            return DEFAULT_REVIEWER_TOP_P;
+        }
+        return ROLE_REVIEWER.equals(normalizeRoleType(roleType)) ? DEFAULT_REVIEWER_TOP_P : DEFAULT_GENERATOR_TOP_P;
     }
 
     private Integer normalizeRequestTimeoutSeconds(Integer requestTimeoutSeconds) {
@@ -2485,6 +2530,7 @@ public class AiCaseService {
                     profile.model(),
                     profile.baseUrl(),
                     profile.temperature(),
+                    profile.topP(),
                     maxCases,
                     profile.requestTimeoutSeconds()
             );

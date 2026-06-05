@@ -28,6 +28,7 @@ type RoleForm = {
   promptTemplate: string
   reviewChecklist: string
   temperature: number
+  topP: number
   maxCases: number
   status: number
   capabilityOverride: AiCapabilityOverride
@@ -170,6 +171,7 @@ function createDefaultForm(roleType: RoleType): RoleForm {
   const capabilityOverride: AiCapabilityOverride = {}
   const effectiveCapabilities = applyOverrideToCapabilities(detectedCapabilities, capabilityOverride)
   const defaultTemperature = roleType === 'CASE_GENERATOR' ? 0.7 : 0.5
+  const defaultTopP = roleType === 'CASE_GENERATOR' ? 0.9 : 0.7
   return {
     id: null,
     providerConnectionId: null,
@@ -177,6 +179,7 @@ function createDefaultForm(roleType: RoleType): RoleForm {
     promptTemplate: roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_PROMPT : DEFAULT_REVIEW_PROMPT,
     reviewChecklist: roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_CHECKLIST : DEFAULT_REVIEW_CHECKLIST,
     temperature: defaultTemperature,
+    topP: defaultTopP,
     maxCases: DEFAULT_SMART_MAX_CASES,
     status: 1,
     capabilityOverride,
@@ -200,6 +203,20 @@ function temperatureLabel(roleType: RoleType) {
 function temperatureTone(roleType: RoleType) {
   const value = forms[roleType].temperature
   if (value <= 0.3) return 'safe'
+  if (value <= 0.7) return 'balanced'
+  return 'creative'
+}
+
+function topPLabel(roleType: RoleType) {
+  const value = forms[roleType].topP
+  if (value <= 0.4) return '聚焦'
+  if (value <= 0.7) return '均衡'
+  return '发散'
+}
+
+function topPTone(roleType: RoleType) {
+  const value = forms[roleType].topP
+  if (value <= 0.4) return 'safe'
   if (value <= 0.7) return 'balanced'
   return 'creative'
 }
@@ -284,7 +301,7 @@ function providerOptionClass(option: Pick<ModelPoolOption, 'providerName' | 'mod
   if (source.includes('anthropic') || source.includes('claude')) return 'provider-anthropic'
   if (source.includes('deepseek')) return 'provider-deepseek'
   if (source.includes('google') || source.includes('gemini')) return 'provider-google'
-  if (source.includes('qwen') || source.includes('通义') || source.includes('alibaba')) return 'provider-qwen'
+  if (source.includes('qwen') || source.includes('通义') || source.includes('alibaba') || source.includes('dashscope') || source.includes('aliyun') || source.includes('阿里')) return 'provider-qwen'
   return 'provider-openai'
 }
 
@@ -293,7 +310,7 @@ function providerOptionText(option: Pick<ModelPoolOption, 'providerName' | 'mode
   if (source.includes('anthropic') || source.includes('claude')) return 'Anthropic'
   if (source.includes('deepseek')) return 'DeepSeek'
   if (source.includes('google') || source.includes('gemini')) return 'Google'
-  if (source.includes('qwen') || source.includes('通义') || source.includes('alibaba')) return 'Alibaba'
+  if (source.includes('qwen') || source.includes('通义') || source.includes('alibaba') || source.includes('dashscope') || source.includes('aliyun') || source.includes('阿里')) return '阿里云'
   return option.providerName || 'OpenAI'
 }
 
@@ -333,6 +350,7 @@ function applyLoadedRole(roleType: RoleType, config: AiCaseConfig | null) {
   forms[roleType].promptTemplate = normalizePromptTemplate(roleType, config.promptTemplate)
   forms[roleType].reviewChecklist = normalizeReviewChecklist(roleType, config.reviewChecklist)
   forms[roleType].temperature = config.temperature
+  forms[roleType].topP = config.topP ?? (roleType === 'CASE_GENERATOR' ? 0.9 : 0.7)
   forms[roleType].maxCases = config.maxCases ?? DEFAULT_SMART_MAX_CASES
   forms[roleType].status = config.status
   forms[roleType].capabilityOverride = config.capabilityOverride ?? {}
@@ -402,6 +420,8 @@ function canSaveRole(roleType: RoleType) {
     && !!form.promptTemplate.trim()
     && form.temperature >= 0
     && form.temperature <= 1
+    && form.topP >= 0.1
+    && form.topP <= 1
 }
 
 function buildRolePayload(roleType: RoleType): SaveAiCaseConfigPayload {
@@ -413,6 +433,7 @@ function buildRolePayload(roleType: RoleType): SaveAiCaseConfigPayload {
     promptTemplate: form.promptTemplate.trim() || (roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_PROMPT : DEFAULT_REVIEW_PROMPT),
     reviewChecklist: form.reviewChecklist.trim() || (roleType === 'CASE_GENERATOR' ? DEFAULT_GENERATOR_CHECKLIST : DEFAULT_REVIEW_CHECKLIST),
     temperature: Number(form.temperature),
+    topP: Number(form.topP),
   }
 }
 
@@ -588,6 +609,38 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
+          <div class="slider-block">
+            <div class="slider-header">
+              <div class="slider-label">
+                <span>采样范围 (Top-p)</span>
+                <span class="field-tooltip">
+                  <Info class="inline-info-icon" />
+                  <span class="field-tooltip-popover">
+                    控制 AI 选词的候选范围（核采样）。
+                    <br>• 偏低（聚焦）：用词更精准、克制
+                    <br>• 偏高（发散）：表达更丰富、多样
+                    <br>建议生成任务用 0.9，评审任务用 0.7
+                  </span>
+                </span>
+              </div>
+              <span class="slider-value" :class="`tone-${topPTone(meta.roleType)}`">
+                {{ topPLabel(meta.roleType) }} ({{ forms[meta.roleType].topP.toFixed(1) }})
+              </span>
+            </div>
+            <input
+              v-model.number="forms[meta.roleType].topP"
+              type="range"
+              min="0.1"
+              max="1"
+              step="0.1"
+              class="native-range"
+            >
+            <div class="slider-scale">
+              <span>聚焦</span>
+              <span>发散</span>
+            </div>
+          </div>
+
           <div class="prompt-block">
             <div class="prompt-header">
               <label class="field-label">角色提示词</label>
@@ -630,7 +683,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 24px;
-  min-height: 100%;
+  min-height: auto !important;
   padding: 0;
   color: #111827;
 }
@@ -694,10 +747,12 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 24px;
+  align-items: start;
 }
 
 .ai-role-card {
-  overflow: hidden;
+  min-height: 0;
+  overflow: visible;
   border: 1px solid #bfdbfe;
   border-radius: 16px;
   background: #ffffff;
@@ -1239,14 +1294,36 @@ onBeforeUnmount(() => {
 }
 
 :deep(.prompt-textarea .el-textarea__inner) {
+  height: 170px !important;
   min-height: 170px !important;
+  max-height: 170px !important;
+  overflow-y: auto;
   border-radius: 12px;
   box-shadow: 0 0 0 1px #e5e7eb inset;
   color: #374151;
   font-size: 14px;
   line-height: 22px;
   padding: 12px;
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
   transition: box-shadow 0.15s ease;
+}
+
+:deep(.prompt-textarea .el-textarea__inner::-webkit-scrollbar) {
+  width: 6px;
+}
+
+:deep(.prompt-textarea .el-textarea__inner::-webkit-scrollbar-track) {
+  background: transparent;
+}
+
+:deep(.prompt-textarea .el-textarea__inner::-webkit-scrollbar-thumb) {
+  border-radius: 999px;
+  background: #cbd5e1;
+}
+
+:deep(.prompt-textarea .el-textarea__inner::-webkit-scrollbar-thumb:hover) {
+  background: #94a3b8;
 }
 
 :deep(.prompt-textarea .el-textarea__inner:focus) {
@@ -1259,7 +1336,7 @@ onBeforeUnmount(() => {
   }
 }
 
-@media (max-width: 1280px) {
+@media (max-width: 1536px) {
   .ai-config-card-grid {
     grid-template-columns: 1fr;
   }

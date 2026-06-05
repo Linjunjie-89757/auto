@@ -51,6 +51,11 @@ type ProviderDialogForm = {
   status: number
 }
 
+type DialogTestResult = {
+  status: 'idle' | 'testing' | 'success' | 'error'
+  message: string
+}
+
 type ProviderBrand = {
   id: string
   name: string
@@ -283,6 +288,10 @@ const selectedBrandId = ref('openai')
 const savingProvider = ref(false)
 const providerTestingId = ref<number | null>(null)
 const dialogTesting = ref(false)
+const dialogTestResult = reactive<DialogTestResult>({
+  status: 'idle',
+  message: '',
+})
 const providerDialogModelLoading = ref(false)
 const providerDialogModelRequestSeq = ref(0)
 const providerDialogModelError = ref('')
@@ -323,6 +332,28 @@ function inferProviderBrand(provider: AiProviderConnection) {
     ?? providerBrands[0]
 }
 
+function isCustomProvider(provider: AiProviderConnection) {
+  return inferProviderBrand(provider).id === 'custom'
+}
+
+function customProviderInitial(provider: AiProviderConnection) {
+  return provider.connectionName.trim().slice(0, 1) || '自'
+}
+
+function customAvatarStyle(provider: AiProviderConnection) {
+  const palettes = [
+    { backgroundColor: '#eef2ff', color: '#4f46e5', borderColor: '#c7d2fe' },
+    { backgroundColor: '#ecfeff', color: '#0891b2', borderColor: '#a5f3fc' },
+    { backgroundColor: '#f0fdf4', color: '#16a34a', borderColor: '#bbf7d0' },
+    { backgroundColor: '#fff7ed', color: '#ea580c', borderColor: '#fed7aa' },
+    { backgroundColor: '#fdf2f8', color: '#db2777', borderColor: '#fbcfe8' },
+    { backgroundColor: '#f8fafc', color: '#475569', borderColor: '#cbd5e1' },
+  ]
+  const source = provider.connectionName.trim() || String(provider.id)
+  const hash = Array.from(source).reduce((sum, char) => sum + char.charCodeAt(0), 0)
+  return palettes[hash % palettes.length]
+}
+
 function providerHasConnection(brand: ProviderBrand) {
   return providers.value.some(provider => inferProviderBrand(provider).id === brand.id)
 }
@@ -354,6 +385,15 @@ function formatDate(value: string | null) {
   return value.replace('T', ' ').slice(0, 10)
 }
 
+function compareProviderCreatedAt(left: AiProviderConnection, right: AiProviderConnection) {
+  const leftTime = left.createdAt ? Date.parse(left.createdAt) : Number.POSITIVE_INFINITY
+  const rightTime = right.createdAt ? Date.parse(right.createdAt) : Number.POSITIVE_INFINITY
+  if (leftTime !== rightTime) {
+    return leftTime - rightTime
+  }
+  return left.id - right.id
+}
+
 function buildSavedApiKeyMask(provider: AiProviderConnection) {
   const maskLength = provider.apiKeyMasked?.length || defaultSavedApiKeyMaskLength
   return 'x'.repeat(maskLength)
@@ -371,7 +411,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
 async function loadProviders() {
   providerLoading.value = true
   try {
-    providers.value = await platformApi.getAiProviderConnections('ALL')
+    providers.value = (await platformApi.getAiProviderConnections('ALL')).slice().sort(compareProviderCreatedAt)
   } catch (error) {
     ElMessage.error((error as Error).message)
   } finally {
@@ -385,6 +425,8 @@ function resetProviderDialog() {
   providerDialogModelError.value = ''
   showModelDropdown.value = false
   dialogTesting.value = false
+  dialogTestResult.status = 'idle'
+  dialogTestResult.message = ''
   apiKeyVisible.value = false
   apiKeySecretLoading.value = false
   apiKeyUsingSavedSecret.value = false
@@ -575,6 +617,7 @@ async function testProvider(provider: AiProviderConnection) {
     await loadProviders()
   } catch (error) {
     ElMessage.error((error as Error).message)
+    await loadProviders()
   } finally {
     providerTestingId.value = null
   }
@@ -582,17 +625,32 @@ async function testProvider(provider: AiProviderConnection) {
 
 async function testDialogProvider() {
   if (!providerDialogForm.id) {
-    ElMessage.info('保存连接后即可测试连接状态')
+    dialogTestResult.status = 'error'
+    dialogTestResult.message = '保存连接后即可测试连接状态'
     return
   }
   const provider = providers.value.find(item => item.id === providerDialogForm.id)
   if (!provider) {
-    ElMessage.info('请保存后再测试连接')
+    dialogTestResult.status = 'error'
+    dialogTestResult.message = '请保存后再测试连接'
     return
   }
   dialogTesting.value = true
+  dialogTestResult.status = 'testing'
+  dialogTestResult.message = '正在测试连接...'
   try {
-    await testProvider(provider)
+    const response = await platformApi.testAiProviderConnection('ALL', provider.id)
+    dialogTestResult.status = 'success'
+    dialogTestResult.message = response.message || '连接测试成功'
+    await loadProviders()
+    const refreshed = providers.value.find(item => item.id === provider.id)
+    if (refreshed) {
+      providerDialogForm.status = refreshed.status
+    }
+  } catch (error) {
+    dialogTestResult.status = 'error'
+    dialogTestResult.message = (error as Error).message
+    await loadProviders()
   } finally {
     dialogTesting.value = false
   }
@@ -641,9 +699,7 @@ onMounted(() => {
       <div>
         <h2>AI 连接池</h2>
         <p>
-          管理接入的 AI 大模型服务，连接池中的模型可在
-          <span>用例中心 → AI 配置</span>
-          中使用
+          管理接入的 AI 大模型服务，连接池中的模型可用于用例生成、评审、接口自动化等 AI 能力场景。
         </p>
       </div>
       <button type="button" class="primary-add-button" @click="openCreateProviderDialog">
@@ -673,7 +729,14 @@ onMounted(() => {
 
     <section v-if="providers.length" class="connection-grid">
       <article v-for="provider in providers" :key="provider.id" class="connection-card">
-        <div class="provider-logo" :class="[inferProviderBrand(provider).logoClass, { 'has-logo-image': inferProviderBrand(provider).logoSrc }]">
+        <div
+          v-if="isCustomProvider(provider)"
+          class="provider-logo custom-initial-logo"
+          :style="customAvatarStyle(provider)"
+        >
+          <span>{{ customProviderInitial(provider) }}</span>
+        </div>
+        <div v-else class="provider-logo" :class="[inferProviderBrand(provider).logoClass, { 'has-logo-image': inferProviderBrand(provider).logoSrc }]">
           <img v-if="inferProviderBrand(provider).logoSrc" :src="inferProviderBrand(provider).logoSrc" :alt="inferProviderBrand(provider).name" />
           <span>{{ inferProviderBrand(provider).shortName.slice(0, 1) }}</span>
         </div>
@@ -698,7 +761,7 @@ onMounted(() => {
             <span class="model-chip">{{ provider.modelName || '-' }}</span>
           </div>
           <div class="connection-url">{{ provider.baseUrl }}</div>
-          <div class="connection-date">添加于 {{ formatDate(provider.lastVerifiedAt) }}</div>
+          <div class="connection-date">添加于 {{ formatDate(provider.createdAt) }}</div>
         </div>
         <div class="connection-actions">
           <button
@@ -887,10 +950,18 @@ onMounted(() => {
         </div>
 
         <footer v-if="providerDialogStep === 'config'" class="connection-modal-footer">
-          <button type="button" class="test-connection-button" :disabled="dialogTesting" @click="testDialogProvider">
-            <Wifi :size="16" :class="{ 'is-pulsing': dialogTesting }" />
-            {{ dialogTesting ? '测试中...' : '测试连接' }}
-          </button>
+          <div class="dialog-test-area">
+            <button type="button" class="test-connection-button" :disabled="dialogTesting" @click="testDialogProvider">
+              <Wifi :size="16" :class="{ 'is-pulsing': dialogTesting }" />
+              {{ dialogTesting ? '测试中...' : '测试连接' }}
+            </button>
+            <div v-if="dialogTestResult.status !== 'idle'" class="dialog-test-result" :class="`is-${dialogTestResult.status}`">
+              <RefreshCw v-if="dialogTestResult.status === 'testing'" :size="14" class="is-spinning" />
+              <Check v-else-if="dialogTestResult.status === 'success'" :size="14" />
+              <AlertCircle v-else :size="14" />
+              <span>{{ dialogTestResult.message }}</span>
+            </div>
+          </div>
           <div>
             <button type="button" class="secondary-button" @click="providerDialogVisible = false">取消</button>
             <button type="button" class="save-button" :disabled="savingProvider" @click="saveProvider">
@@ -1194,6 +1265,18 @@ onMounted(() => {
 .provider-logo.has-logo-image {
   background: transparent;
   box-shadow: none;
+}
+
+.custom-initial-logo {
+  border: 1px solid;
+  box-shadow: none;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.custom-initial-logo span {
+  transform: translateY(-1px);
 }
 
 .provider-logo-small {
@@ -1792,6 +1875,57 @@ onMounted(() => {
   gap: 8px;
 }
 
+.dialog-test-area {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.dialog-test-result {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 360px;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #f9fafb;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.dialog-test-result span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dialog-test-result svg {
+  flex: 0 0 auto;
+}
+
+.dialog-test-result.is-testing {
+  border-color: #dbeafe;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.dialog-test-result.is-success {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #16a34a;
+}
+
+.dialog-test-result.is-error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #dc2626;
+}
+
 .test-connection-button,
 .secondary-button {
   display: inline-flex;
@@ -1859,6 +1993,15 @@ onMounted(() => {
   .connection-modal-footer {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .dialog-test-area {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .dialog-test-result {
+    max-width: none;
   }
 
   .ai-pool-stats,

@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   CircleClose,
@@ -76,11 +76,6 @@ const uploadedRequirementTitle = ref('')
 const uploadedRequirementContent = ref('')
 
 const requirementFileInput = ref<HTMLInputElement | null>(null)
-const titleInputRef = ref<HTMLElement | null>(null)
-const textareaFieldRef = ref<HTMLElement | null>(null)
-const uploadPanelBodyRef = ref<HTMLElement | null>(null)
-const uploadBoxOffset = ref(0)
-const uploadBoxHeight = ref(320)
 const directoryOptions = ref<DirectoryOption[]>([])
 const directoryTree = ref<CaseDirectoryNode[]>([])
 const manualDirectoryBasePath = ref('')
@@ -90,7 +85,6 @@ const directoryPickerMode = ref<DirectoryPickerMode>('manual')
 const directoryPickerSelectedPath = ref('')
 let syncingManualDirectoryPath = false
 let syncingDocumentDirectoryPath = false
-let layoutObserver: ResizeObserver | null = null
 let taskPollingTimer: number | null = null
 
 const form = reactive({
@@ -130,12 +124,62 @@ const processSteps = [
 const IMAGE_UNSUPPORTED_CREATE_MESSAGE = '当前生成模型不支持图片识别，是否忽略图片并仅基于文本继续生成？'
 
 const targetWorkspaceCode = computed(() => (isAllScope.value ? selectedWorkspaceCode.value : workspaceCode.value))
+
+function describeAiRoleConfigIssue(config: AiCaseConfig | null, roleLabel: string) {
+  if (!config) return `${roleLabel}未配置`
+  if (!config.providerConnectionId) return `${roleLabel}未选择连接`
+  if (!config.model?.trim()) return `${roleLabel}未选择模型`
+  if (!config.promptTemplate?.trim()) return `${roleLabel}提示词为空`
+  if (config.status !== 1) return `${roleLabel}未启用`
+  return ''
+}
+
 const currentWorkspaceName = computed(() => {
   if (!targetWorkspaceCode.value) {
     return ''
   }
   return writableWorkspaces.value.find(item => item.code === targetWorkspaceCode.value)?.name ?? targetWorkspaceCode.value
 })
+const generatorConfigIssue = computed(() => describeAiRoleConfigIssue(activeConfig.value, '生成模型'))
+const reviewerConfigIssue = computed(() => describeAiRoleConfigIssue(reviewerConfig.value, '评审模型'))
+const aiConfigMissingReasons = computed(() => [
+  currentWorkspaceName.value ? '' : '未选择目标空间',
+  generatorConfigIssue.value,
+  reviewerConfigIssue.value,
+].filter(Boolean))
+const aiConfigReady = computed(() => (
+  aiConfigMissingReasons.value.length === 0
+  && !!form.outputMode
+))
+const aiConfigStatusText = computed(() => (
+  aiConfigReady.value ? '配置完整，可直接生成' : `配置缺失：${aiConfigMissingReasons.value.join('、') || '输出模式未选择'}`
+))
+const aiConfigStatusClass = computed(() => (
+  aiConfigReady.value ? 'config-status-success' : 'config-status-danger'
+))
+
+function formatAiRoleConnectionName(config: AiCaseConfig | null, issue: string) {
+  if (issue) return issue
+  if (!config) return '-'
+  return config.providerConnectionName?.trim() || config.provider?.trim() || 'AI连接'
+}
+
+function inferAiRoleProviderInfo(config: AiCaseConfig | null) {
+  const source = `${config?.providerConnectionName ?? ''} ${config?.provider ?? ''} ${config?.model ?? ''}`.toLowerCase()
+  if (source.includes('anthropic') || source.includes('claude')) return { label: 'Anthropic', className: 'provider-anthropic' }
+  if (source.includes('deepseek')) return { label: 'DeepSeek', className: 'provider-deepseek' }
+  if (source.includes('google') || source.includes('gemini')) return { label: 'Google', className: 'provider-google' }
+  if (source.includes('qwen') || source.includes('通义') || source.includes('alibaba') || source.includes('dashscope') || source.includes('aliyun') || source.includes('阿里')) {
+    return { label: '阿里云', className: 'provider-qwen' }
+  }
+  if (source.includes('kimi') || source.includes('moonshot')) return { label: 'Kimi', className: 'provider-kimi' }
+  if (source.includes('minimax')) return { label: 'MiniMax', className: 'provider-minimax' }
+  if (source.includes('xiaomi') || source.includes('小米') || source.includes('mimo') || source.includes('mi-')) return { label: '小米', className: 'provider-xiaomi' }
+  if (source.includes('azure')) return { label: 'Azure', className: 'provider-azure' }
+  if (source.includes('custom') || source.includes('自定义')) return { label: '自定义', className: 'provider-custom' }
+  return { label: 'OpenAI', className: 'provider-openai' }
+}
+
 const hasProcessingTask = computed(() => (
   !!latestTaskRecord.value
   && !['COMPLETED', 'FAILED', 'CANCELED'].includes(latestTaskRecord.value.status)
@@ -145,7 +189,7 @@ const canGenerate = computed(() => (
   && !!form.requirementTitle.trim()
   && !!form.requirementContent.trim()
   && !!form.manualDirectoryPath.trim()
-  && !!activeConfig.value
+  && aiConfigReady.value
 ))
 const canGenerateDocument = computed(() => (
   !!targetWorkspaceCode.value
@@ -153,25 +197,13 @@ const canGenerateDocument = computed(() => (
   && !!uploadedRequirementTitle.value.trim()
   && !!uploadedRequirementContent.value.trim()
   && !!documentForm.directoryPath.trim()
-  && !!activeConfig.value
+  && aiConfigReady.value
 ))
 const selectedRequirementAssetIds = computed(() => requirementAssets.value.filter(item => item.selected).map(item => item.id))
 const imageCapabilityNotices = [
   '模型支持图文输入，如文档中包含图片素材，将一并参与本次测试用例生成。',
   '模型不支持图片识别。若文档中包含图片素材，生成时可选择忽略图片并仅基于文本继续。',
 ]
-const aiConfigReady = computed(() => (
-  !!currentWorkspaceName.value
-  && !!activeConfig.value
-  && !!reviewerConfig.value
-  && !!form.outputMode
-))
-const aiConfigStatusText = computed(() => (
-  aiConfigReady.value ? '配置完整，可直接生成' : '配置缺失，请先补充个人 AI 连接或角色绑定'
-))
-const aiConfigStatusClass = computed(() => (
-  aiConfigReady.value ? 'config-status-success' : 'config-status-danger'
-))
 const recentTaskRecords = computed(() => {
   const priorityMap: Record<AiGenerationTaskRecord['status'], number> = {
     PENDING: 0,
@@ -750,40 +782,6 @@ async function terminateTask() {
   ElMessage.success('已取消当前生成任务')
 }
 
-function syncUploadBoxGeometry() {
-  const titleElement = titleInputRef.value
-  const textareaElement = textareaFieldRef.value
-  const uploadBodyElement = uploadPanelBodyRef.value
-
-  if (!titleElement || !textareaElement || !uploadBodyElement) {
-    return
-  }
-
-  const titleRect = titleElement.getBoundingClientRect()
-  const textareaRect = textareaElement.getBoundingClientRect()
-  const uploadBodyRect = uploadBodyElement.getBoundingClientRect()
-
-  uploadBoxOffset.value = Math.max(titleRect.top - uploadBodyRect.top, 0)
-  uploadBoxHeight.value = Math.max(textareaRect.bottom - titleRect.top, 320)
-}
-
-function bindLayoutObserver() {
-  layoutObserver?.disconnect()
-  layoutObserver = new ResizeObserver(() => {
-    syncUploadBoxGeometry()
-  })
-
-  if (titleInputRef.value) {
-    layoutObserver.observe(titleInputRef.value)
-  }
-  if (textareaFieldRef.value) {
-    layoutObserver.observe(textareaFieldRef.value)
-  }
-  if (uploadPanelBodyRef.value) {
-    layoutObserver.observe(uploadPanelBodyRef.value)
-  }
-}
-
 const _templateKeepAlive = {
   CircleClose,
   RefreshRight,
@@ -878,16 +876,10 @@ onMounted(async () => {
   await loadConfig()
   await loadDirectoryOptions()
   await refreshLatestTaskRecord()
-  await nextTick()
-  bindLayoutObserver()
-  syncUploadBoxGeometry()
-  window.addEventListener('resize', syncUploadBoxGeometry)
 })
 
 onBeforeUnmount(() => {
-  layoutObserver?.disconnect()
   stopTaskPolling()
-  window.removeEventListener('resize', syncUploadBoxGeometry)
 })
 </script>
 
@@ -906,13 +898,11 @@ onBeforeUnmount(() => {
 
         <div class="form-stack">
           <div class="field-label">需求标题<span class="field-required">*</span></div>
-          <div ref="titleInputRef">
           <el-input
             v-model="form.requirementTitle"
             maxlength="120"
             placeholder="请输入需求标题，例如：用户登录功能需求"
           />
-          </div>
           <div class="field-label">用例保存路径 <span class="field-required">*</span></div>
           <el-input
             :model-value="manualDirectoryDisplayPath"
@@ -929,7 +919,6 @@ onBeforeUnmount(() => {
             </template>
           </el-input>
           <div class="field-label">需求描述<span class="field-required">*</span></div>
-          <div ref="textareaFieldRef">
           <el-input
             v-model="form.requirementContent"
             class="requirement-textarea"
@@ -938,7 +927,6 @@ onBeforeUnmount(() => {
             resize="vertical"
             placeholder="请详细描述您的需求，包括功能描述、使用场景、业务流程等"
           />
-          </div>
           <div class="char-count">{{ form.requirementContent.length }}/5000</div>
 
           <div class="path-action-stack">
@@ -974,12 +962,9 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div ref="uploadPanelBodyRef" class="upload-panel-body">
+        <div class="upload-panel-body">
           <template v-if="uploadedDocument">
-            <div
-              class="upload-success-shell"
-              :style="{ marginTop: `${uploadBoxOffset}px`, minHeight: `${uploadBoxHeight}px` }"
-            >
+            <div class="upload-success-shell">
               <div class="upload-success-box">
                 <div class="upload-success-file">
                   <el-icon class="upload-success-icon"><DocumentAdd /></el-icon>
@@ -1045,7 +1030,6 @@ onBeforeUnmount(() => {
             v-else
             class="upload-large-box"
             type="button"
-            :style="{ marginTop: `${uploadBoxOffset}px`, minHeight: `${uploadBoxHeight}px` }"
             @click="triggerRequirementImport"
           >
             <el-icon class="upload-box-icon"><DocumentAdd /></el-icon>
@@ -1120,14 +1104,36 @@ onBeforeUnmount(() => {
         </div>
         <div class="config-info-item">
           <div class="config-info-label">编写模型</div>
-          <div class="config-info-value">
-            {{ activeConfig ? `${activeConfig.provider} / ${activeConfig.model} / 温度 ${activeConfig.temperature.toFixed(1)}` : '-' }}
+          <div class="config-info-value" :class="{ 'config-info-value-danger': generatorConfigIssue, 'config-model-summary': !generatorConfigIssue }">
+            <template v-if="generatorConfigIssue">
+              {{ generatorConfigIssue }}
+            </template>
+            <template v-else>
+              <div class="config-model-connection">{{ formatAiRoleConnectionName(activeConfig, generatorConfigIssue) }}</div>
+              <div class="config-model-meta">
+                <span class="config-model-name">{{ activeConfig?.model }}</span>
+                <span class="config-provider-chip" :class="inferAiRoleProviderInfo(activeConfig).className">
+                  {{ inferAiRoleProviderInfo(activeConfig).label }}
+                </span>
+              </div>
+            </template>
           </div>
         </div>
         <div class="config-info-item">
           <div class="config-info-label">评审模型</div>
-          <div class="config-info-value">
-            {{ reviewerConfig ? `${reviewerConfig.provider} / ${reviewerConfig.model} / 温度 ${reviewerConfig.temperature.toFixed(1)}` : '-' }}
+          <div class="config-info-value" :class="{ 'config-info-value-danger': reviewerConfigIssue, 'config-model-summary': !reviewerConfigIssue }">
+            <template v-if="reviewerConfigIssue">
+              {{ reviewerConfigIssue }}
+            </template>
+            <template v-else>
+              <div class="config-model-connection">{{ formatAiRoleConnectionName(reviewerConfig, reviewerConfigIssue) }}</div>
+              <div class="config-model-meta">
+                <span class="config-model-name">{{ reviewerConfig?.model }}</span>
+                <span class="config-provider-chip" :class="inferAiRoleProviderInfo(reviewerConfig).className">
+                  {{ inferAiRoleProviderInfo(reviewerConfig).label }}
+                </span>
+              </div>
+            </template>
           </div>
         </div>
         <div class="config-info-item">
@@ -1596,7 +1602,7 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 18px;
   width: 100%;
-  min-height: 320px;
+  min-height: 432px;
   border: 1px dashed var(--line-soft);
   border-radius: 10px;
   background: #fff;
@@ -1614,12 +1620,14 @@ onBeforeUnmount(() => {
 .upload-panel-body {
   display: grid;
   align-content: start;
+  padding-top: 38px;
 }
 
 .upload-success-shell {
   display: grid;
   align-content: start;
   gap: 16px;
+  min-height: 432px;
 }
 
 .upload-success-box {
@@ -1771,6 +1779,105 @@ onBeforeUnmount(() => {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   overflow: hidden;
+}
+
+.config-info-value-danger {
+  color: #b42318;
+  font-weight: 600;
+}
+
+.config-model-summary {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
+.config-model-connection {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-main);
+}
+
+.config-model-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 2px;
+}
+
+.config-model-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-subtle);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.config-provider-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 20px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.config-provider-chip.provider-openai {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.config-provider-chip.provider-anthropic {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.config-provider-chip.provider-google {
+  background: #dbeafe;
+  color: #2563eb;
+}
+
+.config-provider-chip.provider-deepseek {
+  background: #eef2ff;
+  color: #4f46e5;
+}
+
+.config-provider-chip.provider-qwen {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.config-provider-chip.provider-kimi {
+  background: #111827;
+  color: #ffffff;
+}
+
+.config-provider-chip.provider-minimax {
+  background: #f5f3ff;
+  color: #6d28d9;
+}
+
+.config-provider-chip.provider-xiaomi {
+  background: #fff7ed;
+  color: #ea580c;
+}
+
+.config-provider-chip.provider-azure {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.config-provider-chip.provider-custom {
+  background: #f3f4f6;
+  color: #4b5563;
 }
 
 .config-info-item-status {

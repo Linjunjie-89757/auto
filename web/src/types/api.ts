@@ -194,6 +194,7 @@ export interface AiCaseConfig {
   promptTemplate: string
   reviewChecklist: string | null
   temperature: number
+  topP: number
   maxCases: number
   detectedCapabilities: AiModelCapabilities
   effectiveCapabilities: AiModelCapabilities
@@ -251,6 +252,7 @@ export interface SaveAiCaseConfigPayload {
   promptTemplate: string
   reviewChecklist?: string
   temperature: number
+  topP?: number
   maxCases?: number
   capabilityOverride?: AiCapabilityOverride | null
   supportsImageInput?: boolean
@@ -357,6 +359,8 @@ export interface AiProviderConnection {
   modelCount: number
   lastVerifiedAt: string | null
   lastFetchModelsAt: string | null
+  createdAt: string | null
+  updatedAt: string | null
 }
 
 export interface SaveAiProviderConnectionPayload {

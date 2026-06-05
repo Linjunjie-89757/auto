@@ -41,6 +41,9 @@ public class AiCaseConfigEntity extends BaseEntity {
 
     private Double temperature;
 
+    @TableField("top_p")
+    private Double topP;
+
     @TableField("max_cases")
     private Integer maxCases;
 

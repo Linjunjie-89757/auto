@@ -279,15 +279,16 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
             List<AiProviderClient.ImageInput> images,
             boolean stream
     ) throws IOException {
-        return objectMapper.writeValueAsString(Map.of(
-                "model", profile.model(),
-                "temperature", profile.temperature(),
-                "stream", stream,
-                "messages", List.of(
-                        Map.of("role", "system", "content", "You are a QA assistant that outputs only structured JSON."),
-                        Map.of("role", "user", "content", buildChatUserContent(prompt, images))
-                )
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("model", profile.model());
+        request.put("temperature", profile.temperature());
+        request.put("top_p", profile.topP());
+        request.put("stream", stream);
+        request.put("messages", List.of(
+                Map.of("role", "system", "content", "You are a QA assistant that outputs only structured JSON."),
+                Map.of("role", "user", "content", buildChatUserContent(prompt, images))
         ));
+        return objectMapper.writeValueAsString(request);
     }
 
     protected Object buildChatUserContent(String prompt, List<AiProviderClient.ImageInput> images) {
@@ -330,6 +331,7 @@ abstract class AbstractOpenAiCompatibleAdapter implements AiProtocolAdapter {
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("model", profile.model());
         request.put("temperature", profile.temperature());
+        request.put("top_p", profile.topP());
         if (stream) {
             request.put("stream", true);
         }

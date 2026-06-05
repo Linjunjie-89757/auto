@@ -20,6 +20,9 @@ public record SaveAiCaseConfigRequest(
         @DecimalMin(value = "0.0", message = "Temperature must be >= 0")
         @DecimalMax(value = "1.0", message = "Temperature must be <= 1")
         Double temperature,
+        @DecimalMin(value = "0.1", message = "Top-p must be >= 0.1")
+        @DecimalMax(value = "1.0", message = "Top-p must be <= 1")
+        Double topP,
         Integer maxCases,
         AiCapabilityOverride capabilityOverride,
         Boolean supportsImageInput,

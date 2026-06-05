@@ -1126,7 +1126,6 @@ onMounted(async () => {
   <section :class="isConfigCenter ? 'page-shell' : 'settings-page-shell'">
     <div v-if="!isConfigCenter" class="settings-figma-shell" v-loading="pageLoading">
       <aside class="settings-category-sidebar">
-        <p>设置分类</p>
         <button
           v-for="item in settingsNavItems"
           :key="item.id"
@@ -1746,15 +1745,6 @@ onMounted(async () => {
 
 .settings-category-sidebar::-webkit-scrollbar {
   display: none;
-}
-
-.settings-category-sidebar > p {
-  margin: 0 0 8px;
-  padding: 0 12px;
-  color: #9ca3af;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.5;
 }
 
 .settings-category-item {

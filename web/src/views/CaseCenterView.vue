@@ -44,7 +44,7 @@ const activeTab = computed({
       </el-tabs>
     </div>
 
-    <div class="case-center-content">
+    <div class="case-center-content" :class="{ 'case-center-content-ai-config': activeTab === 'ai-config' }">
       <router-view />
     </div>
   </section>
@@ -139,5 +139,9 @@ const activeTab = computed({
 .case-center-content > :deep(*) {
   min-height: 100%;
   min-width: 0;
+}
+
+.case-center-content-ai-config > :deep(*) {
+  min-height: auto;
 }
 </style>

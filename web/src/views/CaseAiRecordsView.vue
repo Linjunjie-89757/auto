@@ -38,6 +38,7 @@ const { workspaceCode } = useWorkspace()
 
 const records = ref<AiGenerationTaskRecord[]>([])
 const loading = ref(false)
+const hasLoadedRecords = ref(false)
 const processDialogVisible = ref(false)
 const adoptDialogVisible = ref(false)
 const adoptPathPickerVisible = ref(false)
@@ -311,6 +312,7 @@ async function loadRecords() {
   } catch (error) {
     ElMessage.error((error as Error).message)
   } finally {
+    hasLoadedRecords.value = true
     loading.value = false
   }
 }
@@ -677,7 +679,13 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </template>
-    <div v-else class="panel-card record-empty-card">
+    <div v-else-if="loading && !hasLoadedRecords" class="panel-card record-empty-card record-loading-card">
+      <div class="record-empty-content">
+        <div v-loading="true" class="record-loading-spinner" />
+        <div class="record-empty-title">正在加载生成记录</div>
+      </div>
+    </div>
+    <div v-else-if="hasLoadedRecords" class="panel-card record-empty-card">
       <div class="record-empty-content">
         <div class="record-empty-icon">📝</div>
         <div class="record-empty-title">暂无生成任务</div>
@@ -913,6 +921,19 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   padding: 40px 28px 52px;
+}
+
+.record-loading-spinner {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 18px;
+  border-radius: 999px;
+  background: rgba(239, 246, 255, 0.92);
+}
+
+.record-loading-card .record-empty-title {
+  margin-bottom: 0;
+  color: #475467;
 }
 
 .record-empty-content {

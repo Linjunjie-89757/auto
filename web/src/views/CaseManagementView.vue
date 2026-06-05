@@ -2090,17 +2090,18 @@ onMounted(bootstrap)
   min-height: 0;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: #ffffff;
 }
 .case-table-data {
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 .case-table-scroll {
-  height: 100%;
+  min-height: 100%;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
 }
 .case-grid {
   display: grid;

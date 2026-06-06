@@ -44,6 +44,12 @@ const memberViewMode = ref<'user' | 'workspace'>('user')
 const memberWorkspaceCode = ref('')
 const managingWorkspaceCode = ref('')
 const configParamCategoryFilter = ref<'' | 'global' | 'api' | 'business'>('')
+const paramSensitive = ref(false)
+const paramDescription = ref('')
+const dbHost = ref('')
+const dbPort = ref('3306')
+const dbName = ref('')
+const dbPasswordVisible = ref(false)
 
 const pageLoading = ref(false)
 const workspaceLoading = ref(false)
@@ -162,6 +168,30 @@ const paramDialogVisible = ref(false)
 const paramDialogMode = ref<'create' | 'edit'>('create')
 const dbConnectionDialogVisible = ref(false)
 const dbConnectionDialogMode = ref<'create' | 'edit'>('create')
+
+const configEnvTypeOptions = [
+  { value: 'TEST', label: '测试' },
+  { value: 'STAGING', label: '预发布' },
+  { value: 'PROD', label: '生产' },
+]
+
+const configEnvStatusOptions = [
+  { value: 1, label: '启用' },
+  { value: 0, label: '禁用' },
+]
+
+const configParamTypeOptions = [
+  { value: 'GLOBAL', label: '全局参数' },
+  { value: 'API', label: '接口参数' },
+  { value: 'BUSINESS', label: '业务参数' },
+]
+
+const configDbTypeOptions = [
+  { value: 'MYSQL', label: 'MySQL', port: '3306', driver: 'com.mysql.cj.jdbc.Driver' },
+  { value: 'POSTGRESQL', label: 'PostgreSQL', port: '5432', driver: 'org.postgresql.Driver' },
+  { value: 'REDIS', label: 'Redis', port: '6379', driver: '' },
+  { value: 'MONGODB', label: 'MongoDB', port: '27017', driver: '' },
+]
 
 function notifyWorkspaceListChanged() {
   window.dispatchEvent(new CustomEvent('workspace-list-changed'))
@@ -504,13 +534,24 @@ function envCreatedText(item: EnvConfigItem) {
   return value ? value.slice(0, 10) : '-'
 }
 
+function normalizeConfigEnvType(item: EnvConfigItem) {
+  const text = `${item.envType} ${item.envName} ${item.configJson ?? ''}`.toLowerCase()
+  if (text.includes('prod') || text.includes('生产')) {
+    return 'PROD'
+  }
+  if (text.includes('staging') || text.includes('stage') || text.includes('预发')) {
+    return 'STAGING'
+  }
+  return 'TEST'
+}
+
 function configParamCategory(item: Pick<ParamSetItem, 'paramType' | 'paramName'>) {
   const text = `${item.paramType} ${item.paramName}`.toLowerCase()
-  if (['header', 'body', 'query', 'api'].some(keyword => text.includes(keyword))) {
-    return 'api'
-  }
-  if (['business', '业务'].some(keyword => text.includes(keyword))) {
+  if (item.paramType === 'BUSINESS' || ['business', '业务'].some(keyword => text.includes(keyword))) {
     return 'business'
+  }
+  if (item.paramType === 'API' || ['header', 'body', 'query', 'api'].some(keyword => text.includes(keyword))) {
+    return 'api'
   }
   return 'global'
 }
@@ -524,6 +565,46 @@ function configParamTypeMeta(item: Pick<ParamSetItem, 'paramType' | 'paramName'>
     return { label: '业务参数', className: 'is-green' }
   }
   return { label: '全局参数', className: 'is-blue' }
+}
+
+function parseParamContent(contentJson: string) {
+  const raw = contentJson?.trim() ?? ''
+  if (!raw) {
+    return { value: '', description: '', sensitive: false }
+  }
+  try {
+    const parsed = JSON.parse(raw) as { value?: unknown; description?: unknown; desc?: unknown; sensitive?: unknown; isSecret?: unknown }
+    const value = typeof parsed.value === 'string' ? parsed.value : raw
+    const description = typeof parsed.description === 'string'
+      ? parsed.description
+      : typeof parsed.desc === 'string'
+        ? parsed.desc
+        : ''
+    return {
+      value,
+      description,
+      sensitive: parsed.sensitive === true || parsed.isSecret === true,
+    }
+  }
+  catch {
+    return { value: raw, description: '', sensitive: false }
+  }
+}
+
+function buildParamContentJson() {
+  return JSON.stringify({
+    value: paramForm.contentJson.trim(),
+    description: paramDescription.value.trim(),
+    sensitive: paramSensitive.value,
+  })
+}
+
+function configParamValueText(item: ParamSetItem) {
+  const parsed = parseParamContent(item.contentJson)
+  if (parsed.sensitive && parsed.value) {
+    return '••••••••'
+  }
+  return parsed.value || '-'
 }
 
 function selectConfigParamFilter(value: '' | 'global' | 'api' | 'business') {
@@ -541,6 +622,41 @@ function dbHostSummary(jdbcUrl: string) {
 function dbNameSummary(row: DbConnectionItem) {
   const match = row.jdbcUrl.match(/^jdbc:[^:]+:\/\/[^/?]+\/([^?]+)/)
   return match?.[1] || row.description || '-'
+}
+
+function parseJdbcUrl(jdbcUrl: string) {
+  const match = jdbcUrl.match(/^jdbc:([^:]+):\/\/([^:/?]+)(?::(\d+))?(?:\/([^?]+))?/)
+  return {
+    type: match?.[1]?.toUpperCase() ?? 'MYSQL',
+    host: match?.[2] ?? '',
+    port: match?.[3] ?? '',
+    database: match?.[4] ?? '',
+  }
+}
+
+function buildJdbcUrl() {
+  const host = dbHost.value.trim()
+  const port = dbPort.value.trim()
+  const database = dbName.value.trim()
+  if (dbConnectionForm.dbType === 'POSTGRESQL') {
+    return `jdbc:postgresql://${host}${port ? `:${port}` : ''}/${database}`
+  }
+  if (dbConnectionForm.dbType === 'MONGODB') {
+    return `jdbc:mongodb://${host}${port ? `:${port}` : ''}/${database}`
+  }
+  if (dbConnectionForm.dbType === 'REDIS') {
+    return `jdbc:redis://${host}${port ? `:${port}` : ''}/${database || '0'}`
+  }
+  return `jdbc:mysql://${host}${port ? `:${port}` : ''}/${database}`
+}
+
+function applyDbTypeDefaults(type: string) {
+  const meta = configDbTypeOptions.find(item => item.value === type) ?? configDbTypeOptions[0]
+  dbConnectionForm.dbType = meta.value
+  dbConnectionForm.driverClassName = meta.driver
+  if (!dbPort.value || dbPort.value === '3306' || dbPort.value === '5432' || dbPort.value === '6379' || dbPort.value === '27017') {
+    dbPort.value = meta.port
+  }
 }
 
 function roleLabel(roleCode: string) {
@@ -670,7 +786,7 @@ function resetBatchMemberForm() {
 function resetEnvForm() {
   envForm.id = null
   envForm.workspaceCode = isAllScope.value ? '' : workspaceCode.value
-  envForm.envType = 'API'
+  envForm.envType = 'TEST'
   envForm.envName = ''
   envForm.baseUrl = ''
   envForm.configJson = ''
@@ -680,9 +796,11 @@ function resetEnvForm() {
 function resetParamForm() {
   paramForm.id = null
   paramForm.workspaceCode = isAllScope.value ? '' : workspaceCode.value
-  paramForm.paramType = 'TOKEN'
+  paramForm.paramType = 'GLOBAL'
   paramForm.paramName = ''
   paramForm.contentJson = ''
+  paramDescription.value = ''
+  paramSensitive.value = false
   paramForm.status = 1
 }
 
@@ -695,6 +813,10 @@ function resetDbConnectionForm() {
   dbConnectionForm.jdbcUrl = ''
   dbConnectionForm.username = ''
   dbConnectionForm.password = ''
+  dbHost.value = ''
+  dbPort.value = '3306'
+  dbName.value = ''
+  dbPasswordVisible.value = false
   dbConnectionForm.poolMax = 10
   dbConnectionForm.timeoutMs = 5000
   dbConnectionForm.description = ''
@@ -1054,10 +1176,10 @@ function openEnvEdit(row: EnvConfigItem) {
   envDialogMode.value = 'edit'
   envForm.id = row.id
   envForm.workspaceCode = row.workspaceCode
-  envForm.envType = row.envType
+  envForm.envType = normalizeConfigEnvType(row)
   envForm.envName = row.envName
   envForm.baseUrl = row.baseUrl
-  envForm.configJson = row.configJson
+  envForm.configJson = envVisualMeta(row).description
   envForm.status = row.status
   envDialogVisible.value = true
 }
@@ -1139,9 +1261,16 @@ function openParamEdit(row: ParamSetItem) {
   paramDialogMode.value = 'edit'
   paramForm.id = row.id
   paramForm.workspaceCode = row.workspaceCode
-  paramForm.paramType = row.paramType
+  paramForm.paramType = configParamTypeMeta(row).label === '接口参数'
+    ? 'API'
+    : configParamTypeMeta(row).label === '业务参数'
+      ? 'BUSINESS'
+      : 'GLOBAL'
   paramForm.paramName = row.paramName
-  paramForm.contentJson = row.contentJson
+  const parsed = parseParamContent(row.contentJson)
+  paramForm.contentJson = parsed.value
+  paramDescription.value = parsed.description
+  paramSensitive.value = parsed.sensitive
   paramForm.status = row.status
   paramDialogVisible.value = true
 }
@@ -1161,7 +1290,7 @@ async function submitParam() {
       workspaceCode: paramForm.workspaceCode,
       paramType: paramForm.paramType,
       paramName: paramForm.paramName.trim(),
-      contentJson: paramForm.contentJson.trim(),
+      contentJson: buildParamContentJson(),
       status: paramForm.status,
     }
     if (paramDialogMode.value === 'create') {
@@ -1226,8 +1355,13 @@ function openDbConnectionEdit(row: DbConnectionItem) {
   dbConnectionForm.dbType = row.dbType
   dbConnectionForm.driverClassName = row.driverClassName ?? ''
   dbConnectionForm.jdbcUrl = row.jdbcUrl
+  const parsed = parseJdbcUrl(row.jdbcUrl)
+  dbHost.value = parsed.host
+  dbPort.value = parsed.port || (configDbTypeOptions.find(item => item.value === row.dbType)?.port ?? '3306')
+  dbName.value = parsed.database
   dbConnectionForm.username = row.username ?? ''
   dbConnectionForm.password = ''
+  dbPasswordVisible.value = false
   dbConnectionForm.poolMax = row.poolMax
   dbConnectionForm.timeoutMs = row.timeoutMs
   dbConnectionForm.description = row.description ?? ''
@@ -1236,6 +1370,7 @@ function openDbConnectionEdit(row: DbConnectionItem) {
 }
 
 function dbConnectionPayload() {
+  dbConnectionForm.jdbcUrl = buildJdbcUrl()
   return {
     workspaceCode: dbConnectionForm.workspaceCode,
     connectionName: dbConnectionForm.connectionName.trim(),
@@ -1252,8 +1387,8 @@ function dbConnectionPayload() {
 }
 
 async function submitDbConnection() {
-  if (!dbConnectionForm.connectionName.trim() || !dbConnectionForm.jdbcUrl.trim()) {
-    ElMessage.error('请先填写连接名称和 JDBC URL')
+  if (!dbConnectionForm.connectionName.trim() || !dbHost.value.trim() || !dbName.value.trim()) {
+    ElMessage.error('请先填写连接名称、主机地址和数据库名')
     return
   }
   if (isAllScope.value && !dbConnectionForm.workspaceCode) {
@@ -1659,7 +1794,6 @@ onMounted(async () => {
 
     <div v-else class="config-center-shell" v-loading="pageLoading">
       <aside class="config-center-sidebar">
-        <div class="config-sidebar-title">配置分类</div>
         <button
           v-for="item in configCenterNavItems"
           :key="item.id"
@@ -1770,7 +1904,7 @@ onMounted(async () => {
                     <div class="config-table-title">{{ param.paramName }}</div>
                     <div v-if="isAllScope" class="config-table-subtitle">{{ param.workspaceName }}</div>
                   </td>
-                  <td><span class="config-value-chip">{{ param.contentJson || '-' }}</span></td>
+                  <td><span class="config-value-chip">{{ configParamValueText(param) }}</span></td>
                   <td><span class="config-type-badge" :class="configParamTypeMeta(param).className">{{ configParamTypeMeta(param).label }}</span></td>
                   <td><span class="config-table-muted">{{ param.paramType }}</span></td>
                   <td v-if="canManageSettings">
@@ -2037,149 +2171,231 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="envDialogVisible" :title="envDialogMode === 'create' ? '新增环境配置' : '编辑环境配置'" width="640px">
-      <el-form label-width="100px">
-        <el-form-item v-if="isAllScope" label="目标空间" required>
-          <el-select v-model="envForm.workspaceCode" placeholder="请选择目标空间">
-            <el-option
-              v-for="item in writableWorkspaceOptions"
-              :key="item.code"
-              :label="item.name"
-              :value="item.code"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="环境类型" required>
-          <el-select v-model="envForm.envType">
-            <el-option label="API" value="API" />
-            <el-option label="WEB" value="WEB" />
-            <el-option label="APP" value="APP" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="环境名称" required>
-          <el-input v-model="envForm.envName" />
-        </el-form-item>
-        <el-form-item label="基础地址" required>
-          <el-input v-model="envForm.baseUrl" />
-        </el-form-item>
-        <el-form-item label="状态">
-          <el-switch
-            v-model="envForm.status"
-            :active-value="1"
-            :inactive-value="0"
-            active-text="启用"
-            inactive-text="停用"
-          />
-        </el-form-item>
-        <el-form-item label="扩展配置">
-          <el-input v-model="envForm.configJson" type="textarea" :rows="5" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="envDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="savingEnv" @click="submitEnv">保存</el-button>
-      </template>
-    </el-dialog>
+    <Teleport to="body">
+      <div v-if="envDialogVisible" class="config-modal-overlay">
+        <div class="config-env-modal">
+          <header class="config-modal-header">
+            <h2>{{ envDialogMode === 'create' ? '新增环境' : '编辑环境' }}</h2>
+            <button type="button" aria-label="关闭" @click="envDialogVisible = false">
+              <X :size="18" />
+            </button>
+          </header>
 
-    <el-dialog v-model="paramDialogVisible" :title="paramDialogMode === 'create' ? '新增参数集' : '编辑参数集'" width="640px">
-      <el-form label-width="100px">
-        <el-form-item v-if="isAllScope" label="目标空间" required>
-          <el-select v-model="paramForm.workspaceCode" placeholder="请选择目标空间">
-            <el-option
-              v-for="item in writableWorkspaceOptions"
-              :key="item.code"
-              :label="item.name"
-              :value="item.code"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="参数类型" required>
-          <el-select v-model="paramForm.paramType">
-            <el-option label="TOKEN" value="TOKEN" />
-            <el-option label="HEADER" value="HEADER" />
-            <el-option label="BODY" value="BODY" />
-            <el-option label="QUERY" value="QUERY" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="参数集名称" required>
-          <el-input v-model="paramForm.paramName" />
-        </el-form-item>
-        <el-form-item label="状态">
-          <el-switch
-            v-model="paramForm.status"
-            :active-value="1"
-            :inactive-value="0"
-            active-text="启用"
-            inactive-text="停用"
-          />
-        </el-form-item>
-        <el-form-item label="内容 JSON">
-          <el-input v-model="paramForm.contentJson" type="textarea" :rows="5" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="paramDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="savingParam" @click="submitParam">保存</el-button>
-      </template>
-    </el-dialog>
-    <el-dialog v-model="dbConnectionDialogVisible" :title="dbConnectionDialogMode === 'create' ? '新增数据库连接' : '编辑数据库连接'" width="720px" data-testid="db-connection-dialog">
-      <el-form label-width="120px">
-        <el-form-item v-if="isAllScope" label="目标空间" required data-testid="db-connection-workspace">
-          <el-select v-model="dbConnectionForm.workspaceCode" placeholder="请选择目标空间" data-testid="db-connection-workspace">
-            <el-option
-              v-for="item in writableWorkspaceOptions"
-              :key="item.code"
-              :label="item.name"
-              :value="item.code"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="连接名称" required data-testid="db-connection-name">
-          <el-input v-model="dbConnectionForm.connectionName" data-testid="db-connection-name" />
-        </el-form-item>
-        <el-form-item label="数据库类型" required data-testid="db-connection-type">
-          <el-select v-model="dbConnectionForm.dbType" data-testid="db-connection-type">
-            <el-option label="MYSQL" value="MYSQL" />
-            <el-option label="H2" value="H2" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="驱动类" data-testid="db-connection-driver">
-          <el-input v-model="dbConnectionForm.driverClassName" placeholder="com.mysql.cj.jdbc.Driver / org.h2.Driver" data-testid="db-connection-driver" />
-        </el-form-item>
-        <el-form-item label="JDBC URL" required data-testid="db-connection-url">
-          <el-input v-model="dbConnectionForm.jdbcUrl" placeholder="jdbc:mysql://127.0.0.1:3306/demo" data-testid="db-connection-url" />
-        </el-form-item>
-        <el-form-item label="用户名" data-testid="db-connection-username">
-          <el-input v-model="dbConnectionForm.username" data-testid="db-connection-username" />
-        </el-form-item>
-        <el-form-item label="密码" data-testid="db-connection-password">
-          <el-input v-model="dbConnectionForm.password" show-password :placeholder="dbConnectionDialogMode === 'edit' ? '留空表示沿用旧密码' : ''" data-testid="db-connection-password" />
-        </el-form-item>
-        <el-form-item label="查询超时" data-testid="db-connection-timeout">
-          <el-input-number v-model="dbConnectionForm.timeoutMs" :min="1000" :step="1000" data-testid="db-connection-timeout" />
-        </el-form-item>
-        <el-form-item label="连接池上限" data-testid="db-connection-pool">
-          <el-input-number v-model="dbConnectionForm.poolMax" :min="1" :step="1" data-testid="db-connection-pool" />
-        </el-form-item>
-        <el-form-item label="状态">
-          <el-switch
-            v-model="dbConnectionForm.status"
-            :active-value="1"
-            :inactive-value="0"
-            active-text="启用"
-            inactive-text="停用"
-          />
-        </el-form-item>
-        <el-form-item label="描述" data-testid="db-connection-description">
-          <el-input v-model="dbConnectionForm.description" type="textarea" :rows="3" data-testid="db-connection-description" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dbConnectionDialogVisible = false">取消</el-button>
-        <el-button @click="testDbConnection()">测试连接</el-button>
-        <el-button type="primary" :loading="savingDbConnection" @click="submitDbConnection">保存</el-button>
-      </template>
-    </el-dialog>
+          <div class="config-modal-body">
+            <label v-if="isAllScope" class="config-modal-field">
+              <span>目标空间</span>
+              <select v-model="envForm.workspaceCode">
+                <option value="">请选择目标空间</option>
+                <option v-for="item in writableWorkspaceOptions" :key="item.code" :value="item.code">
+                  {{ item.name }}
+                </option>
+              </select>
+            </label>
+
+            <label class="config-modal-field">
+              <span>环境名称</span>
+              <input v-model="envForm.envName" placeholder="例如：测试环境">
+            </label>
+
+            <div class="config-modal-field">
+              <span>环境类型</span>
+              <div class="config-modal-segment is-three">
+                <button
+                  v-for="item in configEnvTypeOptions"
+                  :key="item.value"
+                  type="button"
+                  :class="{ 'is-active': envForm.envType === item.value }"
+                  @click="envForm.envType = item.value"
+                >
+                  {{ item.label }}
+                </button>
+              </div>
+            </div>
+
+            <label class="config-modal-field">
+              <span>Base URL</span>
+              <input v-model="envForm.baseUrl" class="is-mono" placeholder="https://api.example.com">
+            </label>
+
+            <label class="config-modal-field">
+              <span>描述</span>
+              <textarea v-model="envForm.configJson" rows="2" />
+            </label>
+
+            <div class="config-modal-field">
+              <span>状态</span>
+              <div class="config-modal-segment is-two">
+                <button
+                  v-for="item in configEnvStatusOptions"
+                  :key="item.value"
+                  type="button"
+                  :class="{ 'is-active': envForm.status === item.value }"
+                  @click="envForm.status = item.value"
+                >
+                  {{ item.label }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <footer class="config-modal-footer">
+            <button type="button" class="config-modal-cancel" @click="envDialogVisible = false">取消</button>
+            <button type="button" class="config-modal-submit" :disabled="savingEnv" @click="submitEnv">保存</button>
+          </footer>
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="paramDialogVisible" class="config-modal-overlay">
+        <div class="config-env-modal">
+          <header class="config-modal-header">
+            <h2>{{ paramDialogMode === 'create' ? '新增参数' : '编辑参数' }}</h2>
+            <button type="button" aria-label="关闭" @click="paramDialogVisible = false">
+              <X :size="18" />
+            </button>
+          </header>
+
+          <div class="config-modal-body">
+            <label v-if="isAllScope" class="config-modal-field">
+              <span>目标空间</span>
+              <select v-model="paramForm.workspaceCode">
+                <option value="">请选择目标空间</option>
+                <option v-for="item in writableWorkspaceOptions" :key="item.code" :value="item.code">
+                  {{ item.name }}
+                </option>
+              </select>
+            </label>
+
+            <label class="config-modal-field">
+              <span>参数名</span>
+              <input v-model="paramForm.paramName" class="is-mono" placeholder="例如：REQUEST_TIMEOUT">
+            </label>
+
+            <label class="config-modal-field">
+              <span>参数值</span>
+              <input v-model="paramForm.contentJson" :type="paramSensitive ? 'password' : 'text'" placeholder="参数值">
+            </label>
+
+            <div class="config-modal-field">
+              <span>参数类型</span>
+              <div class="config-modal-segment is-three">
+                <button
+                  v-for="item in configParamTypeOptions"
+                  :key="item.value"
+                  type="button"
+                  :class="{ 'is-active': paramForm.paramType === item.value }"
+                  @click="paramForm.paramType = item.value"
+                >
+                  {{ item.label }}
+                </button>
+              </div>
+            </div>
+
+            <label class="config-modal-field">
+              <span>说明</span>
+              <textarea v-model="paramDescription" rows="2" />
+            </label>
+
+            <label class="config-modal-checkbox">
+              <input v-model="paramSensitive" type="checkbox">
+              <span>敏感参数（密码、密钥等）</span>
+            </label>
+          </div>
+
+          <footer class="config-modal-footer">
+            <button type="button" class="config-modal-cancel" @click="paramDialogVisible = false">取消</button>
+            <button type="button" class="config-modal-submit" :disabled="savingParam" @click="submitParam">保存</button>
+          </footer>
+        </div>
+      </div>
+    </Teleport>
+    <Teleport to="body">
+      <div v-if="dbConnectionDialogVisible" class="config-modal-overlay">
+        <div class="config-db-modal" data-testid="db-connection-dialog">
+          <header class="config-modal-header">
+            <h2>{{ dbConnectionDialogMode === 'create' ? '新增数据库连接' : '编辑数据库连接' }}</h2>
+            <button type="button" aria-label="关闭" @click="dbConnectionDialogVisible = false">
+              <X :size="18" />
+            </button>
+          </header>
+
+          <div class="config-modal-body">
+            <label v-if="isAllScope" class="config-modal-field">
+              <span>目标空间</span>
+              <select v-model="dbConnectionForm.workspaceCode" data-testid="db-connection-workspace">
+                <option value="">请选择目标空间</option>
+                <option v-for="item in writableWorkspaceOptions" :key="item.code" :value="item.code">
+                  {{ item.name }}
+                </option>
+              </select>
+            </label>
+
+            <label class="config-modal-field">
+              <span>连接名称</span>
+              <input v-model="dbConnectionForm.connectionName" placeholder="例如：主数据库（测试）" data-testid="db-connection-name">
+            </label>
+
+            <div class="config-modal-field">
+              <span>数据库类型</span>
+              <div class="config-modal-segment is-four">
+                <button
+                  v-for="item in configDbTypeOptions"
+                  :key="item.value"
+                  type="button"
+                  :class="{ 'is-active': dbConnectionForm.dbType === item.value }"
+                  @click="applyDbTypeDefaults(item.value)"
+                >
+                  {{ item.label }}
+                </button>
+              </div>
+            </div>
+
+            <div class="config-modal-grid is-two">
+              <label class="config-modal-field">
+                <span>主机地址</span>
+                <input v-model="dbHost" class="is-mono" placeholder="localhost 或 IP">
+              </label>
+              <label class="config-modal-field">
+                <span>端口</span>
+                <input v-model="dbPort" class="is-mono" placeholder="3306">
+              </label>
+            </div>
+
+            <label class="config-modal-field">
+              <span>数据库名</span>
+              <input v-model="dbName" placeholder="数据库名称">
+            </label>
+
+            <div class="config-modal-grid is-two">
+              <label class="config-modal-field">
+                <span>用户名</span>
+                <input v-model="dbConnectionForm.username" class="is-soft" autocomplete="username" placeholder="用户名">
+              </label>
+              <label class="config-modal-field">
+                <span>密码</span>
+                <div class="config-password-input">
+                  <input
+                    v-model="dbConnectionForm.password"
+                    :type="dbPasswordVisible ? 'text' : 'password'"
+                    autocomplete="current-password"
+                    :placeholder="dbConnectionDialogMode === 'edit' ? '留空沿用旧密码' : '密码'"
+                  >
+                  <button type="button" aria-label="显示密码" @click="dbPasswordVisible = !dbPasswordVisible">
+                    <span>{{ dbPasswordVisible ? '○' : '◉' }}</span>
+                  </button>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <footer class="config-modal-footer">
+            <button type="button" class="config-modal-cancel" @click="dbConnectionDialogVisible = false">取消</button>
+            <button type="button" class="config-modal-submit" :disabled="savingDbConnection" @click="submitDbConnection">保存</button>
+          </footer>
+        </div>
+      </div>
+    </Teleport>
   </section>
 </template>
 
@@ -3402,15 +3618,6 @@ onMounted(async () => {
   display: none;
 }
 
-.config-sidebar-title {
-  margin: 0 0 12px;
-  padding: 0 12px;
-  color: #6b7280;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.4;
-}
-
 .config-nav-item {
   display: flex;
   width: 100%;
@@ -3939,6 +4146,295 @@ onMounted(async () => {
   justify-content: center;
   color: #9ca3af;
   font-size: 14px;
+}
+
+.config-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 0.32);
+  backdrop-filter: blur(10px);
+}
+
+.config-env-modal {
+  display: flex;
+  width: min(512px, calc(100vw - 48px));
+  max-height: calc(100vh - 72px);
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 24px 60px rgb(15 23 42 / 0.22);
+}
+
+.config-db-modal {
+  display: flex;
+  width: min(672px, calc(100vw - 48px));
+  max-height: calc(100vh - 72px);
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 24px 60px rgb(15 23 42 / 0.22);
+}
+
+.config-modal-header {
+  display: flex;
+  min-height: 64px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.config-modal-header h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.config-modal-header button {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+
+.config-modal-header button:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.config-modal-body {
+  display: grid;
+  gap: 20px;
+  overflow-y: auto;
+  padding: 30px 24px 24px;
+  scrollbar-width: none;
+}
+
+.config-modal-body::-webkit-scrollbar {
+  display: none;
+}
+
+.config-modal-field {
+  display: grid;
+  gap: 8px;
+}
+
+.config-modal-field > span {
+  color: #374151;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.config-modal-field input,
+.config-modal-field textarea,
+.config-modal-field select {
+  width: 100%;
+  border: 1px solid #dfe3ea;
+  border-radius: 12px;
+  background: #fff;
+  color: #111827;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.config-modal-field input,
+.config-modal-field select {
+  height: 42px;
+  padding: 0 12px;
+}
+
+.config-modal-field textarea {
+  min-height: 62px;
+  padding: 10px 12px;
+  resize: none;
+}
+
+.config-modal-field input::placeholder,
+.config-modal-field textarea::placeholder {
+  color: #9ca3af;
+}
+
+.config-modal-field .is-mono {
+  font-family: Consolas, Monaco, monospace;
+}
+
+.config-modal-field .is-soft {
+  background: #eff6ff;
+}
+
+.config-modal-field input:focus,
+.config-modal-field textarea:focus,
+.config-modal-field select:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgb(59 130 246 / 0.12);
+}
+
+.config-modal-segment {
+  display: grid;
+  gap: 8px;
+}
+
+.config-modal-segment.is-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.config-modal-segment.is-four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.config-modal-segment.is-two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.config-modal-segment button {
+  height: 40px;
+  border: 2px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+}
+
+.config-modal-segment button:hover {
+  border-color: #bfdbfe;
+  color: #2563eb;
+}
+
+.config-modal-segment button.is-active {
+  border-color: #2f7cff;
+  background: #eff6ff;
+  color: #1763ff;
+}
+
+.config-modal-checkbox {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 8px;
+  color: #374151;
+  font-size: 14px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.config-modal-checkbox input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid #9ca3af;
+  border-radius: 2px;
+  accent-color: #2563eb;
+}
+
+.config-modal-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.config-modal-grid.is-two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.config-password-input {
+  position: relative;
+}
+
+.config-password-input input {
+  padding-right: 42px;
+  background: #eff6ff;
+}
+
+.config-password-input button {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.config-password-input button:hover {
+  background: rgb(37 99 235 / 0.08);
+  color: #64748b;
+}
+
+.config-modal-footer {
+  display: flex;
+  min-height: 68px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 24px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.config-modal-cancel,
+.config-modal-submit {
+  height: 38px;
+  padding: 0 17px;
+  border-radius: 12px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
+}
+
+.config-modal-cancel {
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: #111827;
+}
+
+.config-modal-cancel:hover {
+  background: #f9fafb;
+}
+
+.config-modal-submit {
+  min-width: 68px;
+  border: 0;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 500;
+}
+
+.config-modal-submit:hover {
+  background: #1d4ed8;
+}
+
+.config-modal-submit:disabled {
+  cursor: wait;
+  opacity: 0.68;
 }
 
 @media (max-width: 900px) {

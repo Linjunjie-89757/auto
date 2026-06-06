@@ -1303,7 +1303,7 @@ export interface DbConnectionItem {
   workspaceCode: string
   workspaceName: string
   connectionName: string
-  dbType: 'MYSQL' | 'H2'
+  dbType: string
   driverClassName: string | null
   jdbcUrl: string
   username: string | null
@@ -1379,7 +1379,7 @@ export interface CreateParamPayload {
 export interface CreateDbConnectionPayload {
   workspaceCode?: string
   connectionName: string
-  dbType: 'MYSQL' | 'H2'
+  dbType: string
   driverClassName?: string | null
   jdbcUrl: string
   username?: string | null

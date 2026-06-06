@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Calendar, Files, Operation, Plus, RefreshRight, Upload, VideoPlay } from '@element-plus/icons-vue'
+import { Monitor, Smartphone } from '@lucide/vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { platformApi } from '../api/platform'
 import ApiAutomationWorkspace from '../components/ApiAutomationWorkspace.vue'
@@ -805,6 +806,15 @@ onMounted(() => {
 <template>
   <ApiAutomationWorkspace v-if="props.engine === 'api'" />
 
+  <section v-else-if="props.engine === 'web' || props.engine === 'app'" class="automation-placeholder-shell">
+    <div class="automation-placeholder">
+      <div>
+        <component :is="props.engine === 'web' ? Monitor : Smartphone" :size="34" />
+        <p>{{ moduleConfig.title }} 页面建设中...</p>
+      </div>
+    </div>
+  </section>
+
   <section v-else class="page-shell">
     <div class="page-header">
       <div class="page-title">{{ moduleConfig.title }}</div>
@@ -1303,6 +1313,33 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.automation-placeholder-shell {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: #f9fafb;
+}
+
+.automation-placeholder {
+  display: flex;
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: #9ca3af;
+  font-size: 14px;
+  text-align: center;
+}
+
+.automation-placeholder div {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+}
+
+.automation-placeholder p {
+  margin: 0;
+}
+
 .toolbar-filter-input {
   width: 220px;
 }

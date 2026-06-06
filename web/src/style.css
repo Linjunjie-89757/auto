@@ -671,6 +671,12 @@ a {
   overflow: hidden;
 }
 
+.app-main-automation-placeholder {
+  padding: 0;
+  overflow: hidden;
+  background: #f9fafb;
+}
+
 .app-main-cases {
   padding: 0;
   overflow: hidden;

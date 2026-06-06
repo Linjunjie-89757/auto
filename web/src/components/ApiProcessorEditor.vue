@@ -1109,6 +1109,133 @@ function setMoreSettingsVisible(processorId: string, index: number, visible: boo
   background: #f9fafb;
 }
 
+.processor-editor {
+  color: var(--ath-text-strong);
+}
+
+.processor-sidebar,
+.processor-detail {
+  border-color: var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+  box-shadow: var(--ath-shadow-xs);
+}
+
+.processor-toolbar {
+  border-bottom-color: var(--ath-border-soft);
+  background: var(--ath-bg-panel);
+}
+
+.processor-toolbar :deep(.el-button) {
+  border-radius: var(--ath-radius-md);
+  font-size: var(--ath-font-xs);
+  font-weight: var(--ath-weight-medium);
+}
+
+.processor-toolbar :deep(.el-button--primary) {
+  border-color: var(--ath-primary);
+  background: var(--ath-primary);
+}
+
+.processor-toolbar :deep(.el-button--primary:hover),
+.processor-toolbar :deep(.el-button--primary:focus) {
+  border-color: var(--ath-primary-hover);
+  background: var(--ath-primary-hover);
+}
+
+.processor-list {
+  background: var(--ath-bg-panel);
+}
+
+.processor-list-item {
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-panel);
+}
+
+.processor-list-item:hover {
+  background: var(--ath-bg-page);
+}
+
+.processor-list-item.active {
+  border-color: var(--ath-blue);
+  background: var(--ath-blue-soft);
+}
+
+.processor-list-title,
+.extractor-panel-title {
+  color: var(--ath-text-strong);
+}
+
+.processor-list-meta,
+.processor-form-label,
+.processor-hint,
+.processor-form-grid span,
+.extractor-table-header,
+.extractor-more-label {
+  color: var(--ath-text-muted);
+}
+
+.processor-detail-header {
+  border-bottom-color: var(--ath-border-soft);
+}
+
+.processor-detail-fields :deep(.el-input__wrapper),
+.processor-form-grid :deep(.el-input__wrapper),
+.processor-form-grid :deep(.el-select__wrapper) {
+  min-height: var(--ath-control-height-sm);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-panel);
+  box-shadow: inset 0 0 0 1px var(--ath-input-border);
+}
+
+.processor-detail-fields :deep(.el-input__wrapper:hover),
+.processor-form-grid :deep(.el-input__wrapper:hover),
+.processor-form-grid :deep(.el-select__wrapper:hover) {
+  box-shadow: inset 0 0 0 1px var(--ath-border-strong);
+}
+
+.processor-detail-fields :deep(.el-input.is-focus .el-input__wrapper),
+.processor-form-grid :deep(.el-input.is-focus .el-input__wrapper),
+.processor-form-grid :deep(.el-select.is-focus .el-select__wrapper),
+.processor-form-grid :deep(.el-select__wrapper.is-focused) {
+  box-shadow: inset 0 0 0 1px var(--ath-blue), var(--ath-focus-ring);
+}
+
+.extractor-grid {
+  border-color: var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+}
+
+.extractor-grid-header {
+  background: var(--ath-bg-page);
+  color: var(--ath-text-muted);
+  font-weight: var(--ath-weight-semibold);
+}
+
+.extractor-grid-row + .extractor-grid-row {
+  border-top-color: var(--ath-border-soft);
+}
+
+.extractor-grid-row:hover {
+  background: #fbfdff;
+}
+
+.fast-extraction-suffix-button,
+.add-row-button {
+  color: var(--ath-primary);
+}
+
+.processor-empty {
+  color: var(--ath-text-subtle);
+}
+
+.processor-empty--inline {
+  border-color: var(--ath-border-strong);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-page);
+}
+
 @media (max-width: 1400px) {
   .extractor-grid {
     min-width: 100%;

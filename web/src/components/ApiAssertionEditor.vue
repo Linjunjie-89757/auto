@@ -861,6 +861,127 @@ function handleFastExtractionApply(config: FastExtractionConfig, matchResult: st
   font-size: 13px;
 }
 
+.assertion-editor {
+  color: var(--ath-text-strong);
+}
+
+.assertion-sidebar,
+.assertion-detail {
+  border-color: var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+  box-shadow: var(--ath-shadow-xs);
+}
+
+.assertion-toolbar {
+  border-bottom-color: var(--ath-border-soft);
+  background: var(--ath-bg-panel);
+}
+
+.assertion-toolbar :deep(.el-button) {
+  border-radius: var(--ath-radius-md);
+  font-size: var(--ath-font-xs);
+  font-weight: var(--ath-weight-medium);
+}
+
+.assertion-toolbar :deep(.el-button--primary) {
+  border-color: var(--ath-primary);
+  background: var(--ath-primary);
+}
+
+.assertion-toolbar :deep(.el-button--primary:hover),
+.assertion-toolbar :deep(.el-button--primary:focus) {
+  border-color: var(--ath-primary-hover);
+  background: var(--ath-primary-hover);
+}
+
+.assertion-list-item {
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-panel);
+}
+
+.assertion-list-item:hover {
+  background: var(--ath-bg-page);
+}
+
+.assertion-list-item.active {
+  border-color: var(--ath-blue);
+  background: var(--ath-blue-soft);
+}
+
+.assertion-list-title {
+  color: var(--ath-text-strong);
+}
+
+.assertion-list-meta,
+.assertion-form-label,
+.assertion-hint,
+.assertion-form-grid span {
+  color: var(--ath-text-muted);
+}
+
+.assertion-detail-header {
+  border-bottom-color: var(--ath-border-soft);
+}
+
+.assertion-detail-fields :deep(.el-input__wrapper),
+.assertion-form-grid :deep(.el-input__wrapper),
+.assertion-form-grid :deep(.el-select__wrapper),
+.assertion-table-row :deep(.el-input__wrapper),
+.assertion-table-row :deep(.el-select__wrapper) {
+  min-height: var(--ath-control-height-sm);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-panel);
+  box-shadow: inset 0 0 0 1px var(--ath-input-border);
+}
+
+.assertion-detail-fields :deep(.el-input__wrapper:hover),
+.assertion-form-grid :deep(.el-input__wrapper:hover),
+.assertion-form-grid :deep(.el-select__wrapper:hover),
+.assertion-table-row :deep(.el-input__wrapper:hover),
+.assertion-table-row :deep(.el-select__wrapper:hover) {
+  box-shadow: inset 0 0 0 1px var(--ath-border-strong);
+}
+
+.assertion-detail-fields :deep(.el-input.is-focus .el-input__wrapper),
+.assertion-form-grid :deep(.el-input.is-focus .el-input__wrapper),
+.assertion-form-grid :deep(.el-select.is-focus .el-select__wrapper),
+.assertion-form-grid :deep(.el-select__wrapper.is-focused),
+.assertion-table-row :deep(.el-input.is-focus .el-input__wrapper),
+.assertion-table-row :deep(.el-select.is-focus .el-select__wrapper),
+.assertion-table-row :deep(.el-select__wrapper.is-focused) {
+  box-shadow: inset 0 0 0 1px var(--ath-blue), var(--ath-focus-ring);
+}
+
+.assertion-table {
+  border-color: var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+}
+
+.assertion-table-row {
+  min-height: 44px;
+  border-bottom-color: var(--ath-border-soft);
+}
+
+.assertion-table-row:hover {
+  background: #fbfdff;
+}
+
+.fast-extraction-suffix-button,
+.add-row-button {
+  color: var(--ath-primary);
+}
+
+.ghost-action {
+  color: var(--ath-text-muted);
+}
+
+.assertion-empty {
+  color: var(--ath-text-subtle);
+  background: var(--ath-bg-page);
+}
+
 @media (max-width: 1100px) {
   .assertion-editor,
   .assertion-form-grid,

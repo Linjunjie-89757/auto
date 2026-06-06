@@ -591,7 +591,7 @@ onBeforeUnmount(() => {
                   <span class="workspace-text">{{ row.workspaceName || row.workspaceCode }}</span>
                 </template>
               </el-table-column>
-              <el-table-column v-else-if="column.key === 'requirementTitle'" label="关联需求" min-width="360" show-overflow-tooltip>
+              <el-table-column v-else-if="column.key === 'requirementTitle'" label="关联需求" min-width="300" show-overflow-tooltip>
                 <template #default="{ row }">
                   <div class="record-requirement-title">{{ row.requirementTitle }}</div>
                 </template>
@@ -634,7 +634,7 @@ onBeforeUnmount(() => {
                 </template>
               </el-table-column>
             </template>
-            <el-table-column width="252" fixed="right" align="center">
+            <el-table-column width="220" fixed="right" align="center">
               <template #header>
                 <div class="table-action-header">
                   <span>操作</span>
@@ -839,8 +839,8 @@ onBeforeUnmount(() => {
 .record-filter-card,
 .record-stats-card,
 .record-table-card {
-  padding: 20px 22px;
   min-width: 0;
+  padding: var(--ath-space-5) 22px;
 }
 
 .record-filter-row,
@@ -864,7 +864,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  color: #344054;
+  color: var(--ath-text-main);
   font-weight: 700;
 }
 
@@ -880,7 +880,7 @@ onBeforeUnmount(() => {
   justify-content: center;
   width: 14px;
   height: 14px;
-  color: #667085;
+  color: var(--ath-text-muted);
 }
 
 .table-action-header-icon :deep(svg) {
@@ -903,7 +903,7 @@ onBeforeUnmount(() => {
 }
 
 .table-pagination-summary {
-  color: var(--text-subtle);
+  color: var(--ath-text-muted);
   font-size: 13px;
 }
 
@@ -928,12 +928,15 @@ onBeforeUnmount(() => {
   height: 48px;
   margin-bottom: 18px;
   border-radius: 999px;
-  background: rgba(239, 246, 255, 0.92);
+  border: 3px solid var(--ath-blue-soft);
+  border-top-color: var(--ath-primary);
+  background: transparent;
+  animation: record-spin 0.8s linear infinite;
 }
 
 .record-loading-card .record-empty-title {
   margin-bottom: 0;
-  color: #475467;
+  color: var(--ath-text-main);
 }
 
 .record-empty-content {
@@ -945,34 +948,41 @@ onBeforeUnmount(() => {
 }
 
 .record-empty-icon {
-  font-size: 4rem;
+  display: grid;
+  width: 64px;
+  height: 64px;
+  place-items: center;
+  border-radius: var(--ath-radius-xl);
+  background: var(--ath-bg-muted);
+  color: var(--ath-text-subtle);
+  font-size: 2rem;
   line-height: 1;
   margin-bottom: 18px;
 }
 
 .record-empty-title {
   margin-bottom: 16px;
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 700;
   line-height: 1.4;
-  color: #2c3e50;
+  color: var(--ath-text-strong);
 }
 
 .record-empty-text {
   font-size: 14px;
   line-height: 1.7;
-  color: #667085;
+  color: var(--ath-text-muted);
   white-space: nowrap;
 }
 
 .record-empty-link {
-  color: #2f88ff;
+  color: var(--ath-primary);
   font-weight: 500;
   text-decoration: none;
 }
 
 .record-empty-link:hover {
-  color: #1f6fe5;
+  color: var(--ath-primary-hover);
   text-decoration: underline;
 }
 
@@ -981,7 +991,7 @@ onBeforeUnmount(() => {
 .adopt-dialog-copy,
 .adopt-dialog-subcopy {
   font-size: 13px;
-  color: var(--text-subtle);
+  color: var(--ath-text-muted);
 }
 
 .stats-row {
@@ -995,9 +1005,9 @@ onBeforeUnmount(() => {
 }
 
 .stats-value {
-  font-size: 40px;
+  font-size: 32px;
   font-weight: 700;
-  color: #2f88ff;
+  color: var(--ath-primary);
   line-height: 1;
 }
 
@@ -1006,9 +1016,9 @@ onBeforeUnmount(() => {
 }
 
 .record-table :deep(.el-table__header-wrapper th) {
-  background: rgba(248, 250, 252, 0.96);
-  color: var(--text-main);
-  font-weight: 700;
+  background: var(--ath-bg-page);
+  color: var(--ath-text-main);
+  font-weight: var(--ath-weight-semibold);
 }
 
 .record-table {
@@ -1022,12 +1032,17 @@ onBeforeUnmount(() => {
 }
 
 .record-table :deep(.el-table-fixed-column--right) {
-  background: var(--bg-panel);
+  background: var(--ath-bg-panel);
   box-shadow: none;
 }
 
 .record-table :deep(.el-table__fixed-right) {
-  box-shadow: -1px 0 0 rgba(221, 229, 240, 0.9);
+  border-left: 1px solid var(--ath-border-soft);
+  box-shadow: none;
+}
+
+.record-table :deep(.el-table-fixed-column--right.is-first-column::before) {
+  box-shadow: -1px 0 0 var(--ath-border-soft);
 }
 
 .record-table :deep(.el-table__fixed-right::before) {
@@ -1035,7 +1050,7 @@ onBeforeUnmount(() => {
 }
 
 .record-table :deep(.el-table__fixed-right-patch) {
-  background: rgba(248, 250, 252, 0.96);
+  background: var(--ath-bg-page);
 }
 
 .record-table :deep(.el-table__body-wrapper .el-scrollbar__wrap) {
@@ -1043,17 +1058,17 @@ onBeforeUnmount(() => {
 }
 
 .task-code-text {
-  color: var(--text-main);
+  color: var(--ath-text-main);
 }
 
 .workspace-text {
-  color: var(--text-main);
+  color: var(--ath-text-main);
 }
 
 .record-requirement-title {
   min-width: 0;
   font-size: 13px;
-  color: var(--text-main);
+  color: var(--ath-text-main);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1068,7 +1083,7 @@ onBeforeUnmount(() => {
   padding: 0 10px;
   border-radius: 999px;
   background: rgba(59, 130, 246, 0.12);
-  color: #1d4ed8;
+  color: var(--ath-primary-hover);
   font-size: 13px;
   font-weight: 700;
 }
@@ -1079,7 +1094,7 @@ onBeforeUnmount(() => {
 }
 
 .record-muted-text {
-  color: #667085;
+  color: var(--ath-text-muted);
 }
 
 .adopt-dialog-title {
@@ -1109,7 +1124,7 @@ onBeforeUnmount(() => {
   padding: 16px;
   border: 1px solid var(--line-soft);
   border-radius: 12px;
-  background: #fff;
+  background: #ffffff;
 }
 
 .adopt-form-title {
@@ -1120,7 +1135,7 @@ onBeforeUnmount(() => {
 }
 
 .dialog-required {
-  color: #ef4444;
+  color: var(--ath-red);
 }
 
 .adopt-dialog-form-card :deep(.is-invalid-select .el-select__wrapper) {
@@ -1143,7 +1158,7 @@ onBeforeUnmount(() => {
   padding: 8px 12px;
   border: 1px solid var(--line-soft);
   border-radius: 8px;
-  background: #fff;
+  background: #ffffff;
 }
 
 .path-picker-trigger-card.is-invalid {
@@ -1206,7 +1221,7 @@ onBeforeUnmount(() => {
   padding: 12px;
   border: 1px solid var(--line-soft);
   border-radius: 12px;
-  background: #fff;
+  background: #ffffff;
 }
 
 .path-picker-empty {
@@ -1425,6 +1440,12 @@ onBeforeUnmount(() => {
   font-size: 13px;
   line-height: 1.7;
   color: #b42318;
+}
+
+@keyframes record-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 1200px) {

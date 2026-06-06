@@ -189,67 +189,68 @@ function formatAttachmentMeta(size: number | null, uploadedByName: string | null
 <style scoped>
 .bug-detail-section {
   display: grid;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: #fff;
+  gap: var(--ath-space-3);
+  padding: var(--ath-space-5);
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+  box-shadow: var(--ath-shadow-xs);
 }
 
 .bug-detail-section-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--ath-space-3);
 }
 
 .bug-detail-section-title {
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1.5;
-  color: #344054;
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-bold);
+  line-height: var(--ath-line-sm);
 }
 
 .bug-detail-section-meta {
   margin-top: 4px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #667085;
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
+  line-height: var(--ath-line-xs);
 }
 
 .bug-attachment-group {
   display: grid;
-  gap: 12px;
+  gap: var(--ath-space-3);
 }
 
 .bug-attachment-group-title {
-  font-size: 12px;
-  font-weight: 600;
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
+  font-weight: var(--ath-weight-semibold);
   line-height: 1.5;
-  color: #667085;
 }
 
 .bug-attachment-image-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-  gap: 12px;
+  gap: var(--ath-space-3);
 }
 
 .bug-attachment-image-card {
   display: grid;
   gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: #fcfcfd;
+  padding: var(--ath-space-3);
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-subtle);
 }
 
 .bug-attachment-image {
   width: 100%;
   height: 132px;
-  border-radius: 8px;
+  border-radius: var(--ath-radius-md);
   overflow: hidden;
-  background: #f2f4f7;
+  background: var(--ath-bg-muted);
 }
 
 .bug-attachment-caption,
@@ -260,33 +261,33 @@ function formatAttachmentMeta(size: number | null, uploadedByName: string | null
 
 .bug-attachment-name {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--ath-weight-semibold);
   line-height: 1.6;
-  color: #344054;
+  color: var(--ath-text-main);
   word-break: break-word;
 }
 
 .bug-attachment-meta {
-  font-size: 12px;
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
   line-height: 1.6;
-  color: #667085;
   word-break: break-word;
 }
 
 .bug-attachment-file-list {
   display: grid;
-  gap: 12px;
+  gap: var(--ath-space-3);
 }
 
 .bug-attachment-file-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 14px;
-  padding: 14px 16px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: #fff;
+  gap: var(--ath-space-3);
+  padding: var(--ath-space-3) var(--ath-space-4);
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-panel);
 }
 
 .bug-attachment-file-icon {
@@ -294,9 +295,9 @@ function formatAttachmentMeta(size: number | null, uploadedByName: string | null
   width: 38px;
   height: 46px;
   flex: 0 0 auto;
-  border-radius: 8px;
+  border-radius: var(--ath-radius-md);
   border: 1px solid var(--file-tone, #bfd7ff);
-  background: #fff;
+  background: var(--ath-bg-panel);
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
 }
 
@@ -319,7 +320,7 @@ function formatAttachmentMeta(size: number | null, uploadedByName: string | null
   height: 13px;
   background: color-mix(in srgb, var(--file-tone, #bfd7ff) 20%, white);
   clip-path: polygon(0 0, 100% 0, 100% 100%);
-  border-top-right-radius: 8px;
+  border-top-right-radius: var(--ath-radius-md);
   box-shadow: inset -1px 1px 0 rgba(255, 255, 255, 0.85);
 }
 
@@ -394,8 +395,14 @@ function formatAttachmentMeta(size: number | null, uploadedByName: string | null
 .bug-attachment-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ath-space-2);
   flex-wrap: wrap;
+}
+
+.bug-attachment-actions :deep(.el-button) {
+  height: 28px;
+  margin-left: 0;
+  padding: 0;
 }
 
 @media (max-width: 768px) {

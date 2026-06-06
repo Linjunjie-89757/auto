@@ -313,21 +313,22 @@ function submitAssociate() {
 .bug-case-associate-shell {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
-  gap: 16px;
+  gap: var(--ath-space-4);
   min-height: 560px;
 }
 
 .bug-case-associate-sidebar,
 .bug-case-associate-main {
   min-height: 0;
-  border: 1px solid #eaecf0;
-  border-radius: 8px;
-  background: #fff;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+  box-shadow: var(--ath-shadow-xs);
 }
 
 .bug-case-associate-sidebar {
   overflow: auto;
-  padding: 12px 8px;
+  padding: var(--ath-space-3) var(--ath-space-2);
 }
 
 .bug-case-associate-tree {
@@ -337,7 +338,7 @@ function submitAssociate() {
 .bug-case-associate-tree-node {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--ath-space-2);
   min-width: 0;
 }
 
@@ -357,13 +358,13 @@ function submitAssociate() {
 .bug-case-associate-main {
   display: flex;
   flex-direction: column;
-  padding: 16px;
+  padding: var(--ath-space-4);
 }
 
 .bug-case-associate-toolbar {
   display: flex;
   justify-content: flex-end;
-  margin-bottom: 16px;
+  margin-bottom: var(--ath-space-4);
 }
 
 .bug-case-associate-search {
@@ -384,10 +385,18 @@ function submitAssociate() {
 }
 
 .bug-case-associate-table :deep(th.el-table__cell) {
-  background: #fff;
-  color: #98a2b3;
-  font-size: 12px;
-  font-weight: 600;
+  height: 44px;
+  background: var(--ath-bg-page);
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
+  font-weight: var(--ath-weight-semibold);
+}
+
+.bug-case-associate-table :deep(td.el-table__cell) {
+  height: var(--ath-table-row-height);
+  border-bottom-color: var(--ath-border-soft);
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
 }
 
 .bug-case-associate-table :deep(.el-table__row) {
@@ -395,25 +404,25 @@ function submitAssociate() {
 }
 
 .bug-case-associate-table :deep(.el-table__row.current-row > td.el-table__cell) {
-  background: #eff8ff;
+  background: var(--ath-blue-soft);
 }
 
 .bug-case-associate-case-no {
-  color: #175cd3;
-  font-weight: 500;
+  color: var(--ath-primary);
+  font-weight: var(--ath-weight-medium);
 }
 
 .bug-case-associate-pagination {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding-top: 16px;
+  gap: var(--ath-space-3);
+  padding-top: var(--ath-space-4);
 }
 
 .bug-case-associate-selection {
   min-width: 0;
-  color: #667085;
+  color: var(--ath-text-muted);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -421,7 +430,64 @@ function submitAssociate() {
 .bug-case-associate-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
+  gap: var(--ath-space-3);
+}
+
+:deep(.bug-case-associate-dialog.el-dialog) {
+  overflow: hidden;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-xl);
+  box-shadow: var(--ath-shadow-dialog);
+}
+
+:deep(.bug-case-associate-dialog .el-dialog__header) {
+  display: flex;
+  align-items: center;
+  min-height: 56px;
+  margin: 0;
+  padding: 0 var(--ath-space-6);
+  border-bottom: 1px solid var(--ath-border-soft);
+}
+
+:deep(.bug-case-associate-dialog .el-dialog__title) {
+  color: var(--ath-text-strong);
+  font-size: var(--ath-font-base);
+  font-weight: var(--ath-weight-semibold);
+  line-height: var(--ath-line-base);
+}
+
+:deep(.bug-case-associate-dialog .el-dialog__body) {
+  padding: var(--ath-space-5) var(--ath-space-6);
+}
+
+:deep(.bug-case-associate-dialog .el-dialog__footer) {
+  padding: var(--ath-space-3) var(--ath-space-6);
+  border-top: 1px solid var(--ath-border-soft);
+}
+
+:deep(.bug-case-associate-search .el-input__wrapper),
+:deep(.bug-case-associate-pagination .el-select__wrapper),
+:deep(.bug-case-associate-pagination .el-input__wrapper) {
+  border-radius: var(--ath-radius-md);
+  box-shadow: 0 0 0 1px var(--ath-border-strong) inset;
+}
+
+:deep(.bug-case-associate-footer .el-button) {
+  height: var(--ath-control-height-sm);
+  margin-left: 0;
+  border-radius: var(--ath-radius-sm);
+}
+
+:deep(.bug-case-associate-tree .el-tree-node__content) {
+  height: 34px;
+  border-radius: var(--ath-radius-sm);
+  color: var(--ath-text-main);
+}
+
+:deep(.bug-case-associate-tree .el-tree-node__content:hover),
+:deep(.bug-case-associate-tree .el-tree-node.is-current > .el-tree-node__content) {
+  background: var(--ath-blue-soft);
+  color: var(--ath-primary);
 }
 
 @media (max-width: 960px) {

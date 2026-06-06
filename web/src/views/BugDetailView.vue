@@ -233,10 +233,16 @@ async function removeAttachment(attachmentId: number) {
   display: flex;
   min-height: 0;
   height: 100%;
+  padding: var(--ath-space-6);
+  background: var(--ath-bg-page);
+  overflow: auto;
 }
 
 .bug-detail-shell {
   flex: 1;
   min-height: 0;
+  max-width: 1440px;
+  margin: 0 auto;
+  width: 100%;
 }
 </style>

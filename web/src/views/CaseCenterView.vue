@@ -64,20 +64,20 @@ const activeTab = computed({
   flex: 0 0 48px;
   width: 100%;
   border: 0;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--ath-border);
   border-radius: 0;
   background: #ffffff;
   box-shadow: none;
-  padding: 0 24px;
+  padding: 0 var(--ath-space-6);
 }
 
 .case-tabs {
-  --el-color-primary: #111827;
+  --el-color-primary: var(--ath-text-strong);
   display: inline-flex;
   flex: 0 0 auto;
-  border-radius: 8px;
-  background: #f3f4f6;
-  padding: 4px;
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-muted);
+  padding: var(--ath-space-1);
 }
 
 .case-tabs :deep(.el-tabs__header) {
@@ -107,9 +107,9 @@ const activeTab = computed({
 .case-tabs :deep(.el-tabs__item) {
   height: 32px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--ath-radius-sm);
   padding: 0 16px !important;
-  color: #4b5563;
+  color: var(--ath-text-main);
   font-size: 14px;
   font-weight: 500;
   line-height: 20px;
@@ -117,14 +117,14 @@ const activeTab = computed({
 }
 
 .case-tabs :deep(.el-tabs__item:hover) {
-  color: #374151;
+  color: var(--ath-text-main);
 }
 
 .case-tabs :deep(.el-tabs__item.is-active) {
   background: #ffffff;
-  color: #111827;
+  color: var(--ath-text-strong);
   font-weight: 500;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--ath-shadow-xs);
 }
 
 .case-center-content {
@@ -133,7 +133,7 @@ const activeTab = computed({
   display: flex;
   flex-direction: column;
   overflow: auto;
-  padding: 24px;
+  padding: var(--ath-space-6);
 }
 
 .case-center-content > :deep(*) {

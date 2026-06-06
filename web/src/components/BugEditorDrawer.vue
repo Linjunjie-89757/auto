@@ -107,18 +107,20 @@ const primarySubmitText = computed(() => (isEditMode.value ? '保存' : '创建'
 
 .bug-editor-drawer :deep(.el-drawer__header) {
   margin-bottom: 0;
-  padding: 13px 14px;
-  border-bottom: 1px solid #ebeef5;
+  padding: var(--ath-space-5) var(--ath-space-6) var(--ath-space-3);
+  border-bottom: 1px solid var(--ath-border);
 }
 
 .bug-editor-drawer :deep(.el-drawer__body) {
   padding: 0;
   overflow: auto;
+  background: var(--ath-bg-panel);
 }
 
 .bug-editor-drawer :deep(.el-drawer__footer) {
-  padding: 14px 20px 16px;
-  border-top: 1px solid #ebeef5;
+  padding: var(--ath-space-3) var(--ath-space-6);
+  border-top: 1px solid var(--ath-border);
+  background: var(--ath-bg-panel);
 }
 
 .bug-editor-header {
@@ -128,18 +130,23 @@ const primarySubmitText = computed(() => (isEditMode.value ? '保存' : '创建'
 }
 
 .bug-editor-header-title {
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 24px;
-  font-family: "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  color: #323233;
+  color: var(--ath-text-strong);
+  font-size: var(--ath-font-lg);
+  font-weight: var(--ath-weight-semibold);
+  line-height: var(--ath-line-lg);
 }
 
 .bug-editor-footer {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: var(--ath-space-3);
+}
+
+.bug-editor-footer :deep(.el-button) {
+  height: var(--ath-control-height-sm);
+  margin-left: 0;
+  border-radius: var(--ath-radius-sm);
 }
 
 @media (max-width: 1280px) {

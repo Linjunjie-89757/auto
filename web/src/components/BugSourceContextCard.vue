@@ -84,69 +84,77 @@ const emit = defineEmits<{
 <style scoped>
 .bug-detail-section {
   display: grid;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: #fff;
+  gap: var(--ath-space-3);
+  padding: var(--ath-space-5);
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+  box-shadow: var(--ath-shadow-xs);
 }
 
 .bug-detail-section-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--ath-space-3);
 }
 
 .bug-detail-section-title {
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1.5;
-  color: #344054;
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-bold);
+  line-height: var(--ath-line-sm);
 }
 
 .bug-detail-section-meta {
   margin-top: 4px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #667085;
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
+  line-height: var(--ath-line-xs);
 }
 
 .bug-source-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--ath-space-3);
 }
 
 .bug-source-card {
   display: grid;
   gap: 6px;
-  padding: 14px 16px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: #fcfcfd;
+  padding: var(--ath-space-3) var(--ath-space-4);
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-subtle);
 }
 
 .bug-source-card-title {
-  font-size: 12px;
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
   line-height: 1.5;
-  color: #667085;
 }
 
 .bug-source-card-value {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--ath-weight-semibold);
   line-height: 1.6;
-  color: #344054;
+  color: var(--ath-text-main);
   word-break: break-word;
 }
 
 .bug-source-card-meta,
 .bug-source-card-empty {
-  font-size: 12px;
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
   line-height: 1.6;
-  color: #667085;
   word-break: break-word;
+}
+
+.bug-source-card :deep(.el-button.is-text) {
+  width: fit-content;
+  height: 28px;
+  margin-left: 0;
+  padding: 0;
 }
 
 @media (max-width: 900px) {

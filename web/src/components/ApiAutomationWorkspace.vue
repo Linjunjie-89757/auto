@@ -10079,7 +10079,7 @@ function formatTimeLabel(value?: string | null) {
                   </div>
                 </div>
 
-                <div class="execution-recent-panel">
+                <div v-if="false" class="execution-recent-panel">
                   <div class="execution-recent-title">最近执行任务</div>
                   <el-table :data="apiTasks.slice(0, 4)" size="small" class="execution-task-table">
                     <el-table-column prop="taskName" label="任务名称" min-width="180" />
@@ -10147,7 +10147,13 @@ function formatTimeLabel(value?: string | null) {
       </el-tab-pane>
 
       <el-tab-pane label="报告" name="reports">
-        <section class="panel shell-card table-panel">
+        <div class="api-tab-placeholder">
+          <div>
+            <FileText :size="34" />
+            <p>报告 页面建设中...</p>
+          </div>
+        </div>
+        <section v-if="false" class="panel shell-card table-panel">
           <div class="panel-header">
             <div class="panel-title">执行报告</div>
             <div class="panel-subtitle">保留原有报告体系，同时增加步骤级请求 / 响应 / 断言明细。</div>
@@ -10167,7 +10173,13 @@ function formatTimeLabel(value?: string | null) {
       </el-tab-pane>
 
       <el-tab-pane label="设置" name="settings">
-        <div class="settings-grid">
+        <div class="api-tab-placeholder">
+          <div>
+            <Settings2 :size="34" />
+            <p>设置 页面建设中...</p>
+          </div>
+        </div>
+        <div v-if="false" class="settings-grid">
           <section class="panel shell-card">
             <div class="panel-header">
               <div class="panel-title">执行环境</div>
@@ -11625,6 +11637,41 @@ function formatTimeLabel(value?: string | null) {
   border-color: #2563eb;
 }
 
+.api-tab-placeholder {
+  display: flex;
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: var(--ath-text-subtle);
+  font-size: var(--ath-font-sm);
+  text-align: center;
+}
+
+.api-tab-placeholder > div {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  min-width: min(520px, calc(100vw - 64px));
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: linear-gradient(180deg, #ffffff 0%, var(--ath-bg-subtle) 100%);
+  padding: var(--ath-space-8);
+  box-shadow: var(--ath-shadow-xs);
+}
+
+.api-tab-placeholder svg {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-blue-soft);
+  padding: 10px;
+  color: var(--ath-primary);
+}
+
+.api-tab-placeholder p {
+  margin: 0;
+}
+
 .api-tabs {
   display: flex;
   flex: 1 1 auto;
@@ -12191,7 +12238,7 @@ function formatTimeLabel(value?: string | null) {
 .scenario-editor-tabs :deep(.el-tabs__content) {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .ms-scenario-list-shell {
@@ -12239,7 +12286,9 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .scenario-editor-tabs :deep(.el-tab-pane) {
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .scenario-editor-more-button {
@@ -12491,8 +12540,10 @@ function formatTimeLabel(value?: string | null) {
 
 .scenario-property-panel {
   display: flex;
+  min-height: 0;
   min-width: 0;
   flex-direction: column;
+  overflow: hidden;
   padding: 12px;
   background: #ffffff;
 }
@@ -12500,6 +12551,7 @@ function formatTimeLabel(value?: string | null) {
 .scenario-property-card {
   display: flex;
   flex: 1 1 auto;
+  height: 100%;
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
@@ -12511,8 +12563,8 @@ function formatTimeLabel(value?: string | null) {
 
 .scenario-property-header {
   display: grid;
-  gap: 12px;
-  padding: 16px;
+  gap: 10px;
+  padding: 12px;
   border-bottom: 1px solid #f3f4f6;
 }
 
@@ -12531,7 +12583,7 @@ function formatTimeLabel(value?: string | null) {
 }
 
 .scenario-property-field :deep(.el-textarea__inner) {
-  min-height: 92px;
+  min-height: 76px;
   padding: 8px 12px;
 }
 
@@ -12583,10 +12635,13 @@ function formatTimeLabel(value?: string | null) {
 
 .scenario-property-body {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: 18px;
-  padding: 16px;
-  overflow: auto;
+  gap: 12px;
+  min-height: 0;
+  padding: 12px;
+  padding-bottom: 16px;
+  overflow-y: auto;
 }
 
 .scenario-property-field {
@@ -18355,6 +18410,900 @@ pre {
 .case-list-pagination :deep(.el-pagination) {
   --el-pagination-button-width: 28px;
   --el-pagination-button-height: 28px;
+}
+
+.api-automation-page {
+  border-color: var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+  box-shadow: var(--ath-shadow-xs);
+}
+
+.api-tabs > :deep(.el-tabs__header) {
+  border-bottom-color: var(--ath-border);
+  background: var(--ath-bg-panel);
+}
+
+.api-tabs > :deep(.el-tabs__header .el-tabs__nav-wrap) {
+  background: var(--ath-bg-muted);
+}
+
+.api-tabs > :deep(.el-tabs__header .el-tabs__item.is-active),
+.api-tabs > :deep(.el-tabs__content),
+.shell-card,
+.ms-like-layout,
+.ms-scenario-workbench,
+.scenario-main-pane,
+.ms-like-main {
+  background: var(--ath-bg-panel);
+}
+
+.ms-like-sidebar,
+.scenario-module-pane {
+  border-right-color: var(--ath-border);
+  background: var(--ath-bg-panel);
+}
+
+.ms-like-sidebar-actions,
+.ms-like-sidebar-search,
+.ms-like-directory-title-row,
+.ms-like-directory-shell,
+.scenario-module-pane .ms-like-sidebar-tools,
+.scenario-module-pane .ms-like-directory-shell {
+  background: var(--ath-bg-panel);
+}
+
+.ms-like-sidebar-secondary,
+.ms-like-curl-button {
+  border-color: var(--ath-input-border);
+  background: var(--ath-bg-panel);
+  color: var(--ath-text-main);
+}
+
+.ms-like-sidebar-secondary:hover,
+.ms-like-curl-button:hover {
+  border-color: var(--ath-border-strong);
+  background: var(--ath-bg-page);
+}
+
+.ms-like-sidebar-search :deep(.el-input__wrapper),
+.scenario-sidebar-search :deep(.el-input__wrapper),
+.ms-scenario-search :deep(.el-input__wrapper) {
+  height: var(--ath-control-height-md);
+  min-height: var(--ath-control-height-md);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-page);
+  box-shadow: inset 0 0 0 1px var(--ath-input-border);
+}
+
+.ms-like-sidebar-search :deep(.el-input__wrapper:hover),
+.scenario-sidebar-search :deep(.el-input__wrapper:hover),
+.ms-scenario-search :deep(.el-input__wrapper:hover) {
+  box-shadow: inset 0 0 0 1px var(--ath-border-strong);
+}
+
+.ms-like-sidebar-search :deep(.el-input.is-focus .el-input__wrapper),
+.scenario-sidebar-search :deep(.el-input.is-focus .el-input__wrapper),
+.scenario-sidebar-search :deep(.el-input__wrapper.is-focus),
+.ms-scenario-search :deep(.el-input.is-focus .el-input__wrapper),
+.ms-scenario-search :deep(.el-input__wrapper.is-focus) {
+  box-shadow: inset 0 0 0 1px var(--ath-blue), var(--ath-focus-ring);
+}
+
+.ms-like-directory-title-row,
+.scenario-directory-title-row {
+  border-bottom-color: var(--ath-border);
+  color: var(--ath-text-main);
+}
+
+.ms-like-directory-tree :deep(.el-tree-node__content),
+.scenario-module-tree :deep(.el-tree-node__content) {
+  border-radius: var(--ath-radius-md);
+  color: var(--ath-text-main);
+}
+
+.ms-like-directory-tree :deep(.el-tree-node__content:hover),
+.scenario-module-tree :deep(.el-tree-node__content:hover) {
+  background: var(--ath-bg-muted);
+}
+
+.ms-like-directory-tree :deep(.el-tree-node.is-current > .el-tree-node__content),
+.scenario-module-tree :deep(.el-tree-node.is-current > .el-tree-node__content) {
+  background: var(--ath-blue-soft);
+  color: var(--ath-primary);
+}
+
+.scenario-editor-tab-strip,
+.ms-like-tab-strip {
+  border-bottom-color: var(--ath-border);
+  background: var(--ath-bg-panel);
+}
+
+.scenario-editor-tab-strip .ms-like-editor-tab {
+  border-right-color: var(--ath-border);
+  background: var(--ath-bg-page);
+  color: var(--ath-text-muted);
+}
+
+.scenario-editor-tab-strip .ms-like-editor-tab.active,
+.ms-like-editor-tab.active,
+.ms-like-editor-tab:hover {
+  background: var(--ath-bg-panel);
+  color: var(--ath-text-strong);
+}
+
+.scenario-editor-tab-strip .ms-like-editor-tab.active::after,
+.ms-like-editor-tab.active {
+  border-bottom-color: var(--ath-blue);
+}
+
+.ms-scenario-list-shell {
+  min-height: 0;
+  flex: 1 1 auto;
+  background: var(--ath-bg-panel);
+}
+
+.ms-scenario-list-toolbar {
+  align-items: center;
+  min-height: 64px;
+  border-bottom: 1px solid var(--ath-border-soft);
+  background: var(--ath-bg-panel);
+  padding: var(--ath-space-4);
+}
+
+.scenario-list-toolbar {
+  border-bottom-color: var(--ath-border-soft);
+  background: var(--ath-bg-panel);
+}
+
+.ms-scenario-tool-button,
+.ms-scenario-icon-button {
+  height: var(--ath-control-height-sm);
+  border-radius: var(--ath-radius-md);
+}
+
+.ms-scenario-table,
+.case-list-table {
+  --el-table-header-bg-color: var(--ath-bg-page);
+  --el-table-header-text-color: var(--ath-text-muted);
+  --el-table-text-color: var(--ath-text-main);
+  --el-table-border-color: var(--ath-border-soft);
+  --el-table-row-hover-bg-color: #fbfdff;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+}
+
+.ms-scenario-table :deep(.el-table__inner-wrapper),
+.case-list-table :deep(.el-table__inner-wrapper) {
+  border: 0;
+  border-radius: 0;
+}
+
+.ms-scenario-table :deep(.el-table__header th),
+.case-list-table :deep(.el-table__header-wrapper th) {
+  height: 44px;
+  background: var(--ath-bg-page);
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
+  font-weight: var(--ath-weight-semibold);
+}
+
+.ms-scenario-table :deep(.el-table__row td),
+.case-list-table :deep(.el-table__body-wrapper td) {
+  height: 48px;
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+}
+
+.ms-scenario-table :deep(.el-table__row:hover > td.el-table__cell),
+.case-list-table :deep(.el-table__row:hover > td.el-table__cell) {
+  background: #fbfdff;
+}
+
+.case-list-table-wrap {
+  gap: var(--ath-space-3);
+}
+
+.case-list-pagination {
+  min-height: 44px;
+  border-top: 1px solid var(--ath-border-soft);
+  padding: var(--ath-space-2) 0 0;
+}
+
+.case-list-pagination-summary {
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
+}
+
+.empty-hint {
+  border-color: var(--ath-border-strong);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-page);
+  color: var(--ath-text-subtle);
+}
+
+.ms-like-form-panel,
+.metric-card,
+.asset-item,
+.history-row,
+.result-item {
+  border-color: var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+}
+
+:global(.api-soft-dialog .el-dialog),
+:global(.api-soft-drawer .el-drawer) {
+  border-color: var(--ath-border);
+  box-shadow: var(--ath-shadow-dialog);
+}
+
+:global(.api-soft-dialog .el-dialog__header),
+:global(.api-soft-drawer .el-drawer__header),
+:global(.api-soft-dialog .el-dialog__footer),
+:global(.api-soft-drawer .el-drawer__footer) {
+  border-color: var(--ath-border-soft);
+  background: var(--ath-bg-panel);
+}
+
+:global(.api-soft-dialog .el-dialog__body),
+:global(.api-soft-drawer .el-drawer__body) {
+  background: var(--ath-bg-panel);
+}
+
+.api-soft-dialog :deep(.el-form-item__label),
+.api-soft-drawer :deep(.el-form-item__label) {
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-medium);
+  line-height: var(--ath-line-sm);
+}
+
+.api-soft-dialog :deep(.el-input__wrapper),
+.api-soft-dialog :deep(.el-select__wrapper),
+.api-soft-drawer :deep(.el-input__wrapper),
+.api-soft-drawer :deep(.el-select__wrapper) {
+  min-height: var(--ath-control-height-md);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-panel);
+  box-shadow: inset 0 0 0 1px var(--ath-input-border);
+}
+
+.api-soft-dialog :deep(.el-input__wrapper:hover),
+.api-soft-dialog :deep(.el-select__wrapper:hover),
+.api-soft-drawer :deep(.el-input__wrapper:hover),
+.api-soft-drawer :deep(.el-select__wrapper:hover) {
+  box-shadow: inset 0 0 0 1px var(--ath-border-strong);
+}
+
+.api-soft-dialog :deep(.el-input.is-focus .el-input__wrapper),
+.api-soft-dialog :deep(.el-select__wrapper.is-focused),
+.api-soft-drawer :deep(.el-input.is-focus .el-input__wrapper),
+.api-soft-drawer :deep(.el-select__wrapper.is-focused) {
+  box-shadow: inset 0 0 0 1px var(--ath-blue), var(--ath-focus-ring);
+}
+
+.api-soft-dialog :deep(.el-textarea__inner),
+.api-soft-drawer :deep(.el-textarea__inner) {
+  border-color: var(--ath-input-border);
+  border-radius: var(--ath-radius-md);
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+  line-height: 1.6;
+  box-shadow: none;
+}
+
+.api-soft-dialog :deep(.el-textarea__inner:hover),
+.api-soft-drawer :deep(.el-textarea__inner:hover) {
+  border-color: var(--ath-border-strong);
+}
+
+.api-soft-dialog :deep(.el-textarea__inner:focus),
+.api-soft-drawer :deep(.el-textarea__inner:focus) {
+  border-color: var(--ath-blue);
+  box-shadow: var(--ath-focus-ring);
+}
+
+.api-soft-dialog :deep(.el-button),
+.api-soft-drawer :deep(.el-button) {
+  border-radius: var(--ath-radius-md);
+  font-weight: var(--ath-weight-medium);
+}
+
+.api-soft-dialog :deep(.dialog-footer),
+.api-soft-drawer :deep(.dialog-footer),
+.scenario-step-config-footer,
+.scenario-import-footer {
+  align-items: center;
+  gap: var(--ath-space-3);
+}
+
+.scenario-import-drawer :deep(.el-drawer__header),
+.scenario-import-drawer :deep(.el-drawer__footer) {
+  border-color: var(--ath-border-soft);
+  background: var(--ath-bg-panel);
+}
+
+.scenario-import-drawer :deep(.el-drawer__header) {
+  min-height: 64px;
+  padding: 0 var(--ath-space-6);
+}
+
+.scenario-import-drawer :deep(.el-drawer__footer) {
+  padding: var(--ath-space-4) var(--ath-space-6);
+}
+
+.scenario-import-shell {
+  background: var(--ath-bg-panel);
+}
+
+.scenario-import-tabs :deep(.el-tabs__header) {
+  padding: 0 var(--ath-space-6);
+}
+
+.scenario-import-tabs :deep(.el-tabs__nav-wrap::after) {
+  background: var(--ath-border-soft);
+}
+
+.scenario-import-tabs :deep(.el-tabs__item) {
+  height: 44px;
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-medium);
+}
+
+.scenario-import-tabs :deep(.el-tabs__item.is-active) {
+  color: var(--ath-primary);
+}
+
+.scenario-import-content {
+  background: var(--ath-bg-panel);
+}
+
+.scenario-import-tree-pane {
+  border-right-color: var(--ath-border);
+  background: var(--ath-bg-subtle);
+  padding: var(--ath-space-4);
+}
+
+.scenario-import-tree :deep(.el-tree) {
+  background: transparent;
+}
+
+.scenario-import-tree :deep(.el-tree-node__content) {
+  height: 34px;
+  border-radius: var(--ath-radius-md);
+  color: var(--ath-text-main);
+}
+
+.scenario-import-tree :deep(.el-tree-node__content:hover) {
+  background: var(--ath-bg-muted);
+}
+
+.scenario-import-tree :deep(.el-tree-node.is-current > .el-tree-node__content) {
+  background: var(--ath-blue-soft);
+  color: var(--ath-primary);
+}
+
+.scenario-import-tree-label {
+  color: inherit;
+  font-size: var(--ath-font-sm);
+}
+
+.scenario-import-tree-count {
+  color: var(--ath-text-subtle);
+  font-size: var(--ath-font-xs);
+}
+
+.scenario-import-table-pane {
+  padding: var(--ath-space-5);
+}
+
+.scenario-import-table-title {
+  color: var(--ath-text-strong);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-semibold);
+  line-height: var(--ath-line-sm);
+}
+
+.scenario-import-table-title span,
+.scenario-import-summary {
+  color: var(--ath-text-muted);
+}
+
+.scenario-import-summary strong {
+  color: var(--ath-primary);
+}
+
+.scenario-import-table-pane :deep(.el-table),
+.scenario-step-config-body :deep(.el-table),
+.report-drawer :deep(.el-table),
+.assertion-result-table {
+  --el-table-header-bg-color: var(--ath-bg-page);
+  --el-table-header-text-color: var(--ath-text-muted);
+  --el-table-text-color: var(--ath-text-main);
+  --el-table-border-color: var(--ath-border-soft);
+  --el-table-row-hover-bg-color: #fbfdff;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  overflow: hidden;
+}
+
+.scenario-import-table-pane :deep(.el-table__header-wrapper th),
+.scenario-step-config-body :deep(.el-table__header-wrapper th),
+.report-drawer :deep(.el-table__header-wrapper th),
+.assertion-result-table :deep(.el-table__header-wrapper th) {
+  height: 44px;
+  background: var(--ath-bg-page);
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
+  font-weight: var(--ath-weight-semibold);
+}
+
+.scenario-import-table-pane :deep(.el-table__body-wrapper td),
+.scenario-step-config-body :deep(.el-table__body-wrapper td),
+.report-drawer :deep(.el-table__body-wrapper td),
+.assertion-result-table :deep(.el-table__body-wrapper td) {
+  height: 48px;
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+}
+
+.scenario-step-config-drawer :deep(.el-drawer__body) {
+  background: var(--ath-bg-page);
+}
+
+.scenario-step-config-shell {
+  min-height: 100%;
+  background: var(--ath-bg-page);
+}
+
+.scenario-drawer-title-row,
+.scenario-script-drawer-title {
+  color: var(--ath-text-strong);
+}
+
+.scenario-drawer-step-order {
+  background: var(--ath-bg-muted);
+  color: var(--ath-text-muted);
+}
+
+.scenario-drawer-step-title {
+  color: var(--ath-text-strong);
+  font-size: var(--ath-font-base);
+  font-weight: var(--ath-weight-semibold);
+}
+
+.scenario-drawer-title-input :deep(.el-input__wrapper) {
+  border-radius: var(--ath-radius-md);
+  box-shadow: inset 0 0 0 1px var(--ath-blue);
+}
+
+.scenario-drawer-title-input :deep(.el-input.is-focus .el-input__wrapper),
+.scenario-drawer-title-input :deep(.el-input__wrapper.is-focus) {
+  box-shadow: inset 0 0 0 1px var(--ath-blue), var(--ath-focus-ring);
+}
+
+.scenario-step-config-request-row,
+.scenario-step-config-tabs,
+.scenario-step-config-body,
+.scenario-system-request-body,
+.scenario-custom-request-body,
+.scenario-script-editor-pane,
+.scenario-script-assertion-pane,
+.scenario-script-result-shell,
+.ms-like-response-shell {
+  border-color: var(--ath-border);
+  background: var(--ath-bg-panel);
+}
+
+.scenario-step-config-tabs {
+  border-bottom: 1px solid var(--ath-border-soft);
+}
+
+.scenario-system-list-item,
+.scenario-step-table,
+.batch-drawer-hint,
+.metric-card,
+.result-item {
+  border-color: var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+}
+
+.scenario-system-list-item {
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+}
+
+.scenario-system-body-type,
+.scenario-script-field,
+.scenario-script-field-label,
+.scenario-script-editor-header {
+  color: var(--ath-text-main);
+}
+
+.scenario-script-mode-tab {
+  border-color: var(--ath-border);
+  background: var(--ath-bg-page);
+  color: var(--ath-text-muted);
+}
+
+.scenario-script-mode-tab:first-child {
+  border-top-left-radius: var(--ath-radius-md);
+  border-bottom-left-radius: var(--ath-radius-md);
+}
+
+.scenario-script-mode-tab:last-child,
+.scenario-script-mode-tab.is-disabled {
+  border-top-right-radius: var(--ath-radius-md);
+  border-bottom-right-radius: var(--ath-radius-md);
+}
+
+.scenario-script-mode-tab.active {
+  border-color: var(--ath-blue);
+  background: var(--ath-bg-panel);
+  color: var(--ath-primary);
+  box-shadow: inset 0 0 0 1px var(--ath-blue-soft);
+}
+
+.scenario-script-mode-tab.is-disabled {
+  background: var(--ath-bg-muted);
+  color: var(--ath-text-subtle);
+}
+
+.scenario-script-editor-header {
+  border-color: var(--ath-border);
+  background: var(--ath-bg-panel);
+}
+
+.batch-add-soft-drawer :deep(.el-drawer__body) {
+  background: var(--ath-bg-panel);
+}
+
+.batch-drawer {
+  gap: var(--ath-space-4);
+}
+
+.batch-drawer-mode-row {
+  border-color: var(--ath-border);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-muted);
+}
+
+.batch-drawer-mode-row button {
+  border-radius: var(--ath-radius-sm);
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-xs);
+  font-weight: var(--ath-weight-medium);
+}
+
+.batch-drawer-mode-row button.active {
+  background: var(--ath-bg-panel);
+  color: var(--ath-primary);
+  box-shadow: var(--ath-shadow-xs);
+}
+
+.batch-drawer-hint {
+  background: var(--ath-bg-page);
+}
+
+.batch-drawer-label,
+.batch-drawer-example {
+  color: var(--ath-text-main);
+}
+
+.batch-drawer-note {
+  color: var(--ath-text-muted);
+}
+
+.batch-drawer-textarea :deep(.el-textarea__inner) {
+  border-color: var(--ath-input-border);
+  border-radius: var(--ath-radius-lg);
+  color: var(--ath-text-strong);
+  font-size: var(--ath-font-sm);
+  box-shadow: none;
+}
+
+.batch-drawer-textarea :deep(.el-textarea__inner:focus) {
+  border-color: var(--ath-blue);
+  box-shadow: var(--ath-focus-ring);
+}
+
+.report-drawer {
+  gap: var(--ath-space-4);
+}
+
+.report-drawer .detail-grid {
+  gap: var(--ath-space-3);
+}
+
+.report-drawer .detail-grid > div,
+.step-card {
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+  padding: var(--ath-space-4);
+  box-shadow: var(--ath-shadow-xs);
+}
+
+.report-drawer .detail-grid span,
+.step-meta,
+.snapshot-title {
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
+}
+
+.report-drawer .detail-grid strong,
+.step-title {
+  color: var(--ath-text-strong);
+  font-size: var(--ath-font-sm);
+}
+
+pre {
+  border-color: var(--ath-border);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-page);
+  color: var(--ath-text-main);
+}
+
+.ms-like-request-row {
+  border-bottom-color: var(--ath-border);
+  background: var(--ath-bg-panel);
+  padding: var(--ath-space-3) var(--ath-space-4);
+}
+
+.ms-like-url-compose {
+  border-color: var(--ath-input-border);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-panel);
+}
+
+.ms-like-url-compose .request-method-select :deep(.el-select__wrapper) {
+  border-right-color: var(--ath-border);
+  background: var(--ath-bg-page);
+}
+
+.ms-like-curl-button {
+  border-color: var(--ath-border);
+  background: var(--ath-bg-panel);
+  color: var(--ath-primary);
+}
+
+.ms-like-save-dropdown :deep(.el-button) {
+  border-color: var(--ath-input-border);
+  background: var(--ath-bg-panel);
+  color: var(--ath-text-main);
+}
+
+.ms-like-save-dropdown :deep(.el-button:hover:not(.is-disabled)) {
+  border-color: var(--ath-border-strong);
+  background: var(--ath-bg-page);
+  color: var(--ath-text-strong);
+}
+
+.ms-like-request-content-panel,
+.ms-like-editor-scroll,
+.ms-like-request-shell,
+.ms-like-request-body,
+.ms-like-response-content-panel {
+  background: var(--ath-bg-panel);
+}
+
+.ms-like-top-tabs,
+.ms-like-response-tabs {
+  border-bottom-color: var(--ath-border);
+  background: var(--ath-bg-panel);
+  padding: 0 var(--ath-space-4);
+}
+
+.ms-like-top-tab {
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-sm);
+}
+
+.ms-like-top-tab:hover {
+  color: var(--ath-text-main);
+}
+
+.ms-like-top-tab.active {
+  border-bottom-color: var(--ath-primary);
+  color: var(--ath-primary);
+}
+
+.ms-like-tab-badge {
+  background: var(--ath-bg-muted);
+  color: var(--ath-text-muted);
+}
+
+.ms-like-body-mode-shell,
+.ms-like-table-surface,
+.ms-like-form-panel {
+  border-color: var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+}
+
+.ms-like-body-mode-shell.is-none,
+.ms-like-empty-body {
+  background: var(--ath-bg-page);
+  color: var(--ath-text-subtle);
+}
+
+.ms-like-body-chip {
+  border-color: var(--ath-input-border);
+  border-radius: var(--ath-radius-sm);
+  background: var(--ath-bg-panel);
+  color: var(--ath-text-muted);
+}
+
+.ms-like-body-chip:hover {
+  border-color: var(--ath-border-strong);
+  background: var(--ath-bg-muted);
+  color: var(--ath-text-main);
+}
+
+.ms-like-body-chip.active,
+.ms-like-body-chip.active:hover {
+  border-color: var(--ath-blue);
+  background: var(--ath-blue-soft);
+  color: var(--ath-primary);
+}
+
+.ms-like-table-header {
+  border-bottom-color: var(--ath-border);
+  background: var(--ath-bg-page);
+  color: var(--ath-text-muted);
+}
+
+.ms-like-param-table .ms-like-header-input-title,
+.ms-like-param-table .ms-like-table-header > span {
+  color: var(--ath-text-muted);
+  font-weight: var(--ath-weight-semibold);
+}
+
+.ms-like-table-row {
+  min-height: 44px;
+  border-bottom-color: var(--ath-border-soft);
+}
+
+.ms-like-table-row:hover {
+  background: #fbfdff;
+}
+
+.ms-like-table-row.is-drag-over {
+  background: var(--ath-blue-soft);
+}
+
+.ms-like-drag-dot {
+  background: var(--ath-text-disabled);
+}
+
+.ms-like-table-row:hover .ms-like-drag-dot,
+.ms-like-table-row.is-drag-over .ms-like-drag-dot {
+  background: var(--ath-text-subtle);
+}
+
+.ms-like-checkbox-field :deep(.el-input__wrapper),
+.ms-like-name-field :deep(.el-input__wrapper),
+.ms-like-type-field :deep(.el-select__wrapper),
+.ms-like-table-row :deep(.el-input__wrapper),
+.ms-like-table-row :deep(.el-select__wrapper) {
+  border-radius: var(--ath-radius-sm);
+  background: transparent;
+}
+
+.ms-like-checkbox-field :deep(.el-input__wrapper:hover),
+.ms-like-name-field :deep(.el-input__wrapper:hover),
+.ms-like-type-field :deep(.el-select__wrapper:hover),
+.ms-like-table-row :deep(.el-input__wrapper:hover),
+.ms-like-table-row :deep(.el-select__wrapper:hover) {
+  box-shadow: inset 0 0 0 1px var(--ath-input-border);
+  background: var(--ath-bg-panel);
+}
+
+.ms-like-checkbox-field :deep(.el-input.is-focus .el-input__wrapper),
+.ms-like-name-field :deep(.el-input.is-focus .el-input__wrapper),
+.ms-like-type-field :deep(.el-select.is-focus .el-select__wrapper),
+.ms-like-type-field :deep(.el-select__wrapper.is-focused),
+.ms-like-table-row :deep(.el-input.is-focus .el-input__wrapper),
+.ms-like-table-row :deep(.el-select.is-focus .el-select__wrapper),
+.ms-like-table-row :deep(.el-select__wrapper.is-focused) {
+  box-shadow: inset 0 0 0 1px var(--ath-blue), 0 0 0 2px rgba(59, 130, 246, 0.12);
+  background: var(--ath-bg-panel);
+}
+
+.ms-like-switch-cell,
+.ms-like-length-range-cell,
+.ms-like-file-param-cell small {
+  color: var(--ath-text-muted);
+}
+
+.ms-like-file-pick {
+  color: var(--ath-text-main);
+}
+
+.ms-like-file-pick:hover {
+  background: var(--ath-bg-page);
+  color: var(--ath-primary);
+}
+
+.ms-like-link-button,
+.ms-like-add-row,
+.add-row-button {
+  color: var(--ath-primary);
+}
+
+.ms-like-row-remove {
+  color: var(--ath-red);
+}
+
+.ms-like-form-row {
+  border-bottom-color: var(--ath-border-soft);
+}
+
+.ms-like-form-label {
+  color: var(--ath-text-muted);
+}
+
+.ms-like-form-control :deep(.el-input__wrapper),
+.ms-like-form-control :deep(.el-textarea__inner),
+.ms-like-form-control.full-width :deep(.el-input__wrapper) {
+  border-radius: var(--ath-radius-md);
+  box-shadow: inset 0 0 0 1px var(--ath-input-border);
+}
+
+.ms-like-form-control :deep(.el-input__wrapper:hover),
+.ms-like-form-control :deep(.el-textarea__inner:hover) {
+  box-shadow: inset 0 0 0 1px var(--ath-border-strong);
+}
+
+.ms-like-form-control :deep(.el-input__wrapper.is-focus),
+.ms-like-form-control :deep(.el-textarea__inner:focus) {
+  box-shadow: inset 0 0 0 1px var(--ath-blue), var(--ath-focus-ring);
+}
+
+.ms-like-settings-hint {
+  border-top-color: var(--ath-border-soft);
+  background: var(--ath-bg-page);
+  color: var(--ath-text-muted);
+}
+
+.ms-like-editor-scroll > .ms-like-response-shell {
+  border-top-color: var(--ath-border);
+}
+
+.ms-like-response-header {
+  border-bottom-color: var(--ath-border);
+  background: var(--ath-bg-panel);
+}
+
+.ms-like-response-title {
+  color: var(--ath-text-strong);
+}
+
+.ms-like-response-empty-window {
+  border-color: var(--ath-border);
+  background: var(--ath-bg-page);
+}
+
+.ms-like-response-empty-window span {
+  background: var(--ath-text-subtle);
+}
+
+.ms-like-response-empty-text {
+  color: var(--ath-text-muted);
+}
+
+.ms-like-response-empty-text span {
+  color: var(--ath-primary);
+}
+
+.assertion-result-empty {
+  color: var(--ath-text-subtle);
+  background: var(--ath-bg-page);
 }
 
 :deep(.case-list-more-menu .case-list-menu-item) {

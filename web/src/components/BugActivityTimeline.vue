@@ -81,48 +81,49 @@ function formatActivityDetail(item: BugActivity) {
 <style scoped>
 .bug-detail-section {
   display: grid;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: #fff;
+  gap: var(--ath-space-3);
+  padding: var(--ath-space-5);
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+  box-shadow: var(--ath-shadow-xs);
 }
 
 .bug-detail-section-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--ath-space-3);
 }
 
 .bug-detail-section-title {
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1.5;
-  color: #344054;
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-bold);
+  line-height: var(--ath-line-sm);
 }
 
 .bug-detail-section-meta {
   margin-top: 4px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #667085;
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
+  line-height: var(--ath-line-xs);
 }
 
 .bug-activity-list {
   display: grid;
-  gap: 12px;
+  gap: var(--ath-space-3);
 }
 
 .bug-activity-item {
   display: grid;
   grid-template-columns: 12px minmax(0, 1fr) auto;
-  gap: 12px;
+  gap: var(--ath-space-3);
   align-items: flex-start;
-  padding: 14px 16px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: #fcfcfd;
+  padding: var(--ath-space-3) var(--ath-space-4);
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-subtle);
 }
 
 .bug-activity-dot {
@@ -130,7 +131,8 @@ function formatActivityDetail(item: BugActivity) {
   height: 10px;
   margin-top: 6px;
   border-radius: 999px;
-  background: #409eff;
+  background: var(--ath-primary);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
 }
 
 .bug-activity-main {
@@ -141,16 +143,16 @@ function formatActivityDetail(item: BugActivity) {
 
 .bug-activity-summary {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--ath-weight-semibold);
   line-height: 1.6;
-  color: #344054;
+  color: var(--ath-text-main);
 }
 
 .bug-activity-detail,
 .bug-activity-time {
-  font-size: 12px;
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
   line-height: 1.6;
-  color: #667085;
   word-break: break-word;
 }
 

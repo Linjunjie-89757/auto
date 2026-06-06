@@ -1516,15 +1516,16 @@ function sanitizeStyle(value: string) {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #fff;
+  background: var(--ath-bg-panel);
 }
 
 .ms-bug-detail-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 16px 20px 0;
+  gap: var(--ath-space-4);
+  padding: var(--ath-space-5) var(--ath-space-6) var(--ath-space-3);
+  border-bottom: 1px solid var(--ath-border);
   flex: 0 0 auto;
 }
 
@@ -1543,10 +1544,10 @@ function sanitizeStyle(value: string) {
 
 .ms-bug-detail-object-no {
   flex: 0 0 auto;
-  color: #175cd3;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.5;
+  color: var(--ath-primary);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-semibold);
+  line-height: var(--ath-line-sm);
 }
 
 .ms-bug-detail-object-name {
@@ -1559,22 +1560,22 @@ function sanitizeStyle(value: string) {
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #101828;
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 1.5;
+  color: var(--ath-text-strong);
+  font-size: var(--ath-font-lg);
+  font-weight: var(--ath-weight-semibold);
+  line-height: var(--ath-line-lg);
   cursor: default;
 }
 
 .ms-bug-detail-object-name.is-clickable {
-  border-radius: 6px;
+  border-radius: var(--ath-radius-sm);
   cursor: pointer;
 }
 
 .ms-bug-detail-object-name.is-clickable:hover,
 .ms-bug-detail-object-name.is-clickable:focus-visible {
-  color: #175cd3;
-  background: #eff8ff;
+  color: var(--ath-primary);
+  background: var(--ath-blue-soft);
   outline: none;
 }
 
@@ -1589,8 +1590,8 @@ function sanitizeStyle(value: string) {
 }
 
 .ms-bug-detail-title-input :deep(.el-input__wrapper) {
-  border-radius: 6px;
-  min-height: 36px;
+  min-height: var(--ath-control-height-md);
+  border-radius: var(--ath-radius-md);
 }
 
 .ms-bug-detail-priority-tag {
@@ -1619,9 +1620,9 @@ function sanitizeStyle(value: string) {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-right: 12px;
-  padding-right: 12px;
-  border-right: 1px solid #e4e7ec;
+  margin-right: var(--ath-space-3);
+  padding-right: var(--ath-space-3);
+  border-right: 1px solid var(--ath-border);
 }
 
 .ms-bug-detail-nav-button {
@@ -1633,15 +1634,15 @@ function sanitizeStyle(value: string) {
 .ms-bug-detail-top-actions :deep(.el-button) {
   height: 30px;
   padding: 0 10px;
-  border-radius: 6px;
-  color: #344054;
+  border-radius: var(--ath-radius-sm);
+  color: var(--ath-text-main);
   font-size: 13px;
 }
 
 .ms-bug-detail-top-actions :deep(.el-button:hover),
 .ms-bug-detail-top-actions :deep(.el-button:focus-visible) {
-  color: #175cd3;
-  background: #eff8ff;
+  color: var(--ath-primary);
+  background: var(--ath-blue-soft);
 }
 
 .ms-bug-detail-close {
@@ -1662,21 +1663,24 @@ function sanitizeStyle(value: string) {
 .ms-bug-detail-tabs {
   display: flex;
   align-items: center;
-  gap: 28px;
-  margin: 12px 20px 0;
-  border-bottom: 1px solid #eaecf0;
+  gap: var(--ath-space-5);
+  min-height: 44px;
+  padding: 0 var(--ath-space-6);
+  border-bottom: 1px solid var(--ath-border);
+  background: var(--ath-bg-panel);
   flex: 0 0 auto;
 }
 
 .ms-bug-detail-tab {
   position: relative;
-  padding: 12px 0 11px;
+  height: 44px;
+  padding: 0;
   border: none;
   background: transparent;
-  color: #667085;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.5;
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-medium);
+  line-height: 44px;
   cursor: pointer;
   white-space: nowrap;
   transition: color 0.18s ease;
@@ -1684,12 +1688,12 @@ function sanitizeStyle(value: string) {
 
 .ms-bug-detail-tab:hover,
 .ms-bug-detail-tab:focus-visible {
-  color: #175cd3;
+  color: var(--ath-primary);
 }
 
 .ms-bug-detail-tab.is-active {
-  color: #101828;
-  font-weight: 600;
+  color: var(--ath-primary);
+  font-weight: var(--ath-weight-semibold);
 }
 
 .ms-bug-detail-tab.is-active::after {
@@ -1700,31 +1704,32 @@ function sanitizeStyle(value: string) {
   bottom: -1px;
   height: 2px;
   border-radius: 999px 999px 0 0;
-  background: #175cd3;
+  background: var(--ath-primary);
 }
 
 .ms-bug-detail-content {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 18px 20px 22px;
+  padding: var(--ath-space-5) var(--ath-space-6);
+  background: var(--ath-bg-panel);
 }
 
 .ms-bug-detail-pane {
   display: grid;
-  gap: 24px;
+  gap: var(--ath-space-6);
 }
 
 .ms-bug-detail-section {
   display: grid;
-  gap: 14px;
+  gap: var(--ath-space-3);
 }
 
 .ms-bug-detail-section-title {
-  color: #344054;
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1.5;
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-bold);
+  line-height: var(--ath-line-sm);
 }
 
 .ms-bug-detail-section-header,
@@ -1739,7 +1744,7 @@ function sanitizeStyle(value: string) {
 
 .ms-bug-detail-section-header {
   padding-bottom: 4px;
-  border-bottom: 1px solid #f2f4f7;
+  border-bottom: 1px solid var(--ath-border-soft);
 }
 
 .ms-bug-section-tip,
@@ -1747,8 +1752,8 @@ function sanitizeStyle(value: string) {
 .ms-bug-history-time,
 .ms-bug-file-meta,
 .ms-bug-attachment-meta {
-  color: #98a2b3;
-  font-size: 12px;
+  color: var(--ath-text-subtle);
+  font-size: var(--ath-font-xs);
   line-height: 1.6;
 }
 
@@ -1760,7 +1765,7 @@ function sanitizeStyle(value: string) {
 .ms-bug-basic-panel {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 18px;
+  gap: var(--ath-space-4);
   padding-top: 6px;
 }
 
@@ -1793,8 +1798,8 @@ function sanitizeStyle(value: string) {
 }
 
 .ms-bug-basic-label {
-  color: #1f2329;
-  font-size: 14px;
+  color: var(--ath-text-strong);
+  font-size: var(--ath-font-sm);
   line-height: 30px;
   font-weight: 400;
 }
@@ -1805,11 +1810,11 @@ function sanitizeStyle(value: string) {
 }
 
 .ms-bug-basic-panel-meter :deep(.el-select__wrapper) {
-  min-height: 34px;
-  border-radius: 2px;
-  box-shadow: 0 0 0 1px #dcdfe6 inset;
-  color: #1f2329;
-  background: #fff;
+  min-height: var(--ath-control-height-sm);
+  border-radius: var(--ath-radius-sm);
+  box-shadow: 0 0 0 1px var(--ath-border-strong) inset;
+  color: var(--ath-text-strong);
+  background: var(--ath-bg-panel);
   --el-text-color-regular: #1f2329;
   --el-text-color-placeholder: #a8abb2;
   --el-disabled-text-color: #1f2329;
@@ -1870,10 +1875,10 @@ function sanitizeStyle(value: string) {
   height: 24px;
   margin: 0;
   padding: 0 8px;
-  border: 1px solid #e5e7eb;
-  border-radius: 4px;
-  background: #f5f7fa;
-  color: #1f2329;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-sm);
+  background: var(--ath-bg-muted);
+  color: var(--ath-text-strong);
   line-height: 22px;
   box-shadow: none;
   --el-tag-text-color: #1f2329;
@@ -1933,38 +1938,38 @@ function sanitizeStyle(value: string) {
 .ms-bug-detail-toolbar-actions :deep(.el-button) {
   height: 28px;
   padding: 0 8px;
-  border-radius: 4px;
+  border-radius: var(--ath-radius-sm);
   font-size: 13px;
   font-weight: 400;
 }
 
 .ms-bug-inline-action {
-  color: #175cd3;
+  color: var(--ath-primary);
 }
 
 .ms-bug-detail-toolbar-actions :deep(.ms-bug-inline-action:hover),
 .ms-bug-detail-toolbar-actions :deep(.ms-bug-inline-action:focus-visible) {
-  color: #175cd3;
-  background: #eff8ff;
+  color: var(--ath-primary);
+  background: var(--ath-blue-soft);
 }
 
 .ms-bug-inline-outline-action {
-  border-color: #d0d5dd;
-  color: #344054;
-  background: #fff;
+  border-color: var(--ath-border-strong);
+  color: var(--ath-text-main);
+  background: var(--ath-bg-panel);
 }
 
 .ms-bug-detail-toolbar-actions :deep(.ms-bug-inline-outline-action:hover),
 .ms-bug-detail-toolbar-actions :deep(.ms-bug-inline-outline-action:focus-visible) {
   border-color: #bfd7ff;
-  color: #175cd3;
-  background: #eff8ff;
+  color: var(--ath-primary);
+  background: var(--ath-blue-soft);
 }
 
 .ms-bug-description-surface {
-  border: 1px solid #e4e7ec;
-  border-radius: 8px;
-  background: #fcfcfd;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-subtle);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 
@@ -1973,8 +1978,8 @@ function sanitizeStyle(value: string) {
 }
 
 .ms-bug-rich-content {
-  padding: 16px 18px;
-  color: #344054;
+  padding: var(--ath-space-4) var(--ath-space-5);
+  color: var(--ath-text-main);
   font-size: 13px;
   line-height: 1.8;
   word-break: break-word;
@@ -1987,7 +1992,7 @@ function sanitizeStyle(value: string) {
 .ms-bug-rich-content :deep(h5),
 .ms-bug-rich-content :deep(h6) {
   margin: 0 0 14px;
-  color: #101828;
+  color: var(--ath-text-strong);
   line-height: 1.55;
 }
 
@@ -2006,7 +2011,7 @@ function sanitizeStyle(value: string) {
   margin: 0 0 14px;
   padding: 8px 0 8px 12px;
   border-left: 3px solid #d0d5dd;
-  color: #475467;
+  color: var(--ath-text-main);
   background: rgba(248, 250, 252, 0.8);
 }
 
@@ -2015,15 +2020,15 @@ function sanitizeStyle(value: string) {
   max-width: 100%;
   max-height: 420px;
   margin: 10px 0 14px;
-  border: 1px solid #e4e7ec;
-  border-radius: 6px;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-sm);
   object-fit: contain;
   cursor: zoom-in;
 }
 
 .ms-bug-rich-content :deep(.bug-drawer-empty-text) {
   margin: 0;
-  color: #98a2b3;
+  color: var(--ath-text-subtle);
 }
 
 .ms-bug-rich-content :deep(*:last-child) {
@@ -2032,17 +2037,17 @@ function sanitizeStyle(value: string) {
 
 .ms-bug-attachment-surface {
   display: grid;
-  gap: 12px;
-  padding: 14px 16px;
-  border: 1px solid #e4e7ec;
-  border-radius: 8px;
-  background: #fcfcfd;
+  gap: var(--ath-space-3);
+  padding: var(--ath-space-4);
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-subtle);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 
 .ms-bug-attachment-hint {
-  color: #98a2b3;
-  font-size: 12px;
+  color: var(--ath-text-subtle);
+  font-size: var(--ath-font-xs);
   line-height: 1.6;
 }
 
@@ -2064,17 +2069,17 @@ function sanitizeStyle(value: string) {
   display: grid;
   gap: 8px;
   padding: 10px;
-  border: 1px solid #eaecf0;
-  border-radius: 8px;
-  background: #fcfdff;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-panel);
 }
 
 .ms-bug-attachment-image {
   width: 100%;
   height: 132px;
   overflow: hidden;
-  border-radius: 8px;
-  background: #f2f4f7;
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-muted);
 }
 
 .ms-bug-attachment-actions {
@@ -2089,10 +2094,10 @@ function sanitizeStyle(value: string) {
   grid-template-columns: 44px minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
-  padding: 14px 16px;
-  border: 1px solid #e4e7ec;
-  border-radius: 8px;
-  background: #fff;
+  padding: var(--ath-space-3) var(--ath-space-4);
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-panel);
 }
 
 .ms-bug-file-icon {
@@ -2104,8 +2109,8 @@ function sanitizeStyle(value: string) {
   height: 46px;
   padding: 0 0 6px;
   border: 1px solid var(--file-accent, #bfd7ff);
-  border-radius: 8px;
-  background: #fff;
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-panel);
   color: var(--file-accent-strong, #175cd3);
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
   overflow: hidden;
@@ -2202,7 +2207,7 @@ function sanitizeStyle(value: string) {
 .ms-bug-comment-item,
 .ms-bug-history-item {
   padding: 15px 0;
-  border-top: 1px solid #f2f4f7;
+  border-top: 1px solid var(--ath-border-soft);
 }
 
 .ms-bug-comment-item:first-child,
@@ -2226,7 +2231,7 @@ function sanitizeStyle(value: string) {
 .ms-bug-history-title,
 .ms-bug-file-name,
 .ms-bug-attachment-name {
-  color: #344054;
+  color: var(--ath-text-main);
   font-size: 13px;
   line-height: 1.65;
   font-weight: 600;
@@ -2236,7 +2241,7 @@ function sanitizeStyle(value: string) {
 .ms-bug-comment-content,
 .ms-bug-history-detail {
   margin-top: 8px;
-  color: #475467;
+  color: var(--ath-text-main);
   font-size: 13px;
   line-height: 1.8;
   white-space: pre-wrap;
@@ -2248,7 +2253,7 @@ function sanitizeStyle(value: string) {
   flex: 0 0 auto;
   min-width: 124px;
   text-align: right;
-  color: #b0b7c3;
+  color: var(--ath-text-subtle);
   font-size: 11px;
   line-height: 1.4;
 }
@@ -2258,8 +2263,8 @@ function sanitizeStyle(value: string) {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  color: #98a2b3;
-  font-size: 12px;
+  color: var(--ath-text-subtle);
+  font-size: var(--ath-font-xs);
   line-height: 1.6;
   word-break: break-word;
 }

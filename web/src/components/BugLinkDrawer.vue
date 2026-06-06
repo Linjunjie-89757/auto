@@ -186,7 +186,31 @@ watch(() => props.bugs, () => {
 
 <style scoped>
 .bug-link-drawer {
-  --el-drawer-padding-primary: 20px;
+  --el-drawer-padding-primary: var(--ath-space-6);
+}
+
+.bug-link-drawer :deep(.el-drawer__header) {
+  margin-bottom: 0;
+  padding: var(--ath-space-5) var(--ath-space-6) var(--ath-space-3);
+  border-bottom: 1px solid var(--ath-border);
+}
+
+.bug-link-drawer :deep(.el-drawer__title) {
+  color: var(--ath-text-strong);
+  font-size: var(--ath-font-lg);
+  font-weight: var(--ath-weight-semibold);
+  line-height: var(--ath-line-lg);
+}
+
+.bug-link-drawer :deep(.el-drawer__body) {
+  padding: var(--ath-space-5) var(--ath-space-6) 0;
+  background: var(--ath-bg-panel);
+}
+
+.bug-link-drawer :deep(.el-drawer__footer) {
+  padding: var(--ath-space-3) var(--ath-space-6);
+  border-top: 1px solid var(--ath-border);
+  background: var(--ath-bg-panel);
 }
 
 .bug-link-drawer-body {
@@ -197,17 +221,69 @@ watch(() => props.bugs, () => {
 }
 
 .bug-link-drawer-toolbar {
-  margin-bottom: 16px;
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--ath-space-4);
+}
+
+.bug-link-drawer-toolbar :deep(.el-input) {
+  width: 320px;
+}
+
+.bug-link-drawer-toolbar :deep(.el-input__wrapper) {
+  min-height: var(--ath-control-height-md);
+  border-radius: var(--ath-radius-md);
+  box-shadow: 0 0 0 1px var(--ath-border-strong) inset;
 }
 
 .bug-link-drawer-table {
   flex: 1;
   min-height: 420px;
+  overflow: hidden;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+}
+
+.bug-link-drawer-table :deep(.el-table__inner-wrapper::before) {
+  display: none;
+}
+
+.bug-link-drawer-table :deep(th.el-table__cell) {
+  height: 44px;
+  background: var(--ath-bg-page);
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
+  font-weight: var(--ath-weight-semibold);
+}
+
+.bug-link-drawer-table :deep(td.el-table__cell) {
+  height: var(--ath-table-row-height);
+  border-bottom-color: var(--ath-border-soft);
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+}
+
+.bug-link-drawer-table :deep(.el-checkbox__inner) {
+  border-color: var(--ath-border-strong);
+  border-radius: 3px;
 }
 
 .bug-link-drawer-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
+  gap: var(--ath-space-3);
+}
+
+.bug-link-drawer-footer :deep(.el-button) {
+  height: var(--ath-control-height-sm);
+  margin-left: 0;
+  border-radius: var(--ath-radius-sm);
+}
+
+@media (max-width: 720px) {
+  .bug-link-drawer-toolbar :deep(.el-input) {
+    width: 100%;
+  }
 }
 </style>

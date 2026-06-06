@@ -130,6 +130,10 @@ const loading = ref(false)
 const savingRole = ref<RoleType | null>(null)
 const testingRole = ref<RoleType | null>(null)
 const openModelRole = ref<RoleType | null>(null)
+const promptExpanded = reactive<Record<RoleType, boolean>>({
+  CASE_GENERATOR: false,
+  CASE_REVIEWER: false,
+})
 
 const providers = ref<AiProviderConnection[]>([])
 
@@ -256,6 +260,18 @@ function normalizeReviewChecklist(roleType: RoleType, value: string | null | und
 function restoreDefaultPrompt(roleType: RoleType) {
   forms[roleType].promptTemplate = defaultPromptForRole(roleType)
   forms[roleType].reviewChecklist = defaultChecklistForRole(roleType)
+}
+
+function promptPreview(roleType: RoleType) {
+  const lines = forms[roleType].promptTemplate
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+  return lines.join('\n') || '暂未配置角色提示词'
+}
+
+function togglePromptEditor(roleType: RoleType) {
+  promptExpanded[roleType] = !promptExpanded[roleType]
 }
 
 const hasNoProviders = computed(() => providers.value.length === 0)
@@ -498,6 +514,7 @@ onBeforeUnmount(() => {
         v-for="meta in roleMeta"
         :key="meta.roleType"
         class="ai-role-card"
+        :class="{ 'is-prompt-expanded': promptExpanded[meta.roleType] }"
       >
         <header class="ai-role-card-header">
           <div class="role-heading">
@@ -644,12 +661,32 @@ onBeforeUnmount(() => {
           <div class="prompt-block">
             <div class="prompt-header">
               <label class="field-label">角色提示词</label>
-              <button type="button" class="restore-button" @click="restoreDefaultPrompt(meta.roleType)">
-                <RotateCcw />
-                恢复默认
-              </button>
+              <div class="prompt-actions">
+                <button type="button" class="restore-button" @click="restoreDefaultPrompt(meta.roleType)">
+                  <RotateCcw />
+                  恢复默认
+                </button>
+                <button
+                  type="button"
+                  class="prompt-toggle-button"
+                  :class="{ 'is-expanded': promptExpanded[meta.roleType] }"
+                  @click="togglePromptEditor(meta.roleType)"
+                >
+                  {{ promptExpanded[meta.roleType] ? '收起编辑' : '展开编辑' }}
+                  <ChevronDown />
+                </button>
+              </div>
             </div>
+            <button
+              v-if="!promptExpanded[meta.roleType]"
+              type="button"
+              class="prompt-preview-card"
+              @click="togglePromptEditor(meta.roleType)"
+            >
+              {{ promptPreview(meta.roleType) }}
+            </button>
             <el-input
+              v-if="promptExpanded[meta.roleType]"
               v-model="forms[meta.roleType].promptTemplate"
               type="textarea"
               :rows="7"
@@ -682,22 +719,22 @@ onBeforeUnmount(() => {
 .ai-config-modern-page {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--ath-space-6);
   min-height: auto !important;
   padding: 0;
-  color: #111827;
+  color: var(--ath-text-strong);
 }
 
 .ai-config-tip {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--ath-space-3);
   min-height: 52px;
   border: 1px solid #bfdbfe;
-  border-radius: 12px;
-  background: #eff6ff;
-  padding: 14px;
-  color: #1d4ed8;
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-blue-soft);
+  padding: 14px var(--ath-space-4);
+  color: var(--ath-primary-hover);
   font-size: 14px;
   line-height: 20px;
 }
@@ -706,14 +743,14 @@ onBeforeUnmount(() => {
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
-  color: #3b82f6;
+  color: var(--ath-blue);
   stroke-width: 2;
 }
 
 .tip-link {
   border: 0;
   background: transparent;
-  color: #2563eb;
+  color: var(--ath-primary);
   cursor: pointer;
   font: inherit;
   font-weight: 500;
@@ -738,7 +775,7 @@ onBeforeUnmount(() => {
 
 .empty-inline {
   border-radius: 12px;
-  color: #6b7280;
+  color: var(--ath-text-muted);
   font-size: 13px;
   line-height: 1.7;
 }
@@ -746,32 +783,41 @@ onBeforeUnmount(() => {
 .ai-config-card-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 24px;
-  align-items: start;
+  gap: var(--ath-space-6);
+  align-items: stretch;
 }
 
 .ai-role-card {
-  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 205px);
+  min-height: 520px;
   overflow: visible;
-  border: 1px solid #bfdbfe;
-  border-radius: 16px;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-xl);
   background: #ffffff;
-  box-shadow: 0 4px 8px -2px rgba(59, 130, 246, 0.06), 0 2px 4px -2px rgba(59, 130, 246, 0.04);
+  box-shadow: var(--ath-shadow-xs);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
+.ai-role-card.is-prompt-expanded {
+  height: auto;
+  min-height: 0;
+}
+
 .ai-role-card:hover {
-  box-shadow: 0 10px 20px -8px rgba(59, 130, 246, 0.18);
+  border-color: var(--ath-border-strong);
+  box-shadow: var(--ath-shadow-card-hover);
 }
 
 .ai-role-card-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--ath-space-4);
   min-height: 80px;
-  border-bottom: 1px solid #f3f4f6;
-  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--ath-border-soft);
+  padding: var(--ath-space-5) var(--ath-space-6) var(--ath-space-4);
 }
 
 .role-heading {
@@ -791,8 +837,8 @@ onBeforeUnmount(() => {
 }
 
 .role-icon-blue {
-  background: #eff6ff;
-  color: #3b82f6;
+  background: var(--ath-blue-soft);
+  color: var(--ath-blue);
 }
 
 .role-icon-green {
@@ -808,7 +854,7 @@ onBeforeUnmount(() => {
 
 .role-heading h3 {
   margin: 0;
-  color: #111827;
+  color: var(--ath-text-strong);
   font-size: 14px;
   font-weight: 600;
   line-height: 20px;
@@ -816,16 +862,18 @@ onBeforeUnmount(() => {
 
 .role-heading p {
   margin: 2px 0 0;
-  color: #9ca3af;
+  color: var(--ath-text-subtle);
   font-size: 12px;
   line-height: 16px;
 }
 
 .ai-role-card-body {
   display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
   flex-direction: column;
-  gap: 20px;
-  padding: 20px 24px;
+  gap: var(--ath-space-4);
+  padding: var(--ath-space-4) var(--ath-space-6);
 }
 
 .form-block,
@@ -836,9 +884,14 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
+.prompt-block {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .field-label,
 .slider-label {
-  color: #374151;
+  color: var(--ath-text-main);
   font-size: 14px;
   font-weight: 500;
   line-height: 20px;
@@ -846,7 +899,7 @@ onBeforeUnmount(() => {
 
 .field-help {
   margin-top: -4px;
-  color: #9ca3af;
+  color: var(--ath-text-subtle);
   font-size: 12px;
   line-height: 16px;
 }
@@ -867,11 +920,11 @@ onBeforeUnmount(() => {
   width: 100%;
   min-height: 42px;
   gap: 8px;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
   background: #ffffff;
   padding: 10px 12px;
-  color: #374151;
+  color: var(--ath-text-main);
   font-size: 14px;
   line-height: 20px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -880,6 +933,7 @@ onBeforeUnmount(() => {
 .model-select-trigger:hover,
 .model-select-trigger.is-open {
   border-color: #93c5fd;
+  box-shadow: var(--ath-focus-ring);
 }
 
 .model-select-name {
@@ -895,7 +949,7 @@ onBeforeUnmount(() => {
 
 .model-select-placeholder {
   flex: 1 1 auto;
-  color: #9ca3af;
+  color: var(--ath-text-subtle);
   text-align: left;
 }
 
@@ -903,7 +957,7 @@ onBeforeUnmount(() => {
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
-  color: #9ca3af;
+  color: var(--ath-text-subtle);
   stroke-width: 2;
   transition: transform 0.15s ease;
 }
@@ -920,10 +974,10 @@ onBeforeUnmount(() => {
   z-index: 20;
   max-height: 240px;
   overflow-y: auto;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
   background: #ffffff;
-  box-shadow: 0 20px 25px -5px rgba(15, 23, 42, 0.12), 0 8px 10px -6px rgba(15, 23, 42, 0.10);
+  box-shadow: var(--ath-shadow-dialog);
   padding: 6px 0;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -935,7 +989,7 @@ onBeforeUnmount(() => {
 
 .model-select-dropdown::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: #d1d5db;
+  background: var(--ath-border-strong);
 }
 
 .model-select-option {
@@ -952,11 +1006,11 @@ onBeforeUnmount(() => {
 }
 
 .model-select-option:hover {
-  background: #f9fafb;
+  background: var(--ath-bg-page);
 }
 
 .model-select-option.is-selected {
-  background: #eff6ff;
+  background: var(--ath-blue-soft);
 }
 
 .model-option-copy {
@@ -989,8 +1043,8 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
   border: 1px solid #bfdbfe;
   border-radius: 999px;
-  background: #eff6ff;
-  color: #2563eb;
+  background: var(--ath-blue-soft);
+  color: var(--ath-primary);
   padding: 1px 6px;
   font-size: 12px;
   line-height: 16px;
@@ -1000,13 +1054,13 @@ onBeforeUnmount(() => {
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
-  color: #3b82f6;
+  color: var(--ath-blue);
   stroke-width: 2;
 }
 
 .model-select-empty {
   padding: 12px;
-  color: #9ca3af;
+  color: var(--ath-text-subtle);
   font-size: 13px;
   text-align: center;
 }
@@ -1038,7 +1092,7 @@ onBeforeUnmount(() => {
 
 .provider-google {
   background: #dbeafe;
-  color: #2563eb;
+  color: var(--ath-primary);
 }
 
 .provider-deepseek {
@@ -1053,10 +1107,10 @@ onBeforeUnmount(() => {
 
 .test-button {
   height: 42px;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
   background: #ffffff;
-  color: #4b5563;
+  color: var(--ath-text-main);
   padding: 0 14px;
   font-size: 14px;
   line-height: 20px;
@@ -1072,7 +1126,8 @@ onBeforeUnmount(() => {
 
 .test-button:hover:not(:disabled) {
   border-color: #bfdbfe;
-  background: #f9fafb;
+  background: var(--ath-bg-page);
+  box-shadow: var(--ath-focus-ring);
 }
 
 .test-button:disabled,
@@ -1087,6 +1142,13 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.prompt-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
 }
 
 .slider-label {
@@ -1106,7 +1168,7 @@ onBeforeUnmount(() => {
 .prompt-hint svg {
   width: 14px;
   height: 14px;
-  color: #9ca3af;
+  color: var(--ath-text-subtle);
   stroke-width: 2;
 }
 
@@ -1123,7 +1185,7 @@ onBeforeUnmount(() => {
   width: 208px;
   transform: translateY(-50%) translateX(-2px);
   border-radius: 12px;
-  background: #111827;
+  background: var(--ath-text-strong);
   color: #ffffff;
   box-shadow: 0 20px 25px -5px rgba(15, 23, 42, 0.22), 0 8px 10px -6px rgba(15, 23, 42, 0.16);
   font-size: 12px;
@@ -1145,7 +1207,7 @@ onBeforeUnmount(() => {
   height: 0;
   transform: translateY(-50%);
   border-top: 4px solid transparent;
-  border-right: 4px solid #111827;
+  border-right: 4px solid var(--ath-text-strong);
   border-bottom: 4px solid transparent;
 }
 
@@ -1161,11 +1223,11 @@ onBeforeUnmount(() => {
 }
 
 .tone-safe {
-  color: #2563eb;
+  color: var(--ath-primary);
 }
 
 .tone-balanced {
-  color: #16a34a;
+  color: var(--ath-green);
 }
 
 .tone-creative {
@@ -1188,7 +1250,7 @@ onBeforeUnmount(() => {
 .native-range::-webkit-slider-runnable-track {
   height: 6px;
   border-radius: 999px;
-  background: #e5e7eb;
+  background: var(--ath-border);
 }
 
 .native-range::-webkit-slider-thumb {
@@ -1198,20 +1260,20 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: 999px;
   appearance: none;
-  background: #3b82f6;
+  background: var(--ath-blue);
   box-shadow: 0 0 0 2px #ffffff, 0 1px 4px rgba(37, 99, 235, 0.35);
 }
 
 .native-range::-moz-range-track {
   height: 6px;
   border-radius: 999px;
-  background: #e5e7eb;
+  background: var(--ath-border);
 }
 
 .native-range::-moz-range-progress {
   height: 6px;
   border-radius: 999px;
-  background: #e5e7eb;
+  background: var(--ath-border);
 }
 
 .native-range::-moz-range-thumb {
@@ -1219,14 +1281,14 @@ onBeforeUnmount(() => {
   height: 14px;
   border: 0;
   border-radius: 999px;
-  background: #3b82f6;
+  background: var(--ath-blue);
   box-shadow: 0 0 0 2px #ffffff, 0 1px 4px rgba(37, 99, 235, 0.35);
 }
 
 .slider-scale {
   display: flex;
   justify-content: space-between;
-  color: #9ca3af;
+  color: var(--ath-text-subtle);
   font-size: 12px;
   line-height: 16px;
 }
@@ -1234,17 +1296,18 @@ onBeforeUnmount(() => {
 .restore-button {
   gap: 4px;
   background: transparent;
-  color: #9ca3af;
+  color: var(--ath-text-subtle);
   font-size: 12px;
   padding: 0;
   transition: color 0.15s ease;
 }
 
 .restore-button:hover {
-  color: #2563eb;
+  color: var(--ath-primary);
 }
 
 .restore-button svg,
+.prompt-toggle-button svg,
 .save-config-button svg {
   width: 16px;
   height: 16px;
@@ -1256,12 +1319,62 @@ onBeforeUnmount(() => {
   height: 12px;
 }
 
+.prompt-toggle-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ath-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 0;
+}
+
+.prompt-toggle-button svg {
+  width: 13px;
+  height: 13px;
+  transition: transform 0.15s ease;
+}
+
+.prompt-toggle-button.is-expanded svg {
+  transform: rotate(180deg);
+}
+
+.prompt-preview-card {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-subtle);
+  color: var(--ath-text-muted);
+  cursor: pointer;
+  padding: 12px;
+  text-align: left;
+  white-space: pre-line;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 21px;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.prompt-preview-card:hover {
+  border-color: #bfdbfe;
+  background: #ffffff;
+  box-shadow: var(--ath-shadow-xs);
+}
+
 .prompt-hint {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   margin: 2px 0 0;
-  color: #9ca3af;
+  color: var(--ath-text-subtle);
   font-size: 12px;
   line-height: 16px;
 }
@@ -1273,8 +1386,10 @@ onBeforeUnmount(() => {
 .save-config-button {
   width: 100%;
   height: 42px;
-  border-radius: 12px;
-  background: #2563eb;
+  flex: 0 0 42px;
+  margin-top: auto;
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-primary);
   color: #ffffff;
   font-size: 14px;
   font-weight: 500;
@@ -1282,7 +1397,7 @@ onBeforeUnmount(() => {
 }
 
 .save-config-button:hover:not(:disabled) {
-  background: #1d4ed8;
+  background: var(--ath-primary-hover);
 }
 
 .save-config-button:active:not(:disabled) {
@@ -1294,17 +1409,17 @@ onBeforeUnmount(() => {
 }
 
 :deep(.prompt-textarea .el-textarea__inner) {
-  height: 170px !important;
-  min-height: 170px !important;
-  max-height: 170px !important;
+  height: 320px !important;
+  min-height: 320px !important;
+  max-height: 320px !important;
   overflow-y: auto;
   border-radius: 12px;
-  box-shadow: 0 0 0 1px #e5e7eb inset;
-  color: #374151;
+  box-shadow: 0 0 0 1px var(--ath-border) inset;
+  color: var(--ath-text-main);
   font-size: 14px;
   line-height: 22px;
   padding: 12px;
-  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-color: var(--ath-text-disabled) transparent;
   scrollbar-width: thin;
   transition: box-shadow 0.15s ease;
 }
@@ -1319,7 +1434,7 @@ onBeforeUnmount(() => {
 
 :deep(.prompt-textarea .el-textarea__inner::-webkit-scrollbar-thumb) {
   border-radius: 999px;
-  background: #cbd5e1;
+  background: var(--ath-text-disabled);
 }
 
 :deep(.prompt-textarea .el-textarea__inner::-webkit-scrollbar-thumb:hover) {
@@ -1327,7 +1442,7 @@ onBeforeUnmount(() => {
 }
 
 :deep(.prompt-textarea .el-textarea__inner:focus) {
-  box-shadow: 0 0 0 1px #3b82f6 inset, 0 0 0 2px rgba(59, 130, 246, 0.12);
+  box-shadow: 0 0 0 1px var(--ath-blue) inset, 0 0 0 2px rgba(59, 130, 246, 0.12);
 }
 
 @keyframes spin {

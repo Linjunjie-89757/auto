@@ -1001,17 +1001,17 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
 
 .bug-editor-form :deep(.el-input__wrapper),
 .bug-editor-form :deep(.el-select__wrapper) {
-  border-radius: 2px;
-  box-shadow: 0 0 0 1px #dcdfe6 inset;
+  border-radius: var(--ath-radius-md);
+  box-shadow: 0 0 0 1px var(--ath-input-border) inset;
 }
 
 .bug-editor-form :deep(.el-select__wrapper) {
-  min-height: 34px;
+  min-height: var(--ath-control-height-md);
 }
 
 .bug-editor-form :deep(.bug-editor-tag-input .el-select__wrapper) {
   align-items: center;
-  min-height: 34px;
+  min-height: var(--ath-control-height-md);
   padding: 0 10px;
 }
 
@@ -1031,10 +1031,10 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   height: 24px;
   margin: 0;
   padding: 0 8px;
-  border: 1px solid #e5e7eb;
-  border-radius: 4px;
-  background: #f5f7fa;
-  color: #344054;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-sm);
+  background: var(--ath-bg-muted);
+  color: var(--ath-text-main);
   line-height: 22px;
   box-shadow: none;
 }
@@ -1046,7 +1046,7 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
 
 .bug-editor-form :deep(.bug-editor-tag-input .el-tag .el-tag__close) {
   margin-left: 4px;
-  color: #667085;
+  color: var(--ath-text-muted);
 }
 
 .bug-editor-form :deep(.bug-editor-tag-input .el-select__input-wrapper) {
@@ -1061,8 +1061,8 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
 }
 
 .bug-editor-form :deep(.bug-editor-tag-input .el-select__placeholder) {
-  color: #98a2b3;
-  font-size: 12px;
+  color: var(--ath-text-subtle);
+  font-size: var(--ath-font-xs);
   line-height: 32px;
 }
 
@@ -1077,13 +1077,14 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
 
 .bug-editor-form :deep(.el-input__inner),
 .bug-editor-form :deep(.el-select__placeholder) {
-  font-size: 12px;
+  font-size: var(--ath-font-sm);
 }
 
 .bug-editor-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 336px;
   min-height: calc(100vh - 126px);
+  background: var(--ath-bg-panel);
 }
 
 .bug-editor-form.is-page-mode .bug-editor-layout {
@@ -1093,11 +1094,11 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
 
 .bug-editor-main {
   min-width: 0;
-  padding: 14px 14px 20px;
+  padding: var(--ath-space-5);
 }
 
 .bug-editor-form.is-page-mode .bug-editor-main {
-  padding: 34px 28px 32px 34px;
+  padding: var(--ath-space-6);
 }
 
 .bug-editor-main-item,
@@ -1115,42 +1116,42 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   display: grid;
   align-content: start;
   min-width: 0;
-  padding: 14px 14px 20px;
-  border-left: 1px solid #ebeef5;
-  background: #fff;
+  padding: var(--ath-space-5);
+  border-left: 1px solid var(--ath-border);
+  background: var(--ath-bg-subtle);
 }
 
 .bug-editor-form.is-page-mode .bug-editor-side {
-  padding: 34px 34px 32px 16px;
+  padding: var(--ath-space-6);
 }
 
 .bug-editor-form-item {
-  margin-bottom: 18px;
+  margin-bottom: var(--ath-space-5);
 }
 
 .bug-editor-side-item {
-  margin-bottom: 22px;
+  margin-bottom: var(--ath-space-5);
 }
 
 .bug-editor-form :deep(.el-form-item__label) {
   margin-bottom: 8px;
   padding: 0;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 22px;
-  font-family: "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  color: #323233;
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-semibold);
+  line-height: var(--ath-line-sm);
 }
 
 .bug-editor-form :deep(.el-form-item.is-required .el-form-item__label::before) {
-  color: #f56c6c;
+  color: var(--ath-red);
 }
 
 .bug-editor-content-panel,
 .bug-editor-evidence-card {
-  border: 1px solid #dcdfe6;
-  border-radius: 2px;
-  background: #fff;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+  box-shadow: var(--ath-shadow-xs);
 }
 
 .bug-editor-toolbar {
@@ -1160,8 +1161,8 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   gap: 1px;
   min-height: 40px;
   padding: 5px 4px;
-  border-bottom: 1px solid #ebeef5;
-  background: #fafbfc;
+  border-bottom: 1px solid var(--ath-border);
+  background: var(--ath-bg-page);
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
@@ -1179,15 +1180,15 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   width: 1px;
   height: 15px;
   margin: 0;
-  background: #dcdfe6;
+  background: var(--ath-border);
 }
 
 .bug-editor-toolbar-button {
   width: 30px;
   height: 30px;
   padding: 0;
-  border-radius: 6px;
-  color: #475467;
+  border-radius: var(--ath-radius-sm);
+  color: var(--ath-text-main);
 }
 
 .bug-editor-toolbar-select {
@@ -1197,10 +1198,10 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   min-width: 50px;
   height: 30px;
   padding: 0 5px;
-  border-radius: 6px;
-  color: #344054;
-  font-size: 12px;
-  font-weight: 600;
+  border-radius: var(--ath-radius-sm);
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-xs);
+  font-weight: var(--ath-weight-semibold);
 }
 
 .bug-editor-toolbar-size-select {
@@ -1212,18 +1213,18 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
 }
 
 .bug-editor-toolbar-button.is-active {
-  background: #eaf2ff;
-  color: #2563eb;
+  background: var(--ath-blue-soft);
+  color: var(--ath-primary);
 }
 
 .bug-editor-toolbar-select:hover,
 .bug-editor-toolbar-button:hover {
-  background: #f2f4f7;
-  color: #344054;
+  background: var(--ath-bg-muted);
+  color: var(--ath-text-main);
 }
 
 .bug-editor-toolbar-button:disabled {
-  color: #c0c4cc;
+  color: var(--ath-text-disabled);
 }
 
 .bug-editor-toolbar-caret {
@@ -1252,7 +1253,7 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
 
 .bug-editor-description-input {
   width: 100%;
-  padding: 12px 14px 14px;
+  padding: var(--ath-space-4);
 }
 
 .bug-editor-description-input :deep(.tiptap) {
@@ -1260,7 +1261,7 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   outline: none;
   font-size: 13px;
   line-height: 1.8;
-  color: #303133;
+  color: var(--ath-text-main);
   word-break: break-word;
 }
 
@@ -1304,12 +1305,12 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   max-width: 100%;
   margin: 10px 0 14px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--ath-radius-sm);
   line-height: 0;
 }
 
 .bug-editor-description-input :deep(.bug-editor-image-node.is-selected) {
-  border-color: #409eff;
+  border-color: var(--ath-primary);
   box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.22);
 }
 
@@ -1318,8 +1319,8 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   width: 100%;
   height: auto;
   max-width: 100%;
-  border: 1px solid #dcdfe6;
-  border-radius: 4px;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-sm);
   object-fit: contain;
 }
 
@@ -1332,10 +1333,10 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   align-items: center;
   gap: 4px;
   padding: 8px 10px;
-  border: 1px solid #dcdfe6;
-  border-radius: 4px;
-  background: #fff;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.18);
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-panel);
+  box-shadow: var(--ath-shadow-card-hover);
   opacity: 0;
   pointer-events: none;
   transform: translateX(-50%) translateY(4px);
@@ -1357,15 +1358,15 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   height: 24px;
   padding: 0;
   border: 0;
-  border-radius: 2px;
+  border-radius: var(--ath-radius-sm);
   background: transparent;
-  color: #4a5568;
+  color: var(--ath-text-main);
   cursor: pointer;
 }
 
 .bug-editor-description-input :deep(.bug-editor-image-tool:hover) {
-  background: #f5f7fa;
-  color: #1f2d3d;
+  background: var(--ath-bg-muted);
+  color: var(--ath-text-strong);
 }
 
 .bug-editor-description-input :deep(.bug-editor-image-tool svg) {
@@ -1402,20 +1403,19 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   float: left;
   height: 0;
   pointer-events: none;
-  color: #a8abb2;
+  color: var(--ath-text-subtle);
 }
 
 .bug-editor-section-title {
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 22px;
-  font-family: "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  color: #323233;
+  color: var(--ath-text-strong);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-bold);
+  line-height: var(--ath-line-sm);
 }
 
 .bug-editor-evidence-card {
   margin-top: 4px;
-  padding: 16px;
+  padding: var(--ath-space-4);
   outline: none;
   transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
 }
@@ -1423,7 +1423,7 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
 .bug-editor-evidence-card.is-drop-active {
   border-color: rgba(64, 158, 255, 0.55);
   background: rgba(239, 246, 255, 0.72);
-  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.12);
+  box-shadow: var(--ath-focus-ring);
 }
 
 .bug-editor-evidence-header {
@@ -1434,9 +1434,9 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
 }
 
 .bug-editor-evidence-meta {
-  font-size: 12px;
+  font-size: var(--ath-font-xs);
   line-height: 1.6;
-  color: #667085;
+  color: var(--ath-text-muted);
 }
 
 .bug-editor-evidence-files {
@@ -1502,8 +1502,8 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
 .bug-editor-evidence-thumb {
   padding: 0;
   border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 8px;
-  background: #f8fafc;
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-page);
   overflow: hidden;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
 }
@@ -1520,11 +1520,11 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   align-items: center;
   justify-content: center;
   border: 1px dashed rgba(15, 23, 42, 0.14);
-  border-radius: 8px;
+  border-radius: var(--ath-radius-md);
   background: linear-gradient(180deg, #f8fafc 0%, #f2f6fb 100%);
   font-size: 13px;
   font-weight: 700;
-  color: #667085;
+  color: var(--ath-text-muted);
 }
 
 .bug-editor-evidence-file-trigger {
@@ -1539,7 +1539,7 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
 .bug-editor-evidence-file-name {
   font-size: 11px;
   line-height: 1.45;
-  color: #98a2b3;
+  color: var(--ath-text-subtle);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1548,7 +1548,7 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
 
 .bug-editor-evidence-file:hover .bug-editor-evidence-file-name,
 .bug-editor-evidence-file:focus-within .bug-editor-evidence-file-name {
-  color: #667085;
+  color: var(--ath-text-muted);
 }
 
 .bug-editor-evidence-add {
@@ -1558,17 +1558,17 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   width: 104px;
   height: 104px;
   padding: 10px;
-  border: 1px dashed #d0d5dd;
-  border-radius: 8px;
-  background: #fcfcfd;
-  color: #667085;
+  border: 1px dashed var(--ath-border-strong);
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-subtle);
+  color: var(--ath-text-muted);
   cursor: pointer;
   transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
 }
 
 .bug-editor-evidence-add:hover {
-  border-color: #98a2b3;
-  background: #f8fafc;
+  border-color: var(--ath-text-subtle);
+  background: var(--ath-bg-page);
   transform: translateY(-1px);
   box-shadow: inset 0 0 0 1px rgba(208, 213, 221, 0.45);
 }
@@ -1582,14 +1582,14 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   font-size: 28px;
   line-height: 1;
   font-weight: 500;
-  color: #475467;
+  color: var(--ath-text-main);
 }
 
 .bug-editor-evidence-add-text {
   font-size: 11px;
   line-height: 1.5;
   text-align: center;
-  color: #667085;
+  color: var(--ath-text-muted);
 }
 
 .bug-editor-evidence-preview-toolbar {
@@ -1618,9 +1618,9 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
 
 .bug-editor-evidence-preview-tip,
 .bug-editor-evidence-preview-scale {
-  font-size: 12px;
+  font-size: var(--ath-font-xs);
   line-height: 1.5;
-  color: #667085;
+  color: var(--ath-text-muted);
 }
 
 .bug-editor-evidence-preview-counter {
@@ -1631,18 +1631,18 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   height: 32px;
   padding: 0 10px;
   border: 1px solid rgba(208, 213, 221, 0.9);
-  border-radius: 8px;
-  background: #f2f4f7;
+  border-radius: var(--ath-radius-md);
+  background: var(--ath-bg-muted);
 }
 
 :global(.bug-editor-evidence-preview-dialog .el-button.is-plain) {
   min-width: 32px;
   height: 32px;
   padding: 0 12px;
-  border-color: rgba(208, 213, 221, 0.9);
-  border-radius: 8px;
+  border-color: var(--ath-border-strong);
+  border-radius: var(--ath-radius-md);
   background: #ffffff;
-  color: #475467;
+  color: var(--ath-text-main);
 }
 
 :global(.bug-editor-evidence-preview-dialog .el-button.is-plain:hover),
@@ -1674,8 +1674,8 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   height: min(68vh, 640px);
   max-height: 68vh;
   overflow: hidden;
-  border-radius: 12px;
-  background: #f8fafc;
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-page);
 }
 
 .bug-editor-evidence-preview-canvas {
@@ -1720,7 +1720,7 @@ function handleEvidencePreviewKeydown(event: KeyboardEvent) {
   .bug-editor-form.is-page-mode .bug-editor-side {
     padding: 14px;
     border-left: 0;
-    border-top: 1px solid #ebeef5;
+    border-top: 1px solid var(--ath-border);
   }
 
   .bug-editor-form.is-page-mode .bug-editor-main {

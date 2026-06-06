@@ -402,7 +402,8 @@ function hasRichDescriptionContent(html: string) {
   display: flex;
   height: 100%;
   min-height: 0;
-  padding: 0;
+  padding: var(--ath-space-6);
+  background: var(--ath-bg-page);
 }
 
 .bug-create-shell {
@@ -410,54 +411,55 @@ function hasRichDescriptionContent(html: string) {
   grid-template-rows: auto minmax(0, 1fr) 58px;
   flex: 1;
   min-height: 0;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: #fff;
-  box-shadow: var(--shadow-soft);
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+  box-shadow: var(--ath-shadow-xs);
   overflow: hidden;
 }
 
 .bug-create-header {
   display: grid;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--ath-border);
+  background: var(--ath-bg-panel);
 }
 
 .bug-create-backbar {
   display: flex;
   align-items: center;
-  padding: 12px 24px 0;
+  padding: var(--ath-space-4) var(--ath-space-6) 0;
 }
 
 .bug-create-back-button {
   padding: 0;
   font-size: 13px;
-  font-weight: 600;
-  color: #175cd3;
+  font-weight: var(--ath-weight-semibold);
+  color: var(--ath-primary);
 }
 
 .bug-create-back-button:hover,
 .bug-create-back-button:focus-visible {
-  color: #1849a9;
+  color: var(--ath-primary-hover);
 }
 
 .bug-create-titlebar {
   display: flex;
   align-items: center;
-  padding: 18px 24px 18px;
+  padding: var(--ath-space-4) var(--ath-space-6) var(--ath-space-5);
 }
 
 .bug-create-title {
   margin: 0;
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 24px;
-  font-family: "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  color: #323233;
+  color: var(--ath-text-strong);
+  font-size: var(--ath-font-lg);
+  font-weight: var(--ath-weight-semibold);
+  line-height: var(--ath-line-lg);
 }
 
 .bug-create-content {
   min-height: 0;
   overflow: auto;
+  background: var(--ath-bg-panel);
 }
 
 .bug-create-footer {
@@ -465,19 +467,19 @@ function hasRichDescriptionContent(html: string) {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: var(--ath-space-3);
   min-height: 58px;
-  padding: 12px 22px;
-  border-top: 1px solid #ebeef5;
-  background: #fff;
+  padding: var(--ath-space-3) var(--ath-space-6);
+  border-top: 1px solid var(--ath-border);
+  background: var(--ath-bg-panel);
 }
 
 .bug-create-footer :deep(.el-button) {
   min-width: 64px;
-  height: 32px;
+  height: var(--ath-control-height-sm);
   margin-left: 0;
-  border-radius: 4px;
-  font-size: 14px;
+  border-radius: var(--ath-radius-sm);
+  font-size: var(--ath-font-sm);
 }
 
 .bug-create-footer :deep(.el-button + .el-button) {

@@ -122,56 +122,67 @@ function submitComment() {
 <style scoped>
 .bug-quick-actions {
   display: grid;
-  gap: 12px;
+  gap: var(--ath-space-3);
 }
 
 .bug-quick-card {
   display: grid;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: #fff;
+  gap: var(--ath-space-3);
+  padding: var(--ath-space-5);
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-bg-panel);
+  box-shadow: var(--ath-shadow-xs);
 }
 
 .bug-quick-card-title {
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1.5;
-  color: #344054;
+  color: var(--ath-text-main);
+  font-size: var(--ath-font-sm);
+  font-weight: var(--ath-weight-bold);
+  line-height: var(--ath-line-sm);
 }
 
 .bug-quick-card-value {
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.4;
-  color: #344054;
+  color: var(--ath-text-strong);
+  font-size: var(--ath-font-lg);
+  font-weight: var(--ath-weight-bold);
+  line-height: var(--ath-line-lg);
 }
 
 .bug-quick-card-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--ath-space-3);
   font-size: 13px;
   line-height: 1.6;
-  color: #475467;
+  color: var(--ath-text-main);
 }
 
 .bug-quick-card-row strong {
   min-width: 0;
   text-align: right;
-  color: #344054;
+  color: var(--ath-text-strong);
 }
 
 .bug-quick-card-meta {
-  font-size: 12px;
+  color: var(--ath-text-muted);
+  font-size: var(--ath-font-xs);
   line-height: 1.6;
-  color: #667085;
 }
 
 .bug-quick-form {
   display: grid;
-  gap: 12px;
+  gap: var(--ath-space-3);
+}
+
+.bug-quick-form :deep(.el-select__wrapper),
+.bug-quick-form :deep(.el-textarea__inner) {
+  border-radius: var(--ath-radius-md);
+}
+
+.bug-quick-form :deep(.el-button) {
+  height: var(--ath-control-height-sm);
+  border-radius: var(--ath-radius-sm);
 }
 </style>

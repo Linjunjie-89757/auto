@@ -26,8 +26,8 @@ import { Home } from '@lucide/vue'
   min-height: 100%;
   align-items: center;
   justify-content: center;
-  color: #9ca3af;
-  font-size: 14px;
+  color: var(--ath-text-subtle);
+  font-size: var(--ath-font-sm);
   text-align: center;
 }
 
@@ -35,6 +35,21 @@ import { Home } from '@lucide/vue'
   display: grid;
   justify-items: center;
   gap: 12px;
+  min-width: min(520px, calc(100vw - 64px));
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-lg);
+  background: linear-gradient(180deg, #ffffff 0%, var(--ath-bg-subtle) 100%);
+  padding: var(--ath-space-8);
+  box-shadow: var(--ath-shadow-xs);
+}
+
+.dashboard-placeholder svg {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--ath-radius-lg);
+  background: var(--ath-blue-soft);
+  padding: 10px;
+  color: var(--ath-primary);
 }
 
 .dashboard-placeholder p {

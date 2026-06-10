@@ -39,7 +39,7 @@ public class SettingsService {
         this.workspaceService = workspaceService;
     }
 
-    public PageResponse<EnvConfigItem> listEnvs(String workspaceCode) {
+    public PageResponse<EnvConfigItem> listEnvs(String workspaceCode, String keyword, String envType, Integer status) {
         WorkspaceEntity workspace = resolveScopedWorkspace(workspaceCode);
         LambdaQueryWrapper<EnvConfigEntity> query = new LambdaQueryWrapper<>();
         if (workspace != null) {
@@ -50,6 +50,22 @@ public class SettingsService {
                 return new PageResponse<>(List.of(), 0);
             }
             query.in(EnvConfigEntity::getWorkspaceId, workspaceIds);
+        }
+        String trimmedKeyword = blankToNull(keyword);
+        if (trimmedKeyword != null) {
+            query.and(wrapper -> wrapper
+                    .like(EnvConfigEntity::getEnvName, trimmedKeyword)
+                    .or()
+                    .like(EnvConfigEntity::getBaseUrl, trimmedKeyword)
+                    .or()
+                    .like(EnvConfigEntity::getConfigJson, trimmedKeyword));
+        }
+        String trimmedEnvType = blankToNull(envType);
+        if (trimmedEnvType != null) {
+            query.eq(EnvConfigEntity::getEnvType, trimmedEnvType.trim().toUpperCase(Locale.ROOT));
+        }
+        if (status != null) {
+            query.eq(EnvConfigEntity::getStatus, normalizeStatus(status));
         }
         var items = envConfigMapper.selectList(query.orderByAsc(EnvConfigEntity::getId)).stream()
                 .map(this::toEnvItem)
@@ -107,7 +123,7 @@ public class SettingsService {
         envConfigMapper.deleteById(id);
     }
 
-    public PageResponse<ParamSetItem> listParams(String workspaceCode) {
+    public PageResponse<ParamSetItem> listParams(String workspaceCode, String keyword, String paramType, Integer status) {
         WorkspaceEntity workspace = resolveScopedWorkspace(workspaceCode);
         LambdaQueryWrapper<ParamSetEntity> query = new LambdaQueryWrapper<>();
         if (workspace != null) {
@@ -118,6 +134,20 @@ public class SettingsService {
                 return new PageResponse<>(List.of(), 0);
             }
             query.in(ParamSetEntity::getWorkspaceId, workspaceIds);
+        }
+        String trimmedKeyword = blankToNull(keyword);
+        if (trimmedKeyword != null) {
+            query.and(wrapper -> wrapper
+                    .like(ParamSetEntity::getParamName, trimmedKeyword)
+                    .or()
+                    .like(ParamSetEntity::getContentJson, trimmedKeyword));
+        }
+        String trimmedParamType = blankToNull(paramType);
+        if (trimmedParamType != null) {
+            query.eq(ParamSetEntity::getParamType, trimmedParamType.trim().toUpperCase(Locale.ROOT));
+        }
+        if (status != null) {
+            query.eq(ParamSetEntity::getStatus, normalizeStatus(status));
         }
         var items = paramSetMapper.selectList(query.orderByAsc(ParamSetEntity::getId)).stream()
                 .map(this::toParamItem)
@@ -173,7 +203,7 @@ public class SettingsService {
         paramSetMapper.deleteById(id);
     }
 
-    public PageResponse<DbConnectionItem> listDbConnections(String workspaceCode) {
+    public PageResponse<DbConnectionItem> listDbConnections(String workspaceCode, String keyword, String dbType, Integer status) {
         WorkspaceEntity workspace = resolveScopedWorkspace(workspaceCode);
         LambdaQueryWrapper<DbConnectionEntity> query = new LambdaQueryWrapper<>();
         if (workspace != null) {
@@ -184,6 +214,24 @@ public class SettingsService {
                 return new PageResponse<>(List.of(), 0);
             }
             query.in(DbConnectionEntity::getWorkspaceId, workspaceIds);
+        }
+        String trimmedKeyword = blankToNull(keyword);
+        if (trimmedKeyword != null) {
+            query.and(wrapper -> wrapper
+                    .like(DbConnectionEntity::getConnectionName, trimmedKeyword)
+                    .or()
+                    .like(DbConnectionEntity::getJdbcUrl, trimmedKeyword)
+                    .or()
+                    .like(DbConnectionEntity::getUsername, trimmedKeyword)
+                    .or()
+                    .like(DbConnectionEntity::getDescription, trimmedKeyword));
+        }
+        String trimmedDbType = blankToNull(dbType);
+        if (trimmedDbType != null) {
+            query.eq(DbConnectionEntity::getDbType, trimmedDbType.trim().toUpperCase(Locale.ROOT));
+        }
+        if (status != null) {
+            query.eq(DbConnectionEntity::getStatus, normalizeStatus(status));
         }
         var items = dbConnectionMapper.selectList(query.orderByAsc(DbConnectionEntity::getId)).stream()
                 .map(this::toDbConnectionItem)

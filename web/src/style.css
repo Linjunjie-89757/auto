@@ -727,6 +727,60 @@ a {
   background: #f9fafb;
 }
 
+.workspace-empty-state {
+  display: flex;
+  min-height: calc(100vh - 112px);
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 14px;
+  border: 1px solid var(--ath-border);
+  border-radius: var(--ath-radius-xl);
+  background: var(--ath-bg-panel);
+  padding: 48px 24px;
+  text-align: center;
+  box-shadow: var(--ath-shadow-card);
+}
+
+.workspace-empty-icon {
+  display: inline-flex;
+  width: 56px;
+  height: 56px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: var(--ath-blue-soft);
+  color: var(--ath-primary);
+}
+
+.workspace-empty-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.workspace-empty-state h2 {
+  margin: 4px 0 0;
+  color: var(--ath-text-strong);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+}
+
+.workspace-empty-state p {
+  max-width: 420px;
+  margin: 0;
+  color: var(--ath-text-muted);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.workspace-empty-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
 .page-shell {
   display: flex;
   flex-direction: column;

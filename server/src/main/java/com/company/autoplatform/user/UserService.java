@@ -81,6 +81,40 @@ public class UserService {
         return toItem(entity, findUserWorkspaces(entity.getId()));
     }
 
+    public BatchCreateUserResponse batchCreateUsers(BatchCreateUserRequest request) {
+        requirePlatformAdmin();
+        List<BatchCreateUserItem> results = new ArrayList<>();
+        int successCount = 0;
+        List<CreateUserRequest> users = request.users() == null ? List.of() : request.users();
+        for (int i = 0; i < users.size(); i++) {
+            CreateUserRequest item = users.get(i);
+            try {
+                UserItem created = createUser(item);
+                successCount++;
+                results.add(new BatchCreateUserItem(
+                        i + 1,
+                        safeTrim(item.username()),
+                        safeTrim(item.email()),
+                        safeTrim(item.displayName()),
+                        true,
+                        "创建成功",
+                        created
+                ));
+            } catch (RuntimeException ex) {
+                results.add(new BatchCreateUserItem(
+                        i + 1,
+                        item == null ? "" : safeTrim(item.username()),
+                        item == null ? "" : safeTrim(item.email()),
+                        item == null ? "" : safeTrim(item.displayName()),
+                        false,
+                        ex.getMessage(),
+                        null
+                ));
+            }
+        }
+        return new BatchCreateUserResponse(users.size(), successCount, users.size() - successCount, results);
+    }
+
     public UserItem updateUser(Long userId, UpdateUserRequest request) {
         requirePlatformAdmin();
         UserEntity entity = requireAnyUser(userId);
@@ -142,9 +176,6 @@ public class UserService {
                 .map(WorkspaceEntity::getWorkspaceCode)
                 .filter(code -> !code.equals(workspaceCode))
                 .toList();
-        if (remainingWorkspaceCodes.isEmpty()) {
-            throw new BadRequestException("至少需要保留一个工作空间");
-        }
 
         entity.setRoleCode(PlatformRole.MEMBER);
         entity.setUpdatedAt(LocalDateTime.now());
@@ -215,7 +246,8 @@ public class UserService {
 
         List<String> normalizedCodes = normalizeWorkspaceCodes(requestedWorkspaceCodes);
         if (normalizedCodes.isEmpty()) {
-            throw new BadRequestException("普通成员必须至少选择一个所属空间");
+            clearUserWorkspaces(user.getId());
+            return;
         }
 
         Map<String, WorkspaceMemberEntity> existingMemberships = workspaceMemberMapper.selectList(
@@ -376,6 +408,10 @@ public class UserService {
         if (existing != null && (excludeUserId == null || !existing.getId().equals(excludeUserId))) {
             throw new BadRequestException("邮箱已存在");
         }
+    }
+
+    private String safeTrim(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private void requireAssignableRole(String storedRole) {

@@ -48,9 +48,12 @@ import type {
   CreateCasePayload,
   CreateEnvPayload,
   CreateDbConnectionPayload,
+  BatchCreateUserPayload,
+  BatchCreateUserResponse,
   CreateUserPayload,
   CreateBugPayload,
   UpdateBugPayload,
+  UpdateWorkspaceMemberPayload,
   ExecuteCasePayload,
   CreateParamPayload,
   CreateReportPayload,
@@ -260,6 +263,13 @@ export const platformApi = {
   createWorkspaceMembers(workspaceCode: string, payload: BatchWorkspaceMemberPayload) {
     return request<WorkspaceMemberItem[]>(`/workspaces/${workspaceCode}/members/batch`, {
       method: 'POST',
+      workspaceCode: 'ALL',
+      body: JSON.stringify(payload),
+    })
+  },
+  updateWorkspaceMember(workspaceCode: string, memberId: number, payload: UpdateWorkspaceMemberPayload) {
+    return request<WorkspaceMemberItem>(`/workspaces/${workspaceCode}/members/${memberId}`, {
+      method: 'PUT',
       workspaceCode: 'ALL',
       body: JSON.stringify(payload),
     })
@@ -1140,6 +1150,13 @@ export const platformApi = {
   },
   createUser(payload: CreateUserPayload) {
     return request<UserItem>('/users', {
+      method: 'POST',
+      workspaceCode: 'ALL',
+      body: JSON.stringify(payload),
+    })
+  },
+  batchCreateUsers(payload: BatchCreateUserPayload) {
+    return request<BatchCreateUserResponse>('/users/batch', {
       method: 'POST',
       workspaceCode: 'ALL',
       body: JSON.stringify(payload),

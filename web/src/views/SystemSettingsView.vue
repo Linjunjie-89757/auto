@@ -11,6 +11,7 @@ import { usePersistedFilters } from '../composables/usePersistedFilters'
 import { useWorkspace } from '../composables/useWorkspace'
 import { useWorkspaceAccess } from '../composables/useWorkspaceAccess'
 import type {
+  BatchCreateUserResult,
   BatchWorkspaceMemberPayload,
   CreateDbConnectionPayload,
   CreateEnvPayload,
@@ -61,6 +62,7 @@ const dbConnectionLoading = ref(false)
 
 const savingWorkspace = ref(false)
 const savingUser = ref(false)
+const savingBatchUser = ref(false)
 const savingMember = ref(false)
 const savingEnv = ref(false)
 const savingParam = ref(false)
@@ -161,6 +163,7 @@ const workspaceDialogVisible = ref(false)
 const workspaceDialogMode = ref<'create' | 'edit'>('create')
 const userDialogVisible = ref(false)
 const userDialogMode = ref<'create' | 'edit'>('create')
+const batchUserDialogVisible = ref(false)
 const batchMemberDialogVisible = ref(false)
 const envDialogVisible = ref(false)
 const envDialogMode = ref<'create' | 'edit'>('create')
@@ -215,6 +218,12 @@ const userForm = reactive<CreateUserPayload & UpdateUserPayload & { id: number |
   status: 1,
   workspaceCodes: [],
 })
+
+const batchUserForm = reactive({
+  rawText: '',
+  workspaceCodes: [] as string[],
+})
+const batchUserResults = ref<BatchCreateUserResult[]>([])
 
 const batchMemberForm = reactive<BatchWorkspaceMemberPayload>({
   userIds: [],
@@ -273,6 +282,10 @@ const settingsNavItems = computed(() => {
       { id: 'security' as SettingsTab, label: '安全设置', desc: '密钥与访问控制', icon: Shield },
       { id: 'theme' as SettingsTab, label: '外观设置', desc: '主题与显示偏好', icon: Palette },
     )
+  } else {
+    base.push(
+      { id: 'team' as SettingsTab, label: '团队管理', desc: '成员与权限管理', icon: Users },
+    )
   }
   return base
 })
@@ -296,9 +309,15 @@ const workspaceStatCards = computed(() => [
   { label: '总成员数', value: activeUsers.value.length, tone: 'purple', icon: Users },
   { label: '项目空间', value: businessWorkspaces.value.filter(item => inferWorkspaceType(item) === 'project').length, tone: 'orange', icon: Activity },
 ])
+const teamStatCards = computed(() => [
+  { label: '成员总数', value: users.value.length, tone: 'blue', icon: Users },
+  { label: '启用成员', value: users.value.filter(item => item.status === 1).length, tone: 'green', icon: Check },
+  { label: '平台管理员', value: users.value.filter(item => isPlatformAdminRole(item.roleCode)).length, tone: 'purple', icon: Shield },
+  { label: '普通账号', value: users.value.filter(item => isPlatformMemberRole(item.roleCode)).length, tone: 'orange', icon: User },
+])
 const selectableMembersForWorkspace = computed(() => {
   const existingUserIds = new Set(members.value.map(item => item.userId))
-  return activeUsers.value.filter(item => item.roleCode !== 'ADMIN' && !existingUserIds.has(item.id))
+  return activeUsers.value.filter(item => !isPlatformAdminRole(item.roleCode) && !existingUserIds.has(item.id))
 })
 const currentScopeText = computed(() => {
   if (!isConfigCenter.value) {
@@ -332,7 +351,7 @@ const filteredUsers = computed(() => {
       || item.username.toLowerCase().includes(keyword)
       || item.email.toLowerCase().includes(keyword)
       || item.workspaceNames.join(' ').toLowerCase().includes(keyword)
-    const matchRole = !userFilters.roleCode || item.roleCode === userFilters.roleCode
+    const matchRole = !userFilters.roleCode || userRoleFilterMatches(item.roleCode, userFilters.roleCode)
     const matchStatus = !userFilters.status || String(item.status) === userFilters.status
     return matchKeyword && matchRole && matchStatus
   })
@@ -352,7 +371,7 @@ const filteredMembers = computed(() => {
 const workspaceAdminMembers = computed(() => {
   const ownerUserId = managingWorkspace.value?.ownerUserId ?? null
   return filteredMembers.value.filter(member =>
-    (member.roleCode === 'ADMIN' || member.roleCode === 'SUPER_ADMIN') && member.userId !== ownerUserId)
+    member.roleCode === 'ADMIN' && member.id > 0 && member.userId !== ownerUserId)
 })
 const workspaceRegularMembers = computed(() => {
   const ownerUserId = managingWorkspace.value?.ownerUserId ?? null
@@ -663,11 +682,40 @@ function roleLabel(roleCode: string) {
   if (roleCode === 'SUPER_ADMIN') {
     return '超级管理员'
   }
-  return roleCode === 'ADMIN' ? '管理员' : '普通成员'
+  return isPlatformAdminRole(roleCode) ? '平台管理员' : '普通账号'
+}
+
+function isPlatformAdminRole(roleCode: string) {
+  return roleCode === 'SUPER_ADMIN' || roleCode === 'ADMIN' || roleCode === 'PLATFORM_ADMIN'
+}
+
+function isPlatformMemberRole(roleCode: string) {
+  return !isPlatformAdminRole(roleCode)
+}
+
+function userRoleFilterMatches(roleCode: string, filterRole: string) {
+  if (filterRole === 'ADMIN') {
+    return isPlatformAdminRole(roleCode)
+  }
+  if (filterRole === 'MEMBER') {
+    return isPlatformMemberRole(roleCode)
+  }
+  return roleCode === filterRole
+}
+
+function teamRoleClass(roleCode: string) {
+  if (roleCode === 'SUPER_ADMIN') {
+    return 'is-super'
+  }
+  return isPlatformAdminRole(roleCode) ? 'is-admin' : 'is-member'
+}
+
+function teamStatusLabel(status: number) {
+  return status === 1 ? '启用中' : '已停用'
 }
 
 function workspaceSummary(user: UserItem) {
-  if (user.roleCode === 'SUPER_ADMIN' || user.roleCode === 'ADMIN') {
+  if (isPlatformAdminRole(user.roleCode)) {
     return '全部空间'
   }
   if (!user.workspaceNames.length) {
@@ -748,9 +796,9 @@ function workspaceUserInitial(name: string) {
 
 function memberRoleDescription(roleCode: string) {
   if (roleCode === 'ADMIN' || roleCode === 'SUPER_ADMIN') {
-    return '具有管理权限，可编辑用例和配置'
+    return '具有空间管理权限，可编辑用例和配置'
   }
-  return '可查看和执行测试用例'
+  return '可访问该空间，可查看和执行测试用例'
 }
 
 function normalizeWorkspaceCodes(codes: string[]) {
@@ -776,6 +824,12 @@ function resetUserForm() {
   userForm.roleCode = 'MEMBER'
   userForm.status = 1
   userForm.workspaceCodes = []
+}
+
+function resetBatchUserForm() {
+  batchUserForm.rawText = ''
+  batchUserForm.workspaceCodes = []
+  batchUserResults.value = []
 }
 
 function resetBatchMemberForm() {
@@ -991,6 +1045,11 @@ function openUserCreate() {
   userDialogVisible.value = true
 }
 
+function openBatchUserCreate() {
+  resetBatchUserForm()
+  batchUserDialogVisible.value = true
+}
+
 function openUserEdit(row: UserItem) {
   userDialogMode.value = 'edit'
   userForm.id = row.id
@@ -1015,6 +1074,117 @@ function canResetPassword(row: UserItem) {
   return row.roleCode !== 'ADMIN' || isSuperAdmin.value
 }
 
+function splitBatchUserLine(line: string) {
+  if (line.includes(',')) {
+    return line.split(',').map(item => item.trim())
+  }
+  if (line.includes('\t')) {
+    return line.split('\t').map(item => item.trim())
+  }
+  return line.trim().split(/\s+/).map(item => item.trim())
+}
+
+function parseBatchUsers() {
+  const existingUsernames = new Set(users.value.map(item => item.username.trim().toLowerCase()))
+  const existingEmails = new Set(users.value.map(item => item.email.trim().toLowerCase()))
+  const batchUsernames = new Set<string>()
+  const batchEmails = new Set<string>()
+  const workspaceCodes = normalizeWorkspaceCodes(batchUserForm.workspaceCodes)
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  const parsed: CreateUserPayload[] = []
+  const errors: string[] = []
+
+  batchUserForm.rawText
+    .split(/\r?\n/)
+    .map((line, index) => ({ line: line.trim(), index: index + 1 }))
+    .filter(item => item.line)
+    .forEach(({ line, index }) => {
+      const [username = '', displayName = '', email = ''] = splitBatchUserLine(line)
+      const normalizedUsername = username.trim().toLowerCase()
+      const normalizedEmail = email.trim().toLowerCase()
+
+      if (!username || !displayName || !email) {
+        errors.push(`第 ${index} 行：请按“账号,姓名,邮箱”填写`)
+        return
+      }
+      if (!emailPattern.test(email)) {
+        errors.push(`第 ${index} 行：邮箱格式不正确`)
+        return
+      }
+      if (existingUsernames.has(normalizedUsername)) {
+        errors.push(`第 ${index} 行：账号已存在`)
+        return
+      }
+      if (existingEmails.has(normalizedEmail)) {
+        errors.push(`第 ${index} 行：邮箱已存在`)
+        return
+      }
+      if (batchUsernames.has(normalizedUsername)) {
+        errors.push(`第 ${index} 行：账号在本次批量中重复`)
+        return
+      }
+      if (batchEmails.has(normalizedEmail)) {
+        errors.push(`第 ${index} 行：邮箱在本次批量中重复`)
+        return
+      }
+
+      batchUsernames.add(normalizedUsername)
+      batchEmails.add(normalizedEmail)
+      parsed.push({
+        username: username.trim(),
+        displayName: displayName.trim(),
+        email: email.trim(),
+        roleCode: 'MEMBER',
+        workspaceCodes,
+      })
+    })
+
+  return { parsed, errors }
+}
+
+async function submitBatchUsers() {
+  const { parsed, errors } = parseBatchUsers()
+  batchUserResults.value = []
+  if (!batchUserForm.rawText.trim()) {
+    ElMessage.error('请先粘贴账号数据')
+    return
+  }
+  if (errors.length) {
+    ElMessage.error(errors[0])
+    batchUserResults.value = errors.map((message, index) => ({
+      index: index + 1,
+      username: '',
+      email: '',
+      displayName: '',
+      success: false,
+      message,
+      user: null,
+    }))
+    return
+  }
+  if (!parsed.length) {
+    ElMessage.error('没有可新增的账号')
+    return
+  }
+
+  savingBatchUser.value = true
+  try {
+    const response = await platformApi.batchCreateUsers({ users: parsed })
+    batchUserResults.value = response.results
+    ElMessage.success(`批量新增完成：成功 ${response.successCount} 个，失败 ${response.failureCount} 个`)
+    await Promise.all([loadBaseData(), loadMembers()])
+    if (response.failureCount === 0) {
+      batchUserDialogVisible.value = false
+    }
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    savingBatchUser.value = false
+  }
+}
+
 async function submitUser() {
   if (!userForm.username.trim() && userDialogMode.value === 'create') {
     ElMessage.error('请先填写成员账号')
@@ -1035,10 +1205,6 @@ async function submitUser() {
   }
 
   const workspaceCodes = normalizeWorkspaceCodes(userForm.workspaceCodes ?? [])
-  if (userForm.roleCode !== 'ADMIN' && workspaceCodes.length === 0) {
-    ElMessage.error('普通成员至少需要选择一个所属空间')
-    return
-  }
 
   savingUser.value = true
   try {
@@ -1138,6 +1304,7 @@ async function submitBatchMembers() {
     })
     ElMessage.success('空间成员添加成功')
     batchMemberDialogVisible.value = false
+    notifyWorkspaceListChanged()
     await Promise.all([loadBaseData(), loadMembers()])
   }
   catch (error) {
@@ -1145,6 +1312,26 @@ async function submitBatchMembers() {
   }
   finally {
     savingMember.value = false
+  }
+}
+
+async function confirmChangeMemberRole(row: WorkspaceMemberItem, roleCode: 'ADMIN' | 'MEMBER') {
+  const actionText = roleCode === 'ADMIN' ? '设为空间管理员' : '降为普通成员'
+  try {
+    await ElMessageBox.confirm(
+      `确认将成员“${row.displayName}”${actionText}吗？`,
+      actionText,
+      { type: 'warning' },
+    )
+    await platformApi.updateWorkspaceMember(memberWorkspaceCode.value, row.id, { roleCode })
+    ElMessage.success(`成员已${actionText}`)
+    notifyWorkspaceListChanged()
+    await Promise.all([loadBaseData(), loadMembers()])
+  }
+  catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error((error as Error).message)
+    }
   }
 }
 
@@ -1157,6 +1344,7 @@ async function confirmDeleteMember(row: WorkspaceMemberItem) {
     )
     await platformApi.deleteWorkspaceMember(memberWorkspaceCode.value, row.id)
     ElMessage.success('空间成员移除成功')
+    notifyWorkspaceListChanged()
     await Promise.all([loadBaseData(), loadMembers()])
   }
   catch (error) {
@@ -1703,7 +1891,7 @@ onMounted(async () => {
                 <div class="workspace-member-section-head">
                   <div class="workspace-member-section-title">
                     <Shield :size="16" />
-                    <h3>管理员 ({{ workspaceAdminMembers.length }}人)</h3>
+                    <h3>空间管理员 ({{ workspaceAdminMembers.length }}人)</h3>
                   </div>
                   <button
                     v-if="canManageSettings"
@@ -1713,7 +1901,7 @@ onMounted(async () => {
                     @click="openBatchMemberCreate('ADMIN')"
                   >
                     <el-icon><Plus /></el-icon>
-                    添加管理员
+                    添加空间管理员
                   </button>
                 </div>
                 <div v-if="workspaceAdminMembers.length" class="workspace-member-list">
@@ -1730,7 +1918,15 @@ onMounted(async () => {
                       </div>
                     </div>
                     <div class="workspace-member-actions">
-                      <span class="workspace-role-badge is-admin">Admin</span>
+                      <span class="workspace-role-badge is-admin">空间管理员</span>
+                      <button
+                        v-if="canManageSettings"
+                        type="button"
+                        class="workspace-member-text-action"
+                        @click="confirmChangeMemberRole(item, 'MEMBER')"
+                      >
+                        降为普通
+                      </button>
                       <button v-if="canManageSettings" type="button" @click="confirmDeleteMember(item)">
                         <Trash2 :size="16" />
                       </button>
@@ -1744,7 +1940,7 @@ onMounted(async () => {
                 <div class="workspace-member-section-head">
                   <div class="workspace-member-section-title">
                     <Users :size="16" />
-                    <h3>成员 ({{ workspaceRegularMembers.length }}人)</h3>
+                    <h3>普通成员 ({{ workspaceRegularMembers.length }}人)</h3>
                   </div>
                   <button
                     v-if="canManageSettings"
@@ -1754,7 +1950,7 @@ onMounted(async () => {
                     @click="openBatchMemberCreate('MEMBER')"
                   >
                     <el-icon><Plus /></el-icon>
-                    添加成员
+                    添加普通成员
                   </button>
                 </div>
                 <div v-if="workspaceRegularMembers.length" class="workspace-member-list">
@@ -1771,7 +1967,15 @@ onMounted(async () => {
                       </div>
                     </div>
                     <div class="workspace-member-actions">
-                      <span class="workspace-role-badge">Member</span>
+                      <span class="workspace-role-badge">普通成员</span>
+                      <button
+                        v-if="canManageSettings"
+                        type="button"
+                        class="workspace-member-text-action"
+                        @click="confirmChangeMemberRole(item, 'ADMIN')"
+                      >
+                        设为管理员
+                      </button>
                       <button v-if="canManageSettings" type="button" @click="confirmDeleteMember(item)">
                         <Trash2 :size="16" />
                       </button>
@@ -1782,6 +1986,141 @@ onMounted(async () => {
               </section>
             </div>
           </template>
+        </section>
+        <section v-else-if="activeTab === 'team'" class="team-management-page">
+          <template v-if="canManageSettings">
+            <header class="team-management-header">
+              <div>
+                <h2>团队管理</h2>
+                <p>管理平台账号、平台角色与可访问空间。空间管理员身份请在「空间配置 → 成员管理」中维护。</p>
+              </div>
+              <div class="team-header-actions">
+                <button type="button" class="team-secondary-button" @click="openBatchUserCreate">
+                  批量新增
+                </button>
+                <button type="button" class="team-primary-button" @click="openUserCreate">
+                  <el-icon><Plus /></el-icon>
+                  <span>新增账号</span>
+                </button>
+              </div>
+            </header>
+
+            <div class="team-stat-grid">
+              <article
+                v-for="stat in teamStatCards"
+                :key="stat.label"
+                class="team-stat-card"
+                :class="`is-${stat.tone}`"
+              >
+                <div>
+                  <span>{{ stat.label }}</span>
+                  <component :is="stat.icon" :size="16" />
+                </div>
+                <strong>{{ stat.value }}</strong>
+              </article>
+            </div>
+
+            <section class="team-filter-card">
+              <label class="team-filter-field is-keyword">
+                <span>关键词</span>
+                <input v-model="userFilters.keyword" placeholder="搜索姓名、账号、邮箱或空间">
+              </label>
+              <label class="team-filter-field">
+                <span>平台角色</span>
+                <select v-model="userFilters.roleCode">
+                  <option value="">全部角色</option>
+                  <option value="ADMIN">平台管理员</option>
+                  <option value="MEMBER">普通账号</option>
+                </select>
+              </label>
+              <label class="team-filter-field">
+                <span>状态</span>
+                <select v-model="userFilters.status">
+                  <option value="">全部状态</option>
+                  <option value="1">启用中</option>
+                  <option value="0">已停用</option>
+                </select>
+              </label>
+              <button type="button" class="team-reset-button" @click="resetUserFilters">重置</button>
+            </section>
+
+            <section class="team-table-card" v-loading="userLoading">
+              <table v-if="filteredUsers.length">
+                <thead>
+                  <tr>
+                    <th>成员</th>
+                    <th>平台角色</th>
+                    <th>可访问空间</th>
+                    <th>状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="user in filteredUsers" :key="user.id">
+                    <td>
+                      <div class="team-member-cell">
+                        <div class="team-avatar">{{ workspaceUserInitial(user.displayName) }}</div>
+                        <div>
+                          <strong>{{ user.displayName }}</strong>
+                          <p>{{ user.username }} · {{ user.email }}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <span class="team-role-badge" :class="teamRoleClass(user.roleCode)">
+                        {{ roleLabel(user.roleCode) }}
+                      </span>
+                    </td>
+                    <td>
+                      <span class="team-workspace-text">{{ workspaceSummary(user) }}</span>
+                    </td>
+                    <td>
+                      <span class="team-status-badge" :class="{ 'is-disabled': user.status !== 1 }">
+                        {{ teamStatusLabel(user.status) }}
+                      </span>
+                    </td>
+                    <td>
+                      <div class="team-row-actions">
+                        <button
+                          type="button"
+                          :disabled="!canEditUser(user)"
+                          @click="openUserEdit(user)"
+                        >
+                          编辑
+                        </button>
+                        <button
+                          type="button"
+                          :disabled="!canToggleUser(user)"
+                          @click="toggleUserStatus(user)"
+                        >
+                          {{ user.status === 1 ? '停用' : '启用' }}
+                        </button>
+                        <button
+                          type="button"
+                          :disabled="!canResetPassword(user)"
+                          @click="confirmResetPassword(user)"
+                        >
+                          重置密码
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-else class="team-empty-state">
+                <Users :size="32" />
+                <strong>暂无匹配账号</strong>
+                <p>调整筛选条件，或新增一个普通账号。</p>
+              </div>
+            </section>
+          </template>
+
+          <div v-else class="settings-placeholder">
+            <div>
+              <Users :size="34" />
+              <p>暂无权限访问团队管理。</p>
+            </div>
+          </div>
         </section>
         <div v-else class="settings-placeholder">
           <div>
@@ -2093,7 +2432,7 @@ onMounted(async () => {
       </div>
     </Teleport>
 
-    <el-dialog v-model="userDialogVisible" :title="userDialogMode === 'create' ? '新增成员' : '编辑成员'" width="620px">
+    <el-dialog v-model="userDialogVisible" :title="userDialogMode === 'create' ? '新增平台账号' : '编辑平台账号'" width="620px">
       <el-form label-width="100px">
         <el-form-item label="账号" required>
           <el-input v-model="userForm.username" :disabled="userDialogMode === 'edit'" />
@@ -2104,15 +2443,15 @@ onMounted(async () => {
         <el-form-item label="姓名" required>
           <el-input v-model="userForm.displayName" />
         </el-form-item>
-        <el-form-item label="成员角色" required>
+        <el-form-item label="平台角色" required>
           <el-radio-group v-model="userForm.roleCode">
-            <el-radio v-if="canManageAdminUsers" value="ADMIN">管理员</el-radio>
-            <el-radio value="MEMBER">普通成员</el-radio>
+            <el-radio v-if="canManageAdminUsers" value="ADMIN">平台管理员</el-radio>
+            <el-radio value="MEMBER">普通账号</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="所属空间" :required="userForm.roleCode !== 'ADMIN'">
+        <el-form-item label="可访问空间">
           <template v-if="userForm.roleCode === 'ADMIN'">
-            <div class="block-note">管理员默认拥有全部空间，无需单独分配。</div>
+            <div class="block-note">平台管理员默认拥有全部空间，无需单独分配。空间管理员请到「空间配置 → 成员管理」中设置。</div>
           </template>
           <template v-else>
             <el-select
@@ -2121,7 +2460,7 @@ onMounted(async () => {
               filterable
               collapse-tags
               collapse-tags-tooltip
-              placeholder="请选择所属空间"
+              placeholder="可选，未分配时登录后会提示联系管理员"
             >
               <el-option
                 v-for="item in businessWorkspaces"
@@ -2130,10 +2469,11 @@ onMounted(async () => {
                 :value="item.code"
               />
             </el-select>
+            <div class="block-note">未分配空间的普通账号可以登录平台，但暂时无法进入业务空间。</div>
           </template>
         </el-form-item>
         <div v-if="userDialogMode === 'create'" class="block-note">
-          成员创建后默认密码为 <span class="mono">zhyt@2025</span>，后续可在列表中重置密码。
+          平台账号创建后默认密码为 <span class="mono">zhyt@2025</span>，后续可在列表中重置密码。
         </div>
       </el-form>
       <template #footer>
@@ -2142,12 +2482,63 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="batchMemberDialogVisible" :title="batchMemberForm.roleCode === 'ADMIN' ? '添加空间管理员' : '批量添加空间成员'" width="620px">
+    <el-dialog v-model="batchUserDialogVisible" title="批量新增普通账号" width="760px">
+      <div class="batch-user-dialog">
+        <div class="block-note">
+          每行一个账号，格式为 <span class="mono">账号,姓名,邮箱</span>。也支持从 Excel 复制三列后直接粘贴。批量新增账号默认角色为普通账号，默认密码为 <span class="mono">zhyt@2025</span>。
+        </div>
+        <el-form label-width="100px">
+          <el-form-item label="账号数据" required>
+            <el-input
+              v-model="batchUserForm.rawText"
+              type="textarea"
+              :rows="9"
+              placeholder="zhangsan,张三,zhangsan@example.com&#10;lisi,李四,lisi@example.com"
+            />
+          </el-form-item>
+          <el-form-item label="可访问空间">
+            <el-select
+              v-model="batchUserForm.workspaceCodes"
+              multiple
+              filterable
+              collapse-tags
+              collapse-tags-tooltip
+              placeholder="可选，未分配时登录后会提示联系管理员"
+            >
+              <el-option
+                v-for="item in businessWorkspaces"
+                :key="item.code"
+                :label="item.name"
+                :value="item.code"
+              />
+            </el-select>
+          </el-form-item>
+        </el-form>
+        <div v-if="batchUserResults.length" class="batch-user-results">
+          <div
+            v-for="item in batchUserResults"
+            :key="`${item.index}-${item.username}-${item.message}`"
+            class="batch-user-result-row"
+            :class="{ 'is-success': item.success }"
+          >
+            <span>第 {{ item.index }} 行</span>
+            <strong>{{ item.displayName || item.username || '未解析' }}</strong>
+            <em>{{ item.message }}</em>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="batchUserDialogVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="savingBatchUser" @click="submitBatchUsers">开始新增</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="batchMemberDialogVisible" :title="batchMemberForm.roleCode === 'ADMIN' ? '添加空间管理员' : '批量添加空间普通成员'" width="620px">
       <el-form label-width="100px">
         <el-form-item label="目标空间">
           <el-input :model-value="resolveWorkspaceName(memberWorkspaceCode)" disabled />
         </el-form-item>
-        <el-form-item :label="batchMemberForm.roleCode === 'ADMIN' ? '管理员' : '成员'" required>
+        <el-form-item :label="batchMemberForm.roleCode === 'ADMIN' ? '空间管理员' : '普通成员'" required>
           <el-select
             v-model="batchMemberForm.userIds"
             multiple
@@ -2164,6 +2555,9 @@ onMounted(async () => {
             />
           </el-select>
         </el-form-item>
+        <div class="block-note">
+          这里设置的是当前空间内角色，不会改变团队管理中的平台角色。
+        </div>
       </el-form>
       <template #footer>
         <el-button @click="batchMemberDialogVisible = false">取消</el-button>
@@ -2660,6 +3054,424 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+}
+
+.team-management-page {
+  height: 100%;
+  overflow-y: auto;
+  padding: 28px 32px;
+  background: var(--ath-bg-page);
+  scrollbar-width: none;
+}
+
+.team-management-page::-webkit-scrollbar {
+  display: none;
+}
+
+.team-management-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 28px;
+}
+
+.team-management-header h2 {
+  margin: 0;
+  color: var(--ath-text-strong);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.team-management-header p {
+  max-width: 640px;
+  margin: 2px 0 0;
+  color: var(--ath-text-muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.team-header-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.team-primary-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 42px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--ath-primary);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.18s ease;
+}
+
+.team-secondary-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  height: 42px;
+  padding: 0 16px;
+  border: 1px solid var(--ath-border);
+  border-radius: 12px;
+  background: var(--ath-bg-panel);
+  color: var(--ath-text-main);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
+}
+
+.team-primary-button:hover {
+  background: var(--ath-primary-hover);
+}
+
+.team-secondary-button:hover {
+  border-color: var(--ath-border-strong);
+  background: var(--ath-bg-page);
+}
+
+.batch-user-dialog {
+  display: grid;
+  gap: 16px;
+}
+
+.batch-user-results {
+  display: grid;
+  max-height: 220px;
+  overflow-y: auto;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--ath-border);
+  border-radius: 12px;
+  background: var(--ath-bg-subtle);
+}
+
+.batch-user-result-row {
+  display: grid;
+  grid-template-columns: 72px minmax(120px, 1fr) minmax(160px, 2fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  border-radius: 8px;
+  background: var(--ath-red-soft);
+  padding: 8px 10px;
+  color: var(--ath-red);
+  font-size: 12px;
+}
+
+.batch-user-result-row.is-success {
+  background: var(--ath-green-soft);
+  color: var(--ath-green);
+}
+
+.batch-user-result-row span,
+.batch-user-result-row em {
+  font-style: normal;
+}
+
+.batch-user-result-row strong {
+  overflow: hidden;
+  color: var(--ath-text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.team-stat-card {
+  min-width: 0;
+  padding: 16px 20px;
+  border: 1px solid var(--ath-border);
+  border-radius: 16px;
+  background: var(--ath-bg-panel);
+}
+
+.team-stat-card div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.team-stat-card span {
+  color: var(--ath-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.team-stat-card strong {
+  display: block;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.team-stat-card.is-blue strong,
+.team-stat-card.is-blue svg {
+  color: var(--ath-primary);
+}
+
+.team-stat-card.is-green strong,
+.team-stat-card.is-green svg {
+  color: var(--ath-green);
+}
+
+.team-stat-card.is-purple strong,
+.team-stat-card.is-purple svg {
+  color: var(--ath-purple);
+}
+
+.team-stat-card.is-orange strong,
+.team-stat-card.is-orange svg {
+  color: var(--ath-orange);
+}
+
+.team-filter-card {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 180px 160px auto;
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid var(--ath-border);
+  border-radius: 16px;
+  background: var(--ath-bg-panel);
+}
+
+.team-filter-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.team-filter-field span {
+  color: var(--ath-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.team-filter-field input,
+.team-filter-field select {
+  width: 100%;
+  height: 38px;
+  border: 1px solid var(--ath-input-border);
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 0 12px;
+  color: var(--ath-text-strong);
+  font-size: 14px;
+  outline: none;
+}
+
+.team-filter-field input:focus,
+.team-filter-field select:focus {
+  border-color: var(--ath-primary);
+  box-shadow: var(--ath-focus-ring);
+}
+
+.team-reset-button {
+  height: 38px;
+  border: 1px solid var(--ath-border);
+  border-radius: 10px;
+  background: var(--ath-bg-panel);
+  color: var(--ath-text-main);
+  padding: 0 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.team-reset-button:hover {
+  border-color: var(--ath-border-strong);
+  background: var(--ath-bg-page);
+}
+
+.team-table-card {
+  overflow: hidden;
+  border: 1px solid var(--ath-border);
+  border-radius: 16px;
+  background: var(--ath-bg-panel);
+}
+
+.team-table-card table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.team-table-card th {
+  height: 44px;
+  border-bottom: 1px solid var(--ath-border-soft);
+  background: var(--ath-bg-subtle);
+  color: var(--ath-text-muted);
+  padding: 0 18px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.team-table-card td {
+  min-height: 54px;
+  border-bottom: 1px solid var(--ath-border-soft);
+  padding: 14px 18px;
+  color: var(--ath-text-main);
+  font-size: 14px;
+  vertical-align: middle;
+}
+
+.team-table-card tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.team-table-card tbody tr:hover {
+  background: var(--ath-bg-subtle);
+}
+
+.team-member-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.team-member-cell strong {
+  display: block;
+  color: var(--ath-text-strong);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.team-member-cell p {
+  margin: 3px 0 0;
+  color: var(--ath-text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.team-avatar {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--ath-blue-soft);
+  color: var(--ath-primary);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.team-role-badge,
+.team-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.team-role-badge.is-super,
+.team-role-badge.is-admin {
+  background: var(--ath-purple-soft);
+  color: var(--ath-purple);
+}
+
+.team-role-badge.is-member {
+  background: var(--ath-blue-soft);
+  color: var(--ath-primary);
+}
+
+.team-status-badge {
+  background: var(--ath-green-soft);
+  color: var(--ath-green);
+}
+
+.team-status-badge.is-disabled {
+  background: var(--ath-bg-muted);
+  color: var(--ath-text-muted);
+}
+
+.team-workspace-text {
+  display: inline-block;
+  max-width: 260px;
+  overflow: hidden;
+  color: var(--ath-text-main);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.team-row-actions button {
+  border: 0;
+  background: transparent;
+  color: var(--ath-primary);
+  padding: 0;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.team-row-actions button:hover:not(:disabled) {
+  color: var(--ath-primary-hover);
+}
+
+.team-row-actions button:disabled {
+  color: var(--ath-text-disabled);
+  cursor: not-allowed;
+}
+
+.team-empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 48px 20px;
+  color: var(--ath-text-muted);
+  text-align: center;
+}
+
+.team-empty-state svg {
+  color: var(--ath-primary);
+}
+
+.team-empty-state strong {
+  color: var(--ath-text-strong);
+  font-size: 14px;
+}
+
+.team-empty-state p {
+  margin: 0;
+  font-size: 13px;
 }
 
 .workspace-config-card {
@@ -3216,12 +4028,27 @@ onMounted(async () => {
   transition: opacity 0.18s ease, background-color 0.18s ease;
 }
 
+.workspace-member-actions .workspace-member-text-action {
+  width: auto;
+  min-width: 0;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--ath-blue-soft);
+  color: var(--ath-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .workspace-member-row:hover .workspace-member-actions button {
   opacity: 1;
 }
 
 .workspace-member-actions button:hover {
   background: var(--ath-red-soft);
+}
+
+.workspace-member-actions .workspace-member-text-action:hover {
+  background: #dbeafe;
 }
 
 .workspace-role-badge {

@@ -32,6 +32,11 @@ public class UserController {
         return ApiResponse.ok(userService.createUser(request), "成员创建成功");
     }
 
+    @PostMapping("/batch")
+    public ApiResponse<BatchCreateUserResponse> batchCreateUsers(@Valid @RequestBody BatchCreateUserRequest request) {
+        return ApiResponse.ok(userService.batchCreateUsers(request), "批量新增账号完成");
+    }
+
     @PutMapping("/{userId}")
     public ApiResponse<UserItem> updateUser(
             @PathVariable Long userId,

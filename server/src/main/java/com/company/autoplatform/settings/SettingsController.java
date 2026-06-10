@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -26,9 +27,12 @@ public class SettingsController {
 
     @GetMapping("/envs")
     public ApiResponse<PageResponse<EnvConfigItem>> listEnvs(
-            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "envType", required = false) String envType,
+            @RequestParam(value = "status", required = false) Integer status
     ) {
-        return ApiResponse.ok(settingsService.listEnvs(workspaceCode));
+        return ApiResponse.ok(settingsService.listEnvs(workspaceCode, keyword, envType, status));
     }
 
     @PostMapping("/envs")
@@ -68,9 +72,12 @@ public class SettingsController {
 
     @GetMapping("/params")
     public ApiResponse<PageResponse<ParamSetItem>> listParams(
-            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "paramType", required = false) String paramType,
+            @RequestParam(value = "status", required = false) Integer status
     ) {
-        return ApiResponse.ok(settingsService.listParams(workspaceCode));
+        return ApiResponse.ok(settingsService.listParams(workspaceCode, keyword, paramType, status));
     }
 
     @PostMapping("/params")
@@ -110,9 +117,12 @@ public class SettingsController {
 
     @GetMapping("/db-connections")
     public ApiResponse<PageResponse<DbConnectionItem>> listDbConnections(
-            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "dbType", required = false) String dbType,
+            @RequestParam(value = "status", required = false) Integer status
     ) {
-        return ApiResponse.ok(settingsService.listDbConnections(workspaceCode));
+        return ApiResponse.ok(settingsService.listDbConnections(workspaceCode, keyword, dbType, status));
     }
 
     @PostMapping("/db-connections")

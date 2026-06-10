@@ -43,9 +43,21 @@ public class CaseController {
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
             @RequestParam(value = "pageNo", required = false) Integer pageNo,
             @RequestParam(value = "pageSize", required = false) Integer pageSize,
-            @RequestParam(value = "directoryId", required = false) Long directoryId
+            @RequestParam(value = "directoryId", required = false) Long directoryId,
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "priority", required = false) String priority,
+            @RequestParam(value = "reviewStatus", required = false) String reviewStatus,
+            @RequestParam(value = "executionStatus", required = false) String executionStatus
     ) {
-        return ApiResponse.ok(caseService.listCases(workspaceCode, pageNo, pageSize, directoryId));
+        return ApiResponse.ok(caseService.listCases(
+                workspaceCode,
+                pageNo,
+                pageSize,
+                directoryId,
+                keyword,
+                priority,
+                reviewStatus,
+                executionStatus));
     }
 
     @GetMapping("/directories")

@@ -1,0 +1,82 @@
+:root {
+  --app-font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+
+  --app-primary: #2563eb;
+  --app-primary-hover: #1d4ed8;
+  --app-primary-active: #1e40af;
+
+  --app-success: #16a34a;
+  --app-warning: #ea580c;
+  --app-danger: #ef4444;
+  --app-purple: #9333ea;
+
+  --app-bg-page: #f9fafb;
+  --app-bg-panel: #ffffff;
+  --app-bg-muted: #f3f4f6;
+  --app-bg-subtle: #fbfcff;
+
+  --app-border: #e5e7eb;
+  --app-border-soft: #f3f4f6;
+  --app-border-strong: #d1d5db;
+
+  --app-text-primary: #111827;
+  --app-text-secondary: #4b5563;
+  --app-text-muted: #6b7280;
+  --app-text-subtle: #9ca3af;
+  --app-text-inverse: #ffffff;
+
+  --app-radius-sm: 6px;
+  --app-radius-md: 8px;
+  --app-radius-lg: 12px;
+  --app-radius-xl: 16px;
+
+  --app-space-1: 4px;
+  --app-space-2: 8px;
+  --app-space-3: 12px;
+  --app-space-4: 16px;
+  --app-space-5: 20px;
+  --app-space-6: 24px;
+  --app-space-7: 28px;
+  --app-space-8: 32px;
+
+  --app-font-size-xs: 12px;
+  --app-font-size-sm: 13px;
+  --app-font-size-md: 14px;
+  --app-font-size-lg: 16px;
+  --app-font-size-xl: 18px;
+  --app-font-size-page-title: 20px;
+
+  --app-line-height-xs: 16px;
+  --app-line-height-md: 20px;
+  --app-line-height-lg: 24px;
+
+  --app-control-height-sm: 32px;
+  --app-control-height-md: 38px;
+  --app-table-row-height: 54px;
+  --app-dialog-header-height: 64px;
+  --app-sidebar-width: 232px;
+
+  --app-shadow-card: 0 8px 24px rgba(15, 23, 42, 0.06);
+  --app-shadow-card-hover: 0 12px 32px rgba(15, 23, 42, 0.08);
+  --app-shadow-overlay: 0 20px 60px rgba(15, 23, 42, 0.18);
+
+  /* Backward-compatible aliases already used by the new frontend. */
+  --app-color-bg: var(--app-bg-page);
+  --app-color-surface: var(--app-bg-panel);
+  --app-color-border: var(--app-border);
+  --app-color-text: var(--app-text-primary);
+  --app-color-text-secondary: var(--app-text-secondary);
+  --app-color-text-muted: var(--app-text-muted);
+  --app-color-primary: var(--app-primary);
+  --app-color-success: var(--app-success);
+  --app-color-warning: var(--app-warning);
+  --app-color-danger: var(--app-danger);
+
+  --app-spacing-xs: var(--app-space-1);
+  --app-spacing-sm: var(--app-space-2);
+  --app-spacing-md: var(--app-space-3);
+  --app-spacing-lg: var(--app-space-4);
+  --app-spacing-xl: var(--app-space-6);
+
+  --app-shadow-panel: var(--app-shadow-card);
+}

@@ -56,7 +56,16 @@ public class CaseService {
         this.workspaceService = workspaceService;
     }
 
-    public PageResponse<CaseSummaryResponse> listCases(String workspaceCode, Integer pageNo, Integer pageSize, Long directoryId) {
+    public PageResponse<CaseSummaryResponse> listCases(
+            String workspaceCode,
+            Integer pageNo,
+            Integer pageSize,
+            Long directoryId,
+            String keyword,
+            String priority,
+            String reviewStatus,
+            String executionStatus
+    ) {
         String normalized = WorkspaceScope.normalize(workspaceCode);
         int safePageNo = pageNo == null || pageNo < 1 ? DEFAULT_PAGE_NO : pageNo;
         int safePageSize = pageSize == null || pageSize < 1 ? DEFAULT_PAGE_SIZE : pageSize;
@@ -78,6 +87,29 @@ public class CaseService {
             validateDirectoryReadable(directory, workspaceCode);
             Set<Long> directoryIds = collectDescendantIds(directory.getWorkspaceId(), directory.getId());
             query.in(CaseEntity::getCaseDirectoryId, directoryIds);
+        }
+
+        String normalizedKeyword = blankToNull(keyword);
+        if (normalizedKeyword != null) {
+            query.and(wrapper -> wrapper
+                    .like(CaseEntity::getCaseNo, normalizedKeyword)
+                    .or()
+                    .like(CaseEntity::getTitle, normalizedKeyword));
+        }
+
+        String normalizedPriority = blankToNull(priority);
+        if (normalizedPriority != null) {
+            query.eq(CaseEntity::getPriority, normalizedPriority.toUpperCase());
+        }
+
+        String normalizedReviewStatus = blankToNull(reviewStatus);
+        if (normalizedReviewStatus != null) {
+            query.eq(CaseEntity::getReviewStatus, normalizeReviewStatus(normalizedReviewStatus));
+        }
+
+        String normalizedExecutionStatus = blankToNull(executionStatus);
+        if (normalizedExecutionStatus != null) {
+            query.eq(CaseEntity::getExecutionStatus, normalizeExecutionStatus(normalizedExecutionStatus));
         }
 
         long total = caseMapper.selectCount(query);

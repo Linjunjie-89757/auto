@@ -1345,6 +1345,27 @@ export interface CreateUserPayload {
   workspaceCodes?: string[]
 }
 
+export interface BatchCreateUserPayload {
+  users: CreateUserPayload[]
+}
+
+export interface BatchCreateUserResult {
+  index: number
+  username: string
+  email: string
+  displayName: string
+  success: boolean
+  message: string
+  user: UserItem | null
+}
+
+export interface BatchCreateUserResponse {
+  total: number
+  successCount: number
+  failureCount: number
+  results: BatchCreateUserResult[]
+}
+
 export interface UpdateUserPayload {
   email: string
   displayName: string

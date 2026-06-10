@@ -15,6 +15,65 @@ class DbConnectionServiceTests extends IntegrationTestSupport {
     private DbConnectionMapper dbConnectionMapper;
 
     @Test
+    void settingsListsSupportOptionalFilters() {
+        String unique = "settings-filter-" + System.nanoTime();
+
+        EnvConfigItem env = settingsService.createEnv(WORKSPACE_CODE, new CreateEnvConfigRequest(
+                null,
+                "STAGING",
+                unique + "-env",
+                "https://" + unique + ".example.com",
+                "{\"description\":\"" + unique + "-env-desc\"}"
+        ));
+
+        ParamSetItem param = settingsService.createParam(WORKSPACE_CODE, new CreateParamSetRequest(
+                null,
+                "API",
+                unique + "-param",
+                "{\"value\":\"" + unique + "-value\",\"description\":\"filter target\"}"
+        ));
+
+        DbConnectionItem dbConnection = settingsService.createDbConnection(WORKSPACE_CODE, new DbConnectionRequest(
+                null,
+                unique + "-db",
+                "H2",
+                "org.h2.Driver",
+                "jdbc:h2:mem:" + unique + "-filter;MODE=MySQL;DB_CLOSE_DELAY=-1",
+                "sa",
+                "secret",
+                3,
+                4000,
+                unique + "-db-desc",
+                0
+        ));
+
+        assertThat(settingsService.listEnvs(WORKSPACE_CODE, unique, "STAGING", 1).items())
+                .extracting(EnvConfigItem::id)
+                .contains(env.id());
+        assertThat(settingsService.listEnvs(WORKSPACE_CODE, unique, "PROD", 1).items())
+                .extracting(EnvConfigItem::id)
+                .doesNotContain(env.id());
+
+        assertThat(settingsService.listParams(WORKSPACE_CODE, unique, "API", 1).items())
+                .extracting(ParamSetItem::id)
+                .contains(param.id());
+        assertThat(settingsService.listParams(WORKSPACE_CODE, unique, "GLOBAL", 1).items())
+                .extracting(ParamSetItem::id)
+                .doesNotContain(param.id());
+
+        assertThat(settingsService.listDbConnections(WORKSPACE_CODE, unique, "H2", 0).items())
+                .extracting(DbConnectionItem::id)
+                .contains(dbConnection.id());
+        assertThat(settingsService.listDbConnections(WORKSPACE_CODE, unique, "MYSQL", 1).items())
+                .extracting(DbConnectionItem::id)
+                .doesNotContain(dbConnection.id());
+
+        settingsService.deleteEnv(env.id(), WORKSPACE_CODE);
+        settingsService.deleteParam(param.id(), WORKSPACE_CODE);
+        settingsService.deleteDbConnection(dbConnection.id(), WORKSPACE_CODE);
+    }
+
+    @Test
     void dbConnectionCrudDoesNotExposePasswordAndKeepsPasswordOnBlankUpdate() {
         String connectionName = "core-db-crud-" + System.nanoTime();
         DbConnectionItem created = settingsService.createDbConnection(WORKSPACE_CODE, new DbConnectionRequest(

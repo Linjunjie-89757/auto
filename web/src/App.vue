@@ -40,6 +40,18 @@ const activeMenu = computed(() => {
 
 const isPublicRoute = computed(() => route.meta.public === true)
 const asideWidth = computed(() => (isMenuCollapsed.value ? '60px' : '240px'))
+const businessWorkspaceOptions = computed(() => workspaceOptions.value.filter(item => !item.allScope))
+const isPlatformAdminRole = computed(() => {
+  const role = authStore.currentUser?.roleCode
+  return role === 'ADMIN' || role === 'PLATFORM_ADMIN' || role === 'SUPER_ADMIN'
+})
+const hasNoBusinessWorkspace = computed(() =>
+  authStore.isAuthenticated
+  && !isPublicRoute.value
+  && workspaceReady.value
+  && businessWorkspaceOptions.value.length === 0
+  && !(isPlatformAdminRole.value && route.path.startsWith('/settings')),
+)
 const mainClass = computed(() => [
   'app-main',
   {
@@ -62,6 +74,10 @@ function isValidWorkspaceCode(value?: string | null) {
 }
 
 async function ensureValidWorkspaceRoute() {
+  if (workspaceOptions.value.length === 0) {
+    return
+  }
+
   const currentQuery = route.query.workspace?.toString()
   if (isValidWorkspaceCode(currentQuery)) {
     return
@@ -111,6 +127,10 @@ function toggleMenuCollapse() {
 }
 
 function handleWorkspaceChange(value: string) {
+  if (!value) {
+    return
+  }
+
   router.replace({
     path: route.path,
     query: {
@@ -134,6 +154,20 @@ async function handleLogout() {
   workspaceOptions.value = []
   ElMessage.success('已退出登录')
   router.replace('/login')
+}
+
+async function refreshWorkspaceAccess() {
+  await loadWorkspaces()
+}
+
+function goCreateWorkspace() {
+  router.push({
+    path: '/settings',
+    query: {
+      tab: 'workspace',
+      workspace: currentWorkspace.value,
+    },
+  })
 }
 
 async function loadWorkspaces(options: { silent?: boolean } = {}) {
@@ -262,6 +296,7 @@ onBeforeUnmount(() => {
           <el-dropdown
             trigger="click"
             popper-class="workspace-dropdown-menu"
+            :disabled="workspaceOptions.length === 0"
             @command="handleWorkspaceChange"
           >
             <button class="workspace-switcher-button" type="button">
@@ -310,7 +345,25 @@ onBeforeUnmount(() => {
       </el-header>
 
       <el-main v-if="workspaceReady" :class="mainClass">
-        <router-view />
+        <section v-if="hasNoBusinessWorkspace" class="workspace-empty-state">
+          <div class="workspace-empty-icon">
+            <Layers />
+          </div>
+          <h2>{{ isPlatformAdminRole ? '暂无工作空间' : '暂无可访问工作空间' }}</h2>
+          <p>
+            {{
+              isPlatformAdminRole
+                ? '请先到系统设置中创建工作空间。'
+                : '请联系平台管理员为你分配工作空间后再使用平台功能。'
+            }}
+          </p>
+          <div class="workspace-empty-actions">
+            <el-button @click="refreshWorkspaceAccess">刷新</el-button>
+            <el-button v-if="isPlatformAdminRole" type="primary" @click="goCreateWorkspace">去创建工作空间</el-button>
+            <el-button v-else type="primary" @click="handleLogout">退出登录</el-button>
+          </div>
+        </section>
+        <router-view v-else />
       </el-main>
       <el-main v-else :class="mainClass" />
     </el-container>

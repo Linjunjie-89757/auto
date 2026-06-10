@@ -34,7 +34,6 @@ import java.io.StringReader;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpHeaders;
-import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -98,7 +97,6 @@ public class ApiExecutionEngineSupport {
     private static final int MAX_SCENARIO_LOOP_COUNT = 50;
     private static final int MAX_SCENARIO_WAIT_MS = 60000;
     private static final Set<String> SUCCESS_RESULTS = Set.of("SUCCESS", "FAILED");
-    private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\{\\{\\s*([\\w.-]+)\\s*}}");
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final ApiDefinitionMapper definitionMapper;
@@ -118,6 +116,7 @@ public class ApiExecutionEngineSupport {
     private final ApiWorkspaceScopeSupport workspaceScopeSupport;
     private final ApiAssertionEvaluator assertionEvaluator;
     private final ApiAutomationScriptRunner scriptRunner;
+    private final ApiVariableResolver variableResolver;
     private final HttpClient httpClient;
 
     public ApiExecutionEngineSupport(
@@ -137,7 +136,8 @@ public class ApiExecutionEngineSupport {
             WorkspaceService workspaceService,
             ApiWorkspaceScopeSupport workspaceScopeSupport,
             ApiAssertionEvaluator assertionEvaluator,
-            ApiAutomationScriptRunner scriptRunner
+            ApiAutomationScriptRunner scriptRunner,
+            ApiVariableResolver variableResolver
     ) {
         this.definitionMapper = definitionMapper;
         this.caseMapper = caseMapper;
@@ -156,6 +156,7 @@ public class ApiExecutionEngineSupport {
         this.workspaceScopeSupport = workspaceScopeSupport;
         this.assertionEvaluator = assertionEvaluator;
         this.scriptRunner = scriptRunner;
+        this.variableResolver = variableResolver;
         this.httpClient = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(10))
@@ -673,31 +674,31 @@ public class ApiExecutionEngineSupport {
     }
 
     private ResolvedRequest resolveRequest(ApiRequestConfigInput config, ResolvedEnvironment environment, Map<String, String> variables) {
-        String path = replaceVariables(config.path(), variables);
+        String path = variableResolver.replaceVariables(config.path(), variables);
         String url = path.startsWith("http://") || path.startsWith("https://")
                 ? path
                 : joinBaseUrl(environment.baseUrl(), path);
 
-        String query = buildQueryString(defaultList(config.queryParams()), variables);
+        String query = variableResolver.buildQueryString(defaultList(config.queryParams()), variables);
         if (!query.isEmpty()) {
             url = url.contains("?") ? url + "&" + query : url + "?" + query;
         }
 
         LinkedHashMap<String, String> headers = new LinkedHashMap<>();
-        headers.putAll(toEnabledMap(defaultList(environment.headers()), variables));
-        headers.putAll(toEnabledMap(defaultList(config.headers()), variables));
+        headers.putAll(variableResolver.toEnabledMap(defaultList(environment.headers()), variables));
+        headers.putAll(variableResolver.toEnabledMap(defaultList(config.headers()), variables));
         headers.entrySet().removeIf(entry -> "authorization".equalsIgnoreCase(entry.getKey()));
 
-        LinkedHashMap<String, String> cookies = new LinkedHashMap<>(toEnabledMap(defaultList(config.cookies()), variables));
+        LinkedHashMap<String, String> cookies = new LinkedHashMap<>(variableResolver.toEnabledMap(defaultList(config.cookies()), variables));
 
         String body = null;
         ApiRequestBodyInput bodyConfig = config.body() == null ? new ApiRequestBodyInput("NONE", null, List.of(), null, null, null) : config.body();
         if ("RAW_JSON".equalsIgnoreCase(bodyConfig.type())
                 || "RAW_TEXT".equalsIgnoreCase(bodyConfig.type())
                 || "RAW_XML".equalsIgnoreCase(bodyConfig.type())) {
-            body = replaceVariables(Optional.ofNullable(bodyConfig.rawText()).orElse(""), variables);
+            body = variableResolver.replaceVariables(Optional.ofNullable(bodyConfig.rawText()).orElse(""), variables);
         } else if ("FORM_URLENCODED".equalsIgnoreCase(bodyConfig.type())) {
-            body = buildQueryString(toEnabledMap(defaultList(bodyConfig.formItems()), variables));
+            body = variableResolver.buildQueryString(variableResolver.toEnabledMap(defaultList(bodyConfig.formItems()), variables));
             headers.putIfAbsent("Content-Type", "application/x-www-form-urlencoded");
         } else if ("BINARY".equalsIgnoreCase(bodyConfig.type())) {
             String fileName = Optional.ofNullable(bodyConfig.fileName()).filter(name -> !name.isBlank()).orElse("binary-body");
@@ -797,8 +798,8 @@ public class ApiExecutionEngineSupport {
             ApiAuthConfigInput authConfig
     ) throws IOException, InterruptedException {
         ApiAuthCredentialInput credential = requireCredential(authConfig.basicAuth(), "Basic");
-        String userName = replaceVariables(Optional.ofNullable(credential.userName()).orElse(""), variables);
-        String password = replaceVariables(Optional.ofNullable(credential.password()).orElse(""), variables);
+        String userName = variableResolver.replaceVariables(Optional.ofNullable(credential.userName()).orElse(""), variables);
+        String password = variableResolver.replaceVariables(Optional.ofNullable(credential.password()).orElse(""), variables);
         String encoded = Base64.getEncoder().encodeToString((userName + ":" + password).getBytes(StandardCharsets.UTF_8));
         HttpRequest httpRequest = buildHttpRequest(request, config, environment, "Basic " + encoded);
         return new SentRequestResult(
@@ -815,8 +816,8 @@ public class ApiExecutionEngineSupport {
             ApiAuthConfigInput authConfig
     ) throws IOException, InterruptedException {
         ApiAuthCredentialInput credential = requireCredential(authConfig.digestAuth(), "Digest");
-        String userName = replaceVariables(Optional.ofNullable(credential.userName()).orElse(""), variables);
-        String password = replaceVariables(Optional.ofNullable(credential.password()).orElse(""), variables);
+        String userName = variableResolver.replaceVariables(Optional.ofNullable(credential.userName()).orElse(""), variables);
+        String password = variableResolver.replaceVariables(Optional.ofNullable(credential.password()).orElse(""), variables);
 
         HttpRequest initialRequest = buildHttpRequest(request, config, environment);
         HttpResponse<String> initialResponse = httpClient.send(initialRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -967,7 +968,7 @@ public class ApiExecutionEngineSupport {
         if (processor.dataSourceId() == null) {
             throw new BadRequestException("SQL processor requires a database connection");
         }
-        String sql = replaceVariables(Optional.ofNullable(processor.script()).orElse(""), variables);
+        String sql = variableResolver.replaceVariables(Optional.ofNullable(processor.script()).orElse(""), variables);
         if (sql.isBlank()) {
             throw new BadRequestException("SQL processor content cannot be blank");
         }
@@ -1560,51 +1561,6 @@ public class ApiExecutionEngineSupport {
         };
     }
 
-    private Map<String, String> toEnabledMap(List<ApiKeyValueInput> items, Map<String, String> variables) {
-        LinkedHashMap<String, String> result = new LinkedHashMap<>();
-        for (ApiKeyValueInput item : items) {
-            if (item == null || item.key() == null || item.key().isBlank() || Boolean.FALSE.equals(item.enabled())) {
-                continue;
-            }
-            result.put(item.key(), replaceVariables(Optional.ofNullable(item.value()).orElse(""), variables));
-        }
-        return result;
-    }
-
-    private String buildQueryString(List<ApiKeyValueInput> items, Map<String, String> variables) {
-        List<String> parts = new ArrayList<>();
-        for (ApiKeyValueInput item : items) {
-            if (item == null || item.key() == null || item.key().isBlank() || Boolean.FALSE.equals(item.enabled())) {
-                continue;
-            }
-            String key = replaceVariables(item.key(), variables);
-            String value = replaceVariables(Optional.ofNullable(item.value()).orElse(""), variables);
-            if (Boolean.TRUE.equals(item.encode())) {
-                key = URLEncoder.encode(key, StandardCharsets.UTF_8);
-                value = URLEncoder.encode(value, StandardCharsets.UTF_8);
-            }
-            parts.add(key + "=" + value);
-        }
-        return String.join("&", parts);
-    }
-
-    private String replaceVariables(String text, Map<String, String> variables) {
-        if (text == null || text.isBlank()) {
-            return text;
-        }
-        Matcher matcher = VARIABLE_PATTERN.matcher(text);
-        StringBuffer buffer = new StringBuffer();
-        while (matcher.find()) {
-            String key = matcher.group(1);
-            if (!variables.containsKey(key)) {
-                throw new BadRequestException("Missing variable: " + key);
-            }
-            matcher.appendReplacement(buffer, Matcher.quoteReplacement(Optional.ofNullable(variables.get(key)).orElse("")));
-        }
-        matcher.appendTail(buffer);
-        return buffer.toString();
-    }
-
     private ApiAuthCredentialInput requireCredential(ApiAuthCredentialInput credential, String authType) {
         if (credential == null
                 || credential.userName() == null
@@ -1785,16 +1741,6 @@ public class ApiExecutionEngineSupport {
             return normalizedBase + "/" + path;
         }
         return normalizedBase + path;
-    }
-
-    private String buildQueryString(Map<String, String> values) {
-        List<String> parts = new ArrayList<>();
-        for (Map.Entry<String, String> entry : values.entrySet()) {
-            parts.add(URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8)
-                    + "="
-                    + URLEncoder.encode(Optional.ofNullable(entry.getValue()).orElse(""), StandardCharsets.UTF_8));
-        }
-        return String.join("&", parts);
     }
 
     private String buildCookieHeader(Map<String, String> cookies) {
@@ -1981,7 +1927,7 @@ public class ApiExecutionEngineSupport {
             variables.putAll(scriptResult.variables());
             return scriptResult.success();
         }
-        String resolved = Optional.ofNullable(replaceVariables(expression, variables)).orElse("").trim();
+        String resolved = Optional.ofNullable(variableResolver.replaceVariables(expression, variables)).orElse("").trim();
         if (resolved.isBlank()) {
             return false;
         }
@@ -2017,7 +1963,7 @@ public class ApiExecutionEngineSupport {
         if (!"FOREACH".equals(normalizeLoopType(step.loopType()))) {
             return List.of();
         }
-        String expression = Optional.ofNullable(replaceVariables(step.foreachExpression(), variables)).orElse("");
+        String expression = Optional.ofNullable(variableResolver.replaceVariables(step.foreachExpression(), variables)).orElse("");
         return java.util.Arrays.stream(expression.split("[,\\n]"))
                 .map(String::trim)
                 .filter(value -> !value.isBlank())

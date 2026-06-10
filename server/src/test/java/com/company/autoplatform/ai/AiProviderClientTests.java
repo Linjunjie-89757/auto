@@ -45,6 +45,7 @@ class AiProviderClientTests {
                 "gpt-5",
                 "https://proxy.example/v1",
                 0.3,
+                0.9,
                 20,
                 60
         );
@@ -72,6 +73,7 @@ class AiProviderClientTests {
                 "gpt-5",
                 "https://proxy.example/v1",
                 0.3,
+                0.9,
                 20,
                 60
         );
@@ -103,6 +105,7 @@ class AiProviderClientTests {
                 "gpt-5",
                 "https://proxy.example/v1",
                 0.3,
+                0.9,
                 20,
                 60
         );
@@ -132,6 +135,7 @@ class AiProviderClientTests {
                 "gpt-5",
                 "https://proxy.example/v1",
                 0.3,
+                0.9,
                 20,
                 60
         );

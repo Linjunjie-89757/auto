@@ -118,8 +118,15 @@ public class ApiAutomationService {
         definitionDomainService.deleteDefinitionModule(id, workspaceCode);
     }
 
-    public PageResponse<ApiScenarioItem> listScenarios(String workspaceCode, Long moduleId, String keyword, String status) {
-        return scenarioDomainService.listScenarios(workspaceCode, moduleId, keyword, status);
+    public PageResponse<ApiScenarioItem> listScenarios(
+            String workspaceCode,
+            Long moduleId,
+            String keyword,
+            String status,
+            Integer pageNo,
+            Integer pageSize
+    ) {
+        return scenarioDomainService.listScenarios(workspaceCode, moduleId, keyword, status, pageNo, pageSize);
     }
 
     public List<ApiScenarioModuleItem> listScenarioModules(String workspaceCode) {

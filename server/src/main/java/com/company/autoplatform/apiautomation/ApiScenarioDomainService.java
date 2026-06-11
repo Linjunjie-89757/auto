@@ -71,7 +71,14 @@ public class ApiScenarioDomainService {
         this.workspaceScopeSupport = workspaceScopeSupport;
     }
 
-    public PageResponse<ApiScenarioItem> listScenarios(String workspaceCode, Long moduleId, String keyword, String status) {
+    public PageResponse<ApiScenarioItem> listScenarios(
+            String workspaceCode,
+            Long moduleId,
+            String keyword,
+            String status,
+            Integer pageNo,
+            Integer pageSize
+    ) {
         LambdaQueryWrapper<ApiScenarioEntity> query = new LambdaQueryWrapper<>();
         workspaceScopeSupport.applyWorkspaceScope(query, ApiScenarioEntity::getWorkspaceId, workspaceCode);
         if (moduleId != null) {
@@ -93,7 +100,9 @@ public class ApiScenarioDomainService {
                 .stream()
                 .map(this::toScenarioItem)
                 .toList();
-        return new PageResponse<>(items, items.size());
+        int safePageNo = safePageNo(pageNo);
+        int safePageSize = safePageSize(pageSize, items.size());
+        return PageResponse.of(paginate(items, safePageNo, safePageSize), items.size(), safePageNo, safePageSize);
     }
 
     public List<ApiScenarioModuleItem> listScenarioModules(String workspaceCode) {
@@ -572,6 +581,23 @@ public class ApiScenarioDomainService {
             case "NOT_STARTED", "IN_PROGRESS", "COMPLETED", "ARCHIVED" -> normalized;
             default -> "IN_PROGRESS";
         };
+    }
+
+    private int safePageNo(Integer pageNo) {
+        return pageNo == null || pageNo < 1 ? 1 : pageNo;
+    }
+
+    private int safePageSize(Integer pageSize, int total) {
+        if (pageSize == null || pageSize < 1) {
+            return total > 0 ? total : 10;
+        }
+        return pageSize;
+    }
+
+    private <T> List<T> paginate(List<T> items, int pageNo, int pageSize) {
+        int fromIndex = Math.min((pageNo - 1) * pageSize, items.size());
+        int toIndex = Math.min(fromIndex + pageSize, items.size());
+        return items.subList(fromIndex, toIndex);
     }
 
     private int countScenarioSteps(List<ApiScenarioStepInput> steps) {

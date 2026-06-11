@@ -245,9 +245,11 @@ public class ApiAutomationController {
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
             @RequestParam(required = false) Long moduleId,
             @RequestParam(required = false) String keyword,
-            @RequestParam(required = false) String status
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Integer pageNo,
+            @RequestParam(required = false) Integer pageSize
     ) {
-        return ApiResponse.ok(apiAutomationService.listScenarios(workspaceCode, moduleId, keyword, status));
+        return ApiResponse.ok(apiAutomationService.listScenarios(workspaceCode, moduleId, keyword, status, pageNo, pageSize));
     }
 
     @GetMapping("/scenario-modules")

@@ -167,6 +167,100 @@ class ApiAutomationListControllerIntegrationTests extends IntegrationTestSupport
                 .andExpect(jsonPath("$.data.items[0].id").value(first.id().intValue()));
     }
 
+    @Test
+    void listScenariosWithoutParamsKeepsCompatibleLoading() throws Exception {
+        String unique = uniquePrefix("scenarios-compatible");
+        ApiScenarioDetail scenario = createScenario(
+                unique + "-scenario",
+                null,
+                "IN_PROGRESS",
+                "compatible scenario"
+        );
+
+        mockMvc.perform(get("/api/automation/api/scenarios")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.items[*].id", hasItem(scenario.id().intValue())));
+    }
+
+    @Test
+    void listScenariosSupportsKeywordModuleStatusAndPaginationFilters() throws Exception {
+        String unique = uniquePrefix("scenarios");
+        ApiScenarioModuleItem parentModule = apiAutomationService.createScenarioModule(
+                WORKSPACE_CODE,
+                new ApiScenarioModuleRequest(WORKSPACE_CODE, null, unique + "-parent")
+        );
+        ApiScenarioModuleItem childModule = apiAutomationService.createScenarioModule(
+                WORKSPACE_CODE,
+                new ApiScenarioModuleRequest(WORKSPACE_CODE, parentModule.id(), unique + "-child")
+        );
+        ApiScenarioModuleItem otherModule = apiAutomationService.createScenarioModule(
+                WORKSPACE_CODE,
+                new ApiScenarioModuleRequest(WORKSPACE_CODE, null, unique + "-other")
+        );
+
+        ApiScenarioDetail first = createScenario(
+                unique + "-alpha",
+                childModule.id(),
+                "COMPLETED",
+                unique + "-keyword"
+        );
+        ApiScenarioDetail second = createScenario(
+                unique + "-beta",
+                childModule.id(),
+                "COMPLETED",
+                unique + "-keyword"
+        );
+        ApiScenarioDetail outsideModule = createScenario(
+                unique + "-outside",
+                otherModule.id(),
+                "COMPLETED",
+                unique + "-keyword"
+        );
+        createScenario(
+                unique + "-wrong-status",
+                childModule.id(),
+                "IN_PROGRESS",
+                unique + "-keyword"
+        );
+
+        mockMvc.perform(get("/api/automation/api/scenarios")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .param("keyword", unique + "-keyword")
+                        .param("moduleId", parentModule.id().toString())
+                        .param("status", "completed")
+                        .param("pageNo", "1")
+                        .param("pageSize", "10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.pageNo").value(1))
+                .andExpect(jsonPath("$.data.pageSize").value(10))
+                .andExpect(jsonPath("$.data.totalPages").value(1))
+                .andExpect(jsonPath("$.data.items.length()").value(2))
+                .andExpect(jsonPath("$.data.items[*].id", containsInAnyOrder(first.id().intValue(), second.id().intValue())))
+                .andExpect(jsonPath("$.data.items[*].moduleId", containsInAnyOrder(childModule.id().intValue(), childModule.id().intValue())))
+                .andExpect(jsonPath("$.data.items[*].status", containsInAnyOrder("COMPLETED", "COMPLETED")))
+                .andExpect(jsonPath("$.data.items[*].id", not(hasItem(outsideModule.id().intValue()))));
+
+        mockMvc.perform(get("/api/automation/api/scenarios")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .param("keyword", unique + "-keyword")
+                        .param("moduleId", parentModule.id().toString())
+                        .param("status", "COMPLETED")
+                        .param("pageNo", "2")
+                        .param("pageSize", "1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.pageNo").value(2))
+                .andExpect(jsonPath("$.data.pageSize").value(1))
+                .andExpect(jsonPath("$.data.totalPages").value(2))
+                .andExpect(jsonPath("$.data.items.length()").value(1))
+                .andExpect(jsonPath("$.data.items[0].id").value(first.id().intValue()));
+    }
+
     private ApiDefinitionDetail createDefinition(
             String name,
             String directoryName,
@@ -199,6 +293,45 @@ class ApiAutomationListControllerIntegrationTests extends IntegrationTestSupport
                 List.of(),
                 List.of(),
                 List.of()
+        ));
+    }
+
+    private ApiScenarioDetail createScenario(String name, Long moduleId, String status, String description) {
+        return apiAutomationService.createScenario(WORKSPACE_CODE, new SaveApiScenarioRequest(
+                WORKSPACE_CODE,
+                name,
+                null,
+                moduleId,
+                "P1",
+                status,
+                description,
+                List.of("list-regression"),
+                null,
+                null,
+                false,
+                null,
+                List.of(),
+                List.of(),
+                List.of(new ApiScenarioStepInput(
+                        null,
+                        "List regression script",
+                        "SCRIPT",
+                        null,
+                        null,
+                        true,
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "return true;",
+                        List.of()
+                ))
         ));
     }
 

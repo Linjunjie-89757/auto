@@ -1,12 +1,7 @@
 package com.company.autoplatform.ai;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.company.autoplatform.auth.CurrentUserContext;
-import com.company.autoplatform.casecenter.CaseDirectoryEntity;
-import com.company.autoplatform.casecenter.CaseDirectoryMapper;
 import com.company.autoplatform.common.BadRequestException;
-import com.company.autoplatform.user.UserEntity;
-import com.company.autoplatform.user.UserService;
 import com.company.autoplatform.workspace.WorkspaceEntity;
 import com.company.autoplatform.workspace.WorkspaceScope;
 import com.company.autoplatform.workspace.WorkspaceService;
@@ -21,248 +16,66 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.UUID;
-import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 @Service
 public class AiGenerationTaskService {
 
-    private static final List<String> RUNNING_STATUSES = List.of("PENDING", "GENERATING", "REVIEWING");
     private static final List<String> TERMINAL_STATUSES = List.of("COMPLETED", "FAILED", "CANCELED");
     private static final int RAW_OUTPUT_LIMIT = 12000;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Pattern INTERNAL_CASE_INDEX_PATTERN = Pattern.compile("(?i)\\b(?:caseIndex|itemIndex|Index|Case)\\s*[:#=]?\\s*(\\d+)\\b");
 
     private final AiGenerationTaskMapper aiGenerationTaskMapper;
+    private final AiGenerationTaskDomainService taskDomainService;
     private final AiCaseService aiCaseService;
     private final AiGenerationTaskEventService eventService;
     private final WorkspaceService workspaceService;
-    private final CaseDirectoryMapper caseDirectoryMapper;
-    private final UserService userService;
 
     public AiGenerationTaskService(
             AiGenerationTaskMapper aiGenerationTaskMapper,
+            AiGenerationTaskDomainService taskDomainService,
             AiCaseService aiCaseService,
             AiGenerationTaskEventService eventService,
-            WorkspaceService workspaceService,
-            CaseDirectoryMapper caseDirectoryMapper,
-            UserService userService
+            WorkspaceService workspaceService
     ) {
         this.aiGenerationTaskMapper = aiGenerationTaskMapper;
+        this.taskDomainService = taskDomainService;
         this.aiCaseService = aiCaseService;
         this.eventService = eventService;
         this.workspaceService = workspaceService;
-        this.caseDirectoryMapper = caseDirectoryMapper;
-        this.userService = userService;
     }
 
     public AiGenerationTaskResponse createTask(String headerWorkspaceCode, CreateAiGenerationTaskRequest request) {
-        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
-                workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode())
-        );
-        validateOutputMode(request.outputMode());
-        validateDirectory(workspace, request.directoryId());
-        aiCaseService.validateGenerationImageSupport(request.assetIds());
-
-        AiGenerationTaskEntity entity = new AiGenerationTaskEntity();
-        LocalDateTime now = LocalDateTime.now();
-        Long currentUserId = CurrentUserContext.get();
-        entity.setTaskId(generateTaskId());
-        entity.setWorkspaceId(workspace.getId());
-        entity.setRequirementTitle(request.requirementTitle().trim());
-        entity.setRequirementContent(request.requirementContent().trim());
-        entity.setOutputMode(normalizeOutputMode(request.outputMode()));
-        entity.setStatus("PENDING");
-        entity.setCurrentStep(1);
-        entity.setStepMessage("任务已创建，等待开始生成测试用例。");
-        entity.setErrorMessage(null);
-        entity.setDirectoryId(request.directoryId());
-        entity.setDirectoryName(blankToNull(request.directoryName()));
-        entity.setProvider(null);
-        entity.setModel(null);
-        entity.setAssetIdsJson(writeValue(request.assetIds() == null ? List.of() : request.assetIds()));
-        entity.setWarningsJson(writeValue(List.of()));
-        entity.setInvalidCasesJson(writeValue(List.of()));
-        entity.setGeneratedCasesJson(writeValue(List.of()));
-        entity.setReviewResultJson(null);
-        entity.setGenerationRawOutput(null);
-        entity.setReviewRawOutput(null);
-        entity.setAdoptedCaseIndexesJson(writeValue(List.of()));
-        entity.setDeletedCaseIndexesJson(writeValue(List.of()));
-        entity.setSavedCaseCount(0);
-        entity.setGeneratedCount(0);
-        entity.setCancelRequested(0);
-        entity.setSourceTaskId(null);
-        entity.setFinishedAt(null);
-        entity.setCreatedBy(currentUserId);
-        entity.setUpdatedBy(currentUserId);
-        entity.setCreatedAt(now);
-        entity.setUpdatedAt(now);
-        aiGenerationTaskMapper.insert(entity);
-        appendEvent(entity.getTaskId(), "TASK_CREATED", "SETUP", "INFO", "任务已创建，等待开始生成", null, null, null, null, null);
-        int ignoredAssetCount = request.ignoredAssetCount() == null ? 0 : Math.max(request.ignoredAssetCount(), 0);
-        if (ignoredAssetCount > 0) {
-            appendEvent(
-                    entity.getTaskId(),
-                    "IMAGE_ASSETS_IGNORED",
-                    "SETUP",
-                    "WARN",
-                    "当前生成模型不支持图片输入，已忽略 " + ignoredAssetCount + " 个图片素材，仅基于文本需求继续生成。",
-                    null,
-                    null,
-                    null,
-                    null,
-                    writeValue(Map.of("ignoredAssetCount", ignoredAssetCount))
-            );
-        }
-
-        return toResponse(entity, workspace, collectUserMap(List.of(entity)));
+        return taskDomainService.createTask(headerWorkspaceCode, request);
     }
 
     public List<AiGenerationTaskResponse> listTasks(String workspaceCode) {
-        List<WorkspaceEntity> workspaces = resolveReadableWorkspaces(workspaceCode);
-        if (workspaces.isEmpty()) {
-            return List.of();
-        }
-        List<Long> workspaceIds = workspaces.stream().map(WorkspaceEntity::getId).toList();
-        List<AiGenerationTaskEntity> tasks = aiGenerationTaskMapper.selectList(new LambdaQueryWrapper<AiGenerationTaskEntity>()
-                .in(AiGenerationTaskEntity::getWorkspaceId, workspaceIds)
-                .orderByDesc(AiGenerationTaskEntity::getUpdatedAt)
-                .orderByDesc(AiGenerationTaskEntity::getId));
-        Map<Long, UserEntity> userMap = collectUserMap(tasks);
-
-        return tasks.stream()
-                .map(task -> toResponse(task, workspaces.stream()
-                        .filter(item -> item.getId().equals(task.getWorkspaceId()))
-                        .findFirst()
-                        .orElseGet(() -> workspaceService.requireWorkspaceById(task.getWorkspaceId())), userMap, false))
-                .toList();
+        return taskDomainService.listTasks(workspaceCode);
     }
 
     public AiGenerationTaskResponse getTask(String taskId, String workspaceCode) {
-        AiGenerationTaskEntity entity = requireTask(taskId);
-        WorkspaceEntity workspace = workspaceService.requireReadableWorkspace(
-                workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode()
-        );
-        validateReadableWorkspaceScope(workspaceCode, workspace);
-        return toResponse(entity, workspace, collectUserMap(List.of(entity)));
+        return taskDomainService.getTask(taskId, workspaceCode);
     }
 
     public AiGenerationTaskResponse cancelTask(String taskId, String workspaceCode) {
-        AiGenerationTaskEntity entity = requireTask(taskId);
-        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
-                workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode()
-        );
-        validateReadableWorkspaceScope(workspaceCode, workspace);
-        if (!RUNNING_STATUSES.contains(entity.getStatus())) {
-            return toResponse(entity, workspace, collectUserMap(List.of(entity)));
-        }
-        entity.setUpdatedBy(CurrentUserContext.get());
-        markCanceled(entity, "任务已取消，后续步骤不再继续执行。");
-        AiGenerationTaskEntity latest = requireTask(taskId);
-        return toResponse(latest, workspace, collectUserMap(List.of(latest)));
+        return taskDomainService.cancelTask(taskId, workspaceCode);
     }
 
     public AiGenerationTaskResponse retryTask(String taskId, String workspaceCode) {
-        AiGenerationTaskEntity source = requireTask(taskId);
-        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
-                workspaceService.requireWorkspaceById(source.getWorkspaceId()).getWorkspaceCode()
-        );
-        validateReadableWorkspaceScope(workspaceCode, workspace);
-        if (!"FAILED".equals(source.getStatus())) {
-            throw new BadRequestException("Only failed tasks can be retried");
-        }
-
-        AiGenerationTaskEntity entity = new AiGenerationTaskEntity();
-        LocalDateTime now = LocalDateTime.now();
-        Long currentUserId = CurrentUserContext.get();
-        entity.setTaskId(generateTaskId());
-        entity.setWorkspaceId(source.getWorkspaceId());
-        entity.setRequirementTitle(source.getRequirementTitle());
-        entity.setRequirementContent(source.getRequirementContent());
-        entity.setOutputMode(source.getOutputMode());
-        entity.setStatus("PENDING");
-        entity.setCurrentStep(1);
-        entity.setStepMessage("已创建重试任务，等待重新生成测试用例。");
-        entity.setErrorMessage(null);
-        entity.setDirectoryId(source.getDirectoryId());
-        entity.setDirectoryName(source.getDirectoryName());
-        entity.setProvider(null);
-        entity.setModel(null);
-        entity.setAssetIdsJson(source.getAssetIdsJson());
-        entity.setWarningsJson(writeValue(List.of()));
-        entity.setInvalidCasesJson(writeValue(List.of()));
-        entity.setGeneratedCasesJson(writeValue(List.of()));
-        entity.setReviewResultJson(null);
-        entity.setGenerationRawOutput(null);
-        entity.setReviewRawOutput(null);
-        entity.setAdoptedCaseIndexesJson(writeValue(List.of()));
-        entity.setDeletedCaseIndexesJson(writeValue(List.of()));
-        entity.setSavedCaseCount(0);
-        entity.setGeneratedCount(0);
-        entity.setCancelRequested(0);
-        entity.setSourceTaskId(source.getTaskId());
-        entity.setFinishedAt(null);
-        entity.setCreatedBy(currentUserId);
-        entity.setUpdatedBy(currentUserId);
-        entity.setCreatedAt(now);
-        entity.setUpdatedAt(now);
-        aiGenerationTaskMapper.insert(entity);
-        appendEvent(entity.getTaskId(), "TASK_RETRIED", "SETUP", "INFO", "已创建重试任务，等待重新生成", null, null, null, null, writeValue(Map.of("sourceTaskId", source.getTaskId())));
-
-        return toResponse(entity, workspace, collectUserMap(List.of(entity)));
+        return taskDomainService.retryTask(taskId, workspaceCode);
     }
 
     public AiGenerationTaskResponse updateTask(String taskId, String workspaceCode, UpdateAiGenerationTaskRequest request) {
-        AiGenerationTaskEntity entity = requireTask(taskId);
-        WorkspaceEntity currentWorkspace = workspaceService.requireWorkspaceById(entity.getWorkspaceId());
-        validateReadableWorkspaceScope(workspaceCode, currentWorkspace);
-        WorkspaceEntity workspace = request.workspaceCode() == null || request.workspaceCode().isBlank()
-                ? workspaceService.requireWritableWorkspace(currentWorkspace.getWorkspaceCode())
-                : workspaceService.requireWritableWorkspace(request.workspaceCode().trim());
-        if (!workspace.getId().equals(entity.getWorkspaceId())) {
-            entity.setWorkspaceId(workspace.getId());
-        }
-        if (request.directoryId() != null) {
-            validateDirectory(workspace, request.directoryId());
-            entity.setDirectoryId(request.directoryId());
-        }
-        if (request.directoryName() != null) {
-            entity.setDirectoryName(blankToNull(request.directoryName()));
-        }
-        if (request.generatedCases() != null) {
-            entity.setGeneratedCasesJson(writeValue(request.generatedCases()));
-        }
-        if (request.adoptedCaseIndexes() != null) {
-            entity.setAdoptedCaseIndexesJson(writeValue(normalizeIndexes(request.adoptedCaseIndexes())));
-        }
-        if (request.deletedCaseIndexes() != null) {
-            entity.setDeletedCaseIndexesJson(writeValue(normalizeIndexes(request.deletedCaseIndexes())));
-        }
-        if (request.savedCaseCount() != null) {
-            entity.setSavedCaseCount(Math.max(request.savedCaseCount(), 0));
-        }
-        entity.setUpdatedBy(CurrentUserContext.get());
-        entity.setUpdatedAt(LocalDateTime.now());
-        aiGenerationTaskMapper.updateById(entity);
-        return toResponse(entity, workspace, collectUserMap(List.of(entity)));
+        return taskDomainService.updateTask(taskId, workspaceCode, request);
     }
 
     public void deleteTask(String taskId, String workspaceCode) {
-        AiGenerationTaskEntity entity = requireTask(taskId);
-        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
-                workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode()
-        );
-        validateReadableWorkspaceScope(workspaceCode, workspace);
-        aiGenerationTaskMapper.deleteById(entity.getId());
+        taskDomainService.deleteTask(taskId, workspaceCode);
     }
 
     public void executeTask(String taskId, String workspaceCode) {
@@ -966,24 +779,6 @@ public class AiGenerationTaskService {
         return entity;
     }
 
-    private void validateDirectory(WorkspaceEntity workspace, Long directoryId) {
-        if (directoryId == null) {
-            return;
-        }
-        CaseDirectoryEntity entity = caseDirectoryMapper.selectById(directoryId);
-        if (entity == null || !entity.getWorkspaceId().equals(workspace.getId())) {
-            throw new BadRequestException("Case directory does not belong to the target workspace");
-        }
-    }
-
-    private List<WorkspaceEntity> resolveReadableWorkspaces(String workspaceCode) {
-        String normalized = WorkspaceScope.normalize(workspaceCode);
-        if (WorkspaceScope.isAll(normalized)) {
-            return workspaceService.listReadableWorkspaceEntities();
-        }
-        return List.of(workspaceService.requireReadableWorkspace(normalized));
-    }
-
     private void validateReadableWorkspaceScope(String workspaceCode, WorkspaceEntity workspace) {
         String normalized = WorkspaceScope.normalize(workspaceCode);
         if (WorkspaceScope.isAll(normalized)) {
@@ -995,19 +790,8 @@ public class AiGenerationTaskService {
         }
     }
 
-    private String generateTaskId() {
-        return "TASK_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase(Locale.ROOT);
-    }
-
     private String normalizeOutputMode(String outputMode) {
         return outputMode == null ? "STREAM" : outputMode.trim().toUpperCase(Locale.ROOT);
-    }
-
-    private void validateOutputMode(String outputMode) {
-        String normalized = normalizeOutputMode(outputMode);
-        if (!"STREAM".equals(normalized) && !"COMPLETE".equals(normalized)) {
-            throw new BadRequestException("Output mode must be STREAM or COMPLETE");
-        }
     }
 
     private String blankToNull(String value) {
@@ -1015,14 +799,6 @@ public class AiGenerationTaskService {
             return null;
         }
         return value.trim();
-    }
-
-    private List<Integer> normalizeIndexes(List<Integer> indexes) {
-        return indexes == null ? List.of() : indexes.stream()
-                .filter(item -> item != null && item >= 0)
-                .distinct()
-                .sorted(Comparator.naturalOrder())
-                .toList();
     }
 
     private String writeValue(Object value) {
@@ -1042,62 +818,6 @@ public class AiGenerationTaskService {
         } catch (JsonProcessingException exception) {
             return fallback;
         }
-    }
-
-    private AiReviewResult readReviewResult(String raw) {
-        return readValue(raw, new TypeReference<AiReviewResult>() {}, null);
-    }
-
-    private AiGenerationTaskResponse toResponse(AiGenerationTaskEntity entity, WorkspaceEntity workspace, Map<Long, UserEntity> userMap) {
-        return toResponse(entity, workspace, userMap, true);
-    }
-
-    private AiGenerationTaskResponse toResponse(AiGenerationTaskEntity entity, WorkspaceEntity workspace, Map<Long, UserEntity> userMap, boolean includeEvents) {
-        UserEntity creator = entity.getCreatedBy() == null ? null : userMap.get(entity.getCreatedBy());
-        UserEntity updater = entity.getUpdatedBy() == null ? null : userMap.get(entity.getUpdatedBy());
-        return new AiGenerationTaskResponse(
-                entity.getTaskId(),
-                workspace.getWorkspaceCode(),
-                workspace.getWorkspaceName(),
-                entity.getRequirementTitle(),
-                entity.getRequirementContent(),
-                entity.getOutputMode(),
-                entity.getStatus(),
-                entity.getCurrentStep(),
-                entity.getStepMessage(),
-                entity.getErrorMessage(),
-                entity.getDirectoryId(),
-                entity.getDirectoryName(),
-                creator == null ? null : creator.getDisplayName(),
-                updater == null ? null : updater.getDisplayName(),
-                entity.getProvider(),
-                entity.getModel(),
-                entity.getGeneratedCount() == null ? 0 : entity.getGeneratedCount(),
-                entity.getSavedCaseCount() == null ? 0 : entity.getSavedCaseCount(),
-                readValue(entity.getWarningsJson(), new TypeReference<List<String>>() {}, List.of()),
-                readValue(entity.getInvalidCasesJson(), new TypeReference<List<AiInvalidCaseItem>>() {}, List.of()),
-                readValue(entity.getGeneratedCasesJson(), new TypeReference<List<GeneratedAiCaseItem>>() {}, List.of()),
-                readReviewResult(entity.getReviewResultJson()),
-                entity.getGenerationRawOutput(),
-                entity.getReviewRawOutput(),
-                includeEvents ? eventService.list(entity.getTaskId()) : List.of(),
-                readValue(entity.getAdoptedCaseIndexesJson(), new TypeReference<List<Integer>>() {}, List.of()),
-                readValue(entity.getDeletedCaseIndexesJson(), new TypeReference<List<Integer>>() {}, List.of()),
-                entity.getCancelRequested() != null && entity.getCancelRequested() == 1,
-                entity.getSourceTaskId(),
-                entity.getCreatedAt() == null ? null : entity.getCreatedAt().toString(),
-                entity.getUpdatedAt() == null ? null : entity.getUpdatedAt().toString(),
-                entity.getFinishedAt() == null ? null : entity.getFinishedAt().toString()
-        );
-    }
-
-    private Map<Long, UserEntity> collectUserMap(List<AiGenerationTaskEntity> entities) {
-        return entities.stream()
-                .flatMap(item -> Stream.of(item.getCreatedBy(), item.getUpdatedBy()))
-                .filter(id -> id != null && id > 0)
-                .distinct()
-                .map(userService::requireUser)
-                .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
     }
 
     private static class TaskCanceledException extends RuntimeException {

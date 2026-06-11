@@ -1,16 +1,8 @@
 package com.company.autoplatform.bug;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.company.autoplatform.casecenter.CaseDetailResponse;
-import com.company.autoplatform.casecenter.CaseEntity;
-import com.company.autoplatform.casecenter.CaseService;
 import com.company.autoplatform.common.JsonUtils;
-import com.company.autoplatform.common.NotFoundException;
 import com.company.autoplatform.common.PageResponse;
-import com.company.autoplatform.execution.ExecutionService;
-import com.company.autoplatform.execution.ReportDetailResponse;
-import com.company.autoplatform.execution.ReportEntity;
-import com.company.autoplatform.execution.TaskDetailResponse;
 import com.company.autoplatform.user.UserEntity;
 import com.company.autoplatform.user.UserService;
 import com.company.autoplatform.workspace.WorkspaceEntity;
@@ -29,32 +21,30 @@ public class BugService {
     private final BugAttachmentSupport bugAttachmentSupport;
     private final BugWorkflowDomainService bugWorkflowDomainService;
     private final BugCommentDomainService bugCommentDomainService;
+    private final BugSourceContextSupport bugSourceContextSupport;
     private final BugFlowMapper bugFlowMapper;
     private final BugCommentMapper bugCommentMapper;
     private final BugAttachmentMapper bugAttachmentMapper;
     private final UserService userService;
     private final WorkspaceService workspaceService;
-    private final CaseService caseService;
-    private final ExecutionService executionService;
 
     public BugService(BugDomainService bugDomainService, BugAttachmentSupport bugAttachmentSupport,
                       BugWorkflowDomainService bugWorkflowDomainService,
                       BugCommentDomainService bugCommentDomainService,
+                      BugSourceContextSupport bugSourceContextSupport,
                       BugFlowMapper bugFlowMapper, BugCommentMapper bugCommentMapper,
                       BugAttachmentMapper bugAttachmentMapper,
-                      UserService userService, WorkspaceService workspaceService, CaseService caseService,
-                      ExecutionService executionService) {
+                      UserService userService, WorkspaceService workspaceService) {
         this.bugDomainService = bugDomainService;
         this.bugAttachmentSupport = bugAttachmentSupport;
         this.bugWorkflowDomainService = bugWorkflowDomainService;
         this.bugCommentDomainService = bugCommentDomainService;
+        this.bugSourceContextSupport = bugSourceContextSupport;
         this.bugFlowMapper = bugFlowMapper;
         this.bugCommentMapper = bugCommentMapper;
         this.bugAttachmentMapper = bugAttachmentMapper;
         this.userService = userService;
         this.workspaceService = workspaceService;
-        this.caseService = caseService;
-        this.executionService = executionService;
     }
 
     public PageResponse<BugSummaryResponse> listBugs(
@@ -121,37 +111,11 @@ public class BugService {
     }
 
     public BugDetailResponse createBugFromCase(Long caseId, String workspaceCode, CreateBugRequest request) {
-        CaseEntity caseEntity = caseService.requireCase(caseId);
-        CreateBugRequest merged = new CreateBugRequest(
-                request.workspaceCode(),
-                request.title(),
-                request.description(),
-                request.priority(),
-                request.severity(),
-                request.assigneeId(),
-                caseEntity.getId(),
-                null,
-                null,
-                request.tags()
-        );
-        return createBug(workspaceCode, merged, BugSourceType.CASE);
+        return createBug(workspaceCode, bugSourceContextSupport.mergeCaseSource(caseId, request), BugSourceType.CASE);
     }
 
     public BugDetailResponse createBugFromReport(Long reportId, String workspaceCode, CreateBugRequest request) {
-        ReportEntity report = executionService.requireReport(reportId);
-        CreateBugRequest merged = new CreateBugRequest(
-                request.workspaceCode(),
-                request.title(),
-                request.description(),
-                request.priority(),
-                request.severity(),
-                request.assigneeId(),
-                null,
-                report.getId(),
-                report.getTaskId(),
-                request.tags()
-        );
-        return createBug(workspaceCode, merged, BugSourceType.REPORT);
+        return createBug(workspaceCode, bugSourceContextSupport.mergeReportSource(reportId, request), BugSourceType.REPORT);
     }
 
     public BugEntity requireBug(Long id) {
@@ -258,60 +222,11 @@ public class BugService {
                 entity.getUpdatedAt(),
                 updatedByName,
                 attachmentEntities.stream().map(item -> bugAttachmentSupport.toAttachmentResponse(entity, item)).toList(),
-                buildSourceContext(entity, workspace),
+                bugSourceContextSupport.buildSourceContext(entity, workspace),
                 buildActivities(entity, reporter, flowEntities, commentEntities, attachmentEntities),
                 flowEntities.stream().map(this::toFlow).toList(),
                 commentEntities.stream().map(this::toComment).toList()
         );
-    }
-
-    private BugSourceContextResponse buildSourceContext(BugEntity entity, WorkspaceEntity workspace) {
-        String workspaceCode = workspace.getWorkspaceCode();
-        BugCaseSummaryResponse caseSummary = entity.getRelatedCaseId() == null
-                ? null
-                : safeCaseSummary(entity.getRelatedCaseId(), workspaceCode);
-        BugReportSummaryResponse reportSummary = entity.getRelatedReportId() == null
-                ? null
-                : safeReportSummary(entity.getRelatedReportId(), workspaceCode);
-
-        Long taskId = entity.getRelatedTaskId();
-        if (taskId == null && reportSummary != null) {
-            taskId = reportSummary.taskId();
-        }
-        BugTaskSummaryResponse taskSummary = taskId == null
-                ? null
-                : safeTaskSummary(taskId, workspaceCode);
-
-        return new BugSourceContextResponse(
-                BugSourceType.valueOf(entity.getSourceType()),
-                caseSummary,
-                reportSummary,
-                taskSummary
-        );
-    }
-
-    private BugCaseSummaryResponse safeCaseSummary(Long caseId, String workspaceCode) {
-        try {
-            return toCaseSummary(caseService.getCase(caseId, workspaceCode));
-        } catch (NotFoundException exception) {
-            return null;
-        }
-    }
-
-    private BugReportSummaryResponse safeReportSummary(Long reportId, String workspaceCode) {
-        try {
-            return toReportSummary(executionService.getReport(reportId, workspaceCode));
-        } catch (NotFoundException exception) {
-            return null;
-        }
-    }
-
-    private BugTaskSummaryResponse safeTaskSummary(Long taskId, String workspaceCode) {
-        try {
-            return toTaskSummary(executionService.getTask(taskId, workspaceCode));
-        } catch (NotFoundException exception) {
-            return null;
-        }
     }
 
     private List<BugActivityResponse> buildActivities(
@@ -416,49 +331,6 @@ public class BugService {
             return BugStatus.ASSIGNED;
         }
         return BugStatus.valueOf(firstFlow.getFromStatus());
-    }
-
-    private BugCaseSummaryResponse toCaseSummary(CaseDetailResponse response) {
-        String modulePath = response.directoryName() == null || response.directoryName().isBlank()
-                ? response.workspaceName()
-                : response.workspaceName() + " / " + response.directoryName();
-        return new BugCaseSummaryResponse(
-                response.id(),
-                response.caseNo(),
-                response.title(),
-                response.workspaceCode(),
-                response.workspaceName(),
-                response.directoryId(),
-                response.directoryName(),
-                modulePath,
-                response.executionStatus(),
-                response.executionComment() == null || response.executionComment().isBlank() ? response.executionNote() : response.executionComment(),
-                response.executedAt()
-        );
-    }
-
-    private BugReportSummaryResponse toReportSummary(ReportDetailResponse response) {
-        return new BugReportSummaryResponse(
-                response.id(),
-                response.reportName(),
-                response.result(),
-                response.failureSummary(),
-                response.taskId(),
-                response.taskName(),
-                response.workspaceCode(),
-                response.workspaceName()
-        );
-    }
-
-    private BugTaskSummaryResponse toTaskSummary(TaskDetailResponse response) {
-        return new BugTaskSummaryResponse(
-                response.id(),
-                response.taskName(),
-                response.engineType(),
-                response.status(),
-                response.workspaceCode(),
-                response.workspaceName()
-        );
     }
 
     private BugFlowResponse toFlow(BugFlowEntity entity) {

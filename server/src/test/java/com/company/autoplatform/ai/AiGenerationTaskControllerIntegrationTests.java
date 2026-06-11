@@ -7,20 +7,25 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasItem;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -35,6 +40,9 @@ class AiGenerationTaskControllerIntegrationTests extends IntegrationTestSupport 
 
     @Autowired
     private AiGenerationTaskMapper aiGenerationTaskMapper;
+
+    @Autowired
+    private AiGenerationTaskEventService eventService;
 
     @MockitoBean
     private AiProviderClient aiProviderClient;
@@ -167,7 +175,82 @@ class AiGenerationTaskControllerIntegrationTests extends IntegrationTestSupport 
                 .andExpect(jsonPath("$.message").isString());
     }
 
-    private String createFailedTask(String unique) throws Exception {
+    @Test
+    void taskEventsListAfterAndTerminalSseStreamKeepEventOrder() throws Exception {
+        reset(aiProviderClient, aiGenerationTaskRunner);
+        String unique = uniquePrefix("events");
+        String taskId = createPendingTask(unique, "STREAM");
+
+        AiGenerationTaskEventResponse started = eventService.append(
+                taskId,
+                "TASK_STARTED",
+                "SETUP",
+                "INFO",
+                "task started",
+                null,
+                null,
+                "OPENAI_COMPATIBLE_CHAT",
+                "gpt-5",
+                null
+        );
+        AiGenerationTaskEventResponse generated = eventService.append(
+                taskId,
+                "CASE_GENERATED",
+                "GENERATING",
+                "INFO",
+                "case generated",
+                0,
+                unique + " generated case",
+                "OPENAI_COMPATIBLE_CHAT",
+                "gpt-5",
+                "{\"title\":\"" + unique + "\"}"
+        );
+
+        mockMvc.perform(get("/api/cases/ai/tasks/{taskId}", taskId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.taskId").value(taskId))
+                .andExpect(jsonPath("$.data.events.length()").value(3))
+                .andExpect(jsonPath("$.data.events[0].seq").value(1))
+                .andExpect(jsonPath("$.data.events[0].eventType").value("TASK_CREATED"))
+                .andExpect(jsonPath("$.data.events[1].seq").value(2))
+                .andExpect(jsonPath("$.data.events[1].eventType").value("TASK_STARTED"))
+                .andExpect(jsonPath("$.data.events[2].seq").value(3))
+                .andExpect(jsonPath("$.data.events[2].eventType").value("CASE_GENERATED"))
+                .andExpect(jsonPath("$.data.events[2].itemIndex").value(0))
+                .andExpect(jsonPath("$.data.events[2].itemTitle").value(unique + " generated case"))
+                .andExpect(jsonPath("$.data.events[2].payloadJson").value("{\"title\":\"" + unique + "\"}"));
+
+        List<AiGenerationTaskEventResponse> eventsAfterFirst = eventService.listAfter(taskId, 1);
+        assertThat(started.seq()).isEqualTo(2);
+        assertThat(generated.seq()).isEqualTo(3);
+        assertThat(eventsAfterFirst).extracting(AiGenerationTaskEventResponse::seq).containsExactly(2, 3);
+        assertThat(eventsAfterFirst).extracting(AiGenerationTaskEventResponse::eventType)
+                .containsExactly("TASK_STARTED", "CASE_GENERATED");
+
+        AiGenerationTaskEntity entity = requireTask(taskId);
+        entity.setStatus("CANCELED");
+        entity.setCancelRequested(1);
+        entity.setFinishedAt(LocalDateTime.now());
+        entity.setUpdatedAt(LocalDateTime.now());
+        aiGenerationTaskMapper.updateById(entity);
+
+        MvcResult streamResult = mockMvc.perform(get("/api/cases/ai/tasks/{taskId}/events/stream", taskId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .accept(MediaType.TEXT_EVENT_STREAM))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        mockMvc.perform(asyncDispatch(streamResult))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("data: ")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("TASK_CREATED")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("TASK_STARTED")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("CASE_GENERATED")));
+    }
+
+    private String createPendingTask(String unique, String outputMode) throws Exception {
         String response = mockMvc.perform(post("/api/cases/ai/tasks")
                         .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
                         .contentType("application/json")
@@ -175,17 +258,21 @@ class AiGenerationTaskControllerIntegrationTests extends IntegrationTestSupport 
                                 {
                                   "workspaceCode": "%s",
                                   "requirementTitle": "%s requirement",
-                                  "requirementContent": "Failed source for retry.",
-                                  "outputMode": "COMPLETE",
+                                  "requirementContent": "AI generation task regression.",
+                                  "outputMode": "%s",
                                   "assetIds": []
                                 }
-                                """.formatted(WORKSPACE_CODE, unique)))
+                                """.formatted(WORKSPACE_CODE, unique, outputMode)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
-        String taskId = objectMapper.readTree(response).path("data").path("taskId").asText();
+        return objectMapper.readTree(response).path("data").path("taskId").asText();
+    }
+
+    private String createFailedTask(String unique) throws Exception {
+        String taskId = createPendingTask(unique, "COMPLETE");
         AiGenerationTaskEntity entity = requireTask(taskId);
         entity.setStatus("FAILED");
         entity.setCurrentStep(2);

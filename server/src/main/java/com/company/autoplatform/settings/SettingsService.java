@@ -19,109 +19,50 @@ import java.util.Locale;
 @Service
 public class SettingsService {
 
-    private final EnvConfigMapper envConfigMapper;
     private final ParamSetMapper paramSetMapper;
     private final DbConnectionMapper dbConnectionMapper;
     private final DbConnectionCrypto dbConnectionCrypto;
     private final WorkspaceService workspaceService;
+    private final SettingsEnvironmentDomainService environmentDomainService;
 
     public SettingsService(
-            EnvConfigMapper envConfigMapper,
             ParamSetMapper paramSetMapper,
             DbConnectionMapper dbConnectionMapper,
             DbConnectionCrypto dbConnectionCrypto,
-            WorkspaceService workspaceService
+            WorkspaceService workspaceService,
+            SettingsEnvironmentDomainService environmentDomainService
     ) {
-        this.envConfigMapper = envConfigMapper;
         this.paramSetMapper = paramSetMapper;
         this.dbConnectionMapper = dbConnectionMapper;
         this.dbConnectionCrypto = dbConnectionCrypto;
         this.workspaceService = workspaceService;
+        this.environmentDomainService = environmentDomainService;
     }
 
     public PageResponse<EnvConfigItem> listEnvs(String workspaceCode, String keyword, String envType, Integer status) {
-        WorkspaceEntity workspace = resolveScopedWorkspace(workspaceCode);
-        LambdaQueryWrapper<EnvConfigEntity> query = new LambdaQueryWrapper<>();
-        if (workspace != null) {
-            query.eq(EnvConfigEntity::getWorkspaceId, workspace.getId());
-        } else if (!workspaceService.isPlatformAdmin()) {
-            List<Long> workspaceIds = workspaceService.listReadableWorkspaceIds();
-            if (workspaceIds.isEmpty()) {
-                return new PageResponse<>(List.of(), 0);
-            }
-            query.in(EnvConfigEntity::getWorkspaceId, workspaceIds);
-        }
-        String trimmedKeyword = blankToNull(keyword);
-        if (trimmedKeyword != null) {
-            query.and(wrapper -> wrapper
-                    .like(EnvConfigEntity::getEnvName, trimmedKeyword)
-                    .or()
-                    .like(EnvConfigEntity::getBaseUrl, trimmedKeyword)
-                    .or()
-                    .like(EnvConfigEntity::getConfigJson, trimmedKeyword));
-        }
-        String trimmedEnvType = blankToNull(envType);
-        if (trimmedEnvType != null) {
-            query.eq(EnvConfigEntity::getEnvType, trimmedEnvType.trim().toUpperCase(Locale.ROOT));
-        }
-        if (status != null) {
-            query.eq(EnvConfigEntity::getStatus, normalizeStatus(status));
-        }
-        var items = envConfigMapper.selectList(query.orderByAsc(EnvConfigEntity::getId)).stream()
-                .map(this::toEnvItem)
-                .toList();
-        return new PageResponse<>(items, items.size());
+        return environmentDomainService.listEnvs(workspaceCode, keyword, envType, status);
     }
+
 
     public EnvConfigItem createEnv(String headerWorkspaceCode, CreateEnvConfigRequest request) {
-        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
-                workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode()));
-        EnvConfigEntity entity = new EnvConfigEntity();
-        entity.setWorkspaceId(workspace.getId());
-        entity.setEnvType(request.envType());
-        entity.setEnvName(request.envName());
-        entity.setBaseUrl(request.baseUrl());
-        entity.setConfigJson(request.configJson());
-        entity.setStatus(1);
-        entity.setCreatedAt(LocalDateTime.now());
-        entity.setUpdatedAt(LocalDateTime.now());
-        envConfigMapper.insert(entity);
-        return toEnvItem(entity);
+        return environmentDomainService.createEnv(headerWorkspaceCode, request);
     }
+
 
     public EnvConfigItem updateEnv(Long id, String headerWorkspaceCode, CreateEnvConfigRequest request) {
-        EnvConfigEntity entity = requireEnv(id);
-        validateReadable(entity.getWorkspaceId(), headerWorkspaceCode, "当前空间上下文不可编辑该环境");
-        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
-                workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode()));
-        if (!entity.getWorkspaceId().equals(workspace.getId())) {
-            throw new BadRequestException("不允许修改环境归属空间");
-        }
-        entity.setEnvType(request.envType());
-        entity.setEnvName(request.envName());
-        entity.setBaseUrl(request.baseUrl());
-        entity.setConfigJson(request.configJson());
-        entity.setUpdatedAt(LocalDateTime.now());
-        envConfigMapper.updateById(entity);
-        return toEnvItem(entity);
+        return environmentDomainService.updateEnv(id, headerWorkspaceCode, request);
     }
+
 
     public EnvConfigItem updateEnvStatus(Long id, String workspaceCode, UpdateSettingStatusRequest request) {
-        EnvConfigEntity entity = requireEnv(id);
-        validateReadable(entity.getWorkspaceId(), workspaceCode, "当前空间上下文不可修改该环境");
-        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
-        entity.setStatus(normalizeStatus(request.status()));
-        entity.setUpdatedAt(LocalDateTime.now());
-        envConfigMapper.updateById(entity);
-        return toEnvItem(entity);
+        return environmentDomainService.updateEnvStatus(id, workspaceCode, request);
     }
 
+
     public void deleteEnv(Long id, String workspaceCode) {
-        EnvConfigEntity entity = requireEnv(id);
-        validateReadable(entity.getWorkspaceId(), workspaceCode, "当前空间上下文不可删除该环境");
-        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
-        envConfigMapper.deleteById(id);
+        environmentDomainService.deleteEnv(id, workspaceCode);
     }
+
 
     public PageResponse<ParamSetItem> listParams(String workspaceCode, String keyword, String paramType, Integer status) {
         WorkspaceEntity workspace = resolveScopedWorkspace(workspaceCode);
@@ -355,13 +296,7 @@ public class SettingsService {
         }
     }
 
-    private EnvConfigEntity requireEnv(Long id) {
-        EnvConfigEntity entity = envConfigMapper.selectById(id);
-        if (entity == null) {
-            throw new NotFoundException("环境不存在");
-        }
-        return entity;
-    }
+
 
     private ParamSetEntity requireParam(Long id) {
         ParamSetEntity entity = paramSetMapper.selectById(id);
@@ -397,19 +332,7 @@ public class SettingsService {
         return status;
     }
 
-    private EnvConfigItem toEnvItem(EnvConfigEntity item) {
-        WorkspaceEntity currentWorkspace = workspaceService.requireWorkspaceById(item.getWorkspaceId());
-        return new EnvConfigItem(
-                item.getId(),
-                currentWorkspace.getWorkspaceCode(),
-                currentWorkspace.getWorkspaceName(),
-                item.getEnvType(),
-                item.getEnvName(),
-                item.getBaseUrl(),
-                item.getConfigJson(),
-                item.getStatus()
-        );
-    }
+
 
     private ParamSetItem toParamItem(ParamSetEntity item) {
         WorkspaceEntity currentWorkspace = workspaceService.requireWorkspaceById(item.getWorkspaceId());

@@ -16,7 +16,8 @@ class ApiScenarioExecutionSupportTests {
     private final ApiScenarioExecutionSupport scenarioSupport = new ApiScenarioExecutionSupport(
             new ApiAutomationScriptRunner(),
             new ApiVariableResolver(),
-            new ApiAssertionEvaluator(new ApiAutomationScriptRunner())
+            new ApiAssertionEvaluator(new ApiAutomationScriptRunner(), new ApiAssertionSupport()),
+            new ApiAssertionSupport()
     );
 
     @Test

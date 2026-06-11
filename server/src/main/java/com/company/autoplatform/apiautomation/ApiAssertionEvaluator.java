@@ -16,7 +16,6 @@ import javax.xml.xpath.XPathConstants;
 import javax.xml.xpath.XPathFactory;
 import java.io.IOException;
 import java.io.StringReader;
-import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,9 +34,11 @@ public class ApiAssertionEvaluator {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final ApiAutomationScriptRunner scriptRunner;
+    private final ApiAssertionSupport assertionSupport;
 
-    public ApiAssertionEvaluator(ApiAutomationScriptRunner scriptRunner) {
+    public ApiAssertionEvaluator(ApiAutomationScriptRunner scriptRunner, ApiAssertionSupport assertionSupport) {
         this.scriptRunner = scriptRunner;
+        this.assertionSupport = assertionSupport;
     }
 
     public List<ApiAssertionResult> evaluate(
@@ -52,7 +53,7 @@ public class ApiAssertionEvaluator {
             if (assertion == null || Boolean.FALSE.equals(assertion.enabled())) {
                 continue;
             }
-            String type = normalizeAssertionType(assertion);
+            String type = assertionSupport.normalizeAssertionType(assertion);
             try {
                 switch (type) {
                     case "RESPONSE_CODE" -> results.add(evaluateSingleAssertion(
@@ -60,7 +61,7 @@ public class ApiAssertionEvaluator {
                             type,
                             firstNonBlank(assertion.name(), "Status Code"),
                             "statusCode",
-                            normalizeAssertionCondition(assertion.condition(), legacyCondition(assertion.type(), assertion.operator())),
+                            assertionSupport.normalizeAssertionCondition(assertion.condition(), legacyCondition(assertion.type(), assertion.operator())),
                             String.valueOf(response.statusCode()),
                             assertion.expectedValue(),
                             variables,
@@ -73,7 +74,7 @@ public class ApiAssertionEvaluator {
                             type,
                             firstNonBlank(assertion.name(), "Response Time"),
                             "durationMs",
-                            normalizeAssertionCondition(assertion.condition(), "LT_OR_EQUALS"),
+                            assertionSupport.normalizeAssertionCondition(assertion.condition(), "LT_OR_EQUALS"),
                             String.valueOf(durationMs),
                             assertion.expectedValue(),
                             variables,
@@ -89,7 +90,7 @@ public class ApiAssertionEvaluator {
                         type,
                         firstNonBlank(assertion.name(), defaultAssertionName(type)),
                         assertion.subject(),
-                        normalizeAssertionCondition(assertion.condition(), legacyCondition(assertion.type(), assertion.operator())),
+                        assertionSupport.normalizeAssertionCondition(assertion.condition(), legacyCondition(assertion.type(), assertion.operator())),
                         assertion.expectedValue(),
                         null,
                         false,
@@ -123,7 +124,7 @@ public class ApiAssertionEvaluator {
                     "RESPONSE_HEADER",
                     firstNonBlank(assertion.name(), "Response Header"),
                     header,
-                    normalizeAssertionCondition(item.condition(), legacyCondition(assertion.type(), assertion.operator())),
+                    assertionSupport.normalizeAssertionCondition(item.condition(), legacyCondition(assertion.type(), assertion.operator())),
                     actual,
                     item.expectedValue(),
                     variables,
@@ -157,7 +158,7 @@ public class ApiAssertionEvaluator {
                 continue;
             }
             String expression = replaceVariables(Optional.ofNullable(item.expression()).orElse(""), variables);
-            String condition = normalizeAssertionCondition(item.condition(), legacyCondition(assertion.type(), assertion.operator()));
+            String condition = assertionSupport.normalizeAssertionCondition(item.condition(), legacyCondition(assertion.type(), assertion.operator()));
             String expectedValue = replaceVariables(Optional.ofNullable(item.expectedValue()).orElse(""), variables);
             List<String> values;
             try {
@@ -169,7 +170,7 @@ public class ApiAssertionEvaluator {
             } catch (Exception exception) {
                 throw new BadRequestException(exception.getMessage());
             }
-            AssertionComparison comparison = compareValues(values, condition, expectedValue);
+            ApiAssertionSupport.ApiAssertionComparison comparison = assertionSupport.compareValues(values, condition, expectedValue);
             results.add(new ApiAssertionResult(
                     assertion.id(),
                     "RESPONSE_BODY",
@@ -194,9 +195,9 @@ public class ApiAssertionEvaluator {
             String variableName = replaceVariables(Optional.ofNullable(item.variableName()).orElse(""), variables);
             boolean found = variables.containsKey(variableName);
             String actual = Optional.ofNullable(variables.get(variableName)).orElse("");
-            String condition = normalizeAssertionCondition(item.condition(), assertion.condition());
+            String condition = assertionSupport.normalizeAssertionCondition(item.condition(), assertion.condition());
             String expectedValue = replaceVariables(Optional.ofNullable(item.expectedValue()).orElse(""), variables);
-            AssertionComparison comparison = compareValue(actual, condition, expectedValue);
+            ApiAssertionSupport.ApiAssertionComparison comparison = assertionSupport.compareValue(actual, condition, expectedValue);
             String message = comparison.message();
             if (!found && !comparison.success()) {
                 message = "Variable not found: " + variableName + ". " + message;
@@ -262,7 +263,7 @@ public class ApiAssertionEvaluator {
             String fallbackId
     ) {
         String expectedValue = replaceVariables(Optional.ofNullable(rawExpectedValue).orElse(""), variables);
-        AssertionComparison comparison = compareValue(Optional.ofNullable(actual).orElse(""), condition, expectedValue);
+        ApiAssertionSupport.ApiAssertionComparison comparison = assertionSupport.compareValue(Optional.ofNullable(actual).orElse(""), condition, expectedValue);
         return new ApiAssertionResult(
                 firstNonBlank(assertion.id(), fallbackId),
                 type,
@@ -274,77 +275,6 @@ public class ApiAssertionEvaluator {
                 comparison.success(),
                 comparison.message()
         );
-    }
-
-    private AssertionComparison compareValues(List<String> actualValues, String condition, String expectedValue) {
-        List<String> values = defaultList(actualValues);
-        String normalized = normalizeAssertionCondition(condition, "EQUALS");
-        if ("EMPTY".equals(normalized)) {
-            boolean success = values.isEmpty() || values.stream().allMatch(value -> value == null || value.isEmpty());
-            return comparisonResult(success, formatActualValues(values), expectedValue);
-        }
-        if ("NOT_EMPTY".equals(normalized)) {
-            boolean success = !values.isEmpty() && values.stream().anyMatch(value -> value != null && !value.isEmpty());
-            return comparisonResult(success, formatActualValues(values), expectedValue);
-        }
-        if (values.isEmpty()) {
-            return new AssertionComparison(false, "No value matched expression");
-        }
-        return values.stream()
-                .map(value -> compareValue(value, normalized, expectedValue))
-                .filter(AssertionComparison::success)
-                .findFirst()
-                .orElseGet(() -> comparisonResult(false, formatActualValues(values), expectedValue));
-    }
-
-    private AssertionComparison compareValue(String actual, String condition, String expectedValue) {
-        String normalized = normalizeAssertionCondition(condition, "EQUALS");
-        String safeActual = Optional.ofNullable(actual).orElse("");
-        String safeExpected = Optional.ofNullable(expectedValue).orElse("");
-        boolean success = switch (normalized) {
-            case "UNCHECKED" -> true;
-            case "EQUALS" -> safeActual.equals(safeExpected);
-            case "NOT_EQUALS" -> !safeActual.equals(safeExpected);
-            case "CONTAINS" -> safeActual.contains(safeExpected);
-            case "NOT_CONTAINS" -> !safeActual.contains(safeExpected);
-            case "EMPTY" -> safeActual.isEmpty();
-            case "NOT_EMPTY" -> !safeActual.isEmpty();
-            case "START_WITH" -> safeActual.startsWith(safeExpected);
-            case "END_WITH" -> safeActual.endsWith(safeExpected);
-            case "REGEX" -> Pattern.compile(safeExpected, Pattern.DOTALL).matcher(safeActual).find();
-            case "GT" -> compareNumber(safeActual, safeExpected) > 0;
-            case "GT_OR_EQUALS" -> compareNumber(safeActual, safeExpected) >= 0;
-            case "LT" -> compareNumber(safeActual, safeExpected) < 0;
-            case "LT_OR_EQUALS" -> compareNumber(safeActual, safeExpected) <= 0;
-            case "LENGTH_EQUALS" -> safeActual.length() == parseExpectedLength(safeExpected);
-            case "LENGTH_NOT_EQUALS" -> safeActual.length() != parseExpectedLength(safeExpected);
-            case "LENGTH_GT" -> safeActual.length() > parseExpectedLength(safeExpected);
-            case "LENGTH_GT_OR_EQUALS" -> safeActual.length() >= parseExpectedLength(safeExpected);
-            case "LENGTH_LT" -> safeActual.length() < parseExpectedLength(safeExpected);
-            case "LENGTH_LT_OR_EQUALS" -> safeActual.length() <= parseExpectedLength(safeExpected);
-            default -> throw new BadRequestException("Unsupported assertion condition: " + normalized);
-        };
-        return comparisonResult(success, safeActual, safeExpected);
-    }
-
-    private AssertionComparison comparisonResult(boolean success, String actual, String expectedValue) {
-        return new AssertionComparison(success, success ? "Assertion passed" : "Expected " + expectedValue + " but got " + actual);
-    }
-
-    private int compareNumber(String actual, String expectedValue) {
-        try {
-            return new BigDecimal(actual.trim()).compareTo(new BigDecimal(expectedValue.trim()));
-        } catch (RuntimeException exception) {
-            throw new BadRequestException("Actual and expected values must be numeric");
-        }
-    }
-
-    private int parseExpectedLength(String expectedValue) {
-        try {
-            return Integer.parseInt(expectedValue.trim());
-        } catch (RuntimeException exception) {
-            throw new BadRequestException("Expected value must be an integer length");
-        }
     }
 
     private List<String> extractByJsonPath(String source, String expression) {
@@ -499,19 +429,6 @@ public class ApiAssertionEvaluator {
         return context;
     }
 
-    private String normalizeAssertionType(ApiAssertionInput assertion) {
-        String type = Optional.ofNullable(firstNonBlank(assertion.assertionType(), assertion.type()))
-                .orElse("")
-                .toUpperCase(Locale.ROOT);
-        return switch (type) {
-            case "STATUS_CODE" -> "RESPONSE_CODE";
-            case "HEADER_EQUALS", "HEADER_CONTAINS" -> "RESPONSE_HEADER";
-            case "BODY_JSONPATH_EQUALS", "BODY_JSONPATH_CONTAINS" -> "RESPONSE_BODY";
-            case "RESPONSE_TIME_LE" -> "RESPONSE_TIME";
-            default -> type;
-        };
-    }
-
     private String normalizeBodyAssertionType(ApiAssertionInput assertion) {
         String type = Optional.ofNullable(assertion.assertionBodyType()).orElse("").trim().toUpperCase(Locale.ROOT);
         if (!type.isBlank()) {
@@ -537,24 +454,6 @@ public class ApiAssertionEvaluator {
             return normalizedOperator;
         }
         return "EQUALS";
-    }
-
-    private String normalizeAssertionCondition(String condition, String fallback) {
-        String normalized = Optional.ofNullable(firstNonBlank(condition, fallback))
-                .orElse("EQUALS")
-                .toUpperCase(Locale.ROOT);
-        return switch (normalized) {
-            case "=", "==", "EQUAL" -> "EQUALS";
-            case "!=", "<>", "NOT_EQUAL" -> "NOT_EQUALS";
-            case "NOTCONTAINS" -> "NOT_CONTAINS";
-            case "STARTS_WITH", "START_WITH" -> "START_WITH";
-            case "ENDS_WITH", "END_WITH" -> "END_WITH";
-            case "GTE", ">=" -> "GT_OR_EQUALS";
-            case "GT", ">" -> "GT";
-            case "LTE", "<=" -> "LT_OR_EQUALS";
-            case "LT", "<" -> "LT";
-            default -> normalized;
-        };
     }
 
     private String defaultAssertionName(String type) {
@@ -587,8 +486,5 @@ public class ApiAssertionEvaluator {
             }
         }
         return null;
-    }
-
-    private record AssertionComparison(boolean success, String message) {
     }
 }

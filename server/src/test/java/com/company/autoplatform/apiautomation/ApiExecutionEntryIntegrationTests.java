@@ -122,6 +122,66 @@ class ApiExecutionEntryIntegrationTests extends IntegrationTestSupport {
         assertCaseRunPersisted(apiCase.id(), run.reportId());
     }
 
+    @Test
+    void runScenarioReturnsSuccessfulRunAndUpdatesLastRunResult() {
+        ApiDefinitionDetail definition = createDefinition("scenario entry smoke definition " + System.nanoTime());
+        ApiScenarioDetail scenario = apiAutomationService.createScenario(WORKSPACE_CODE, new SaveApiScenarioRequest(
+                WORKSPACE_CODE,
+                "scenario entry smoke " + System.nanoTime(),
+                null,
+                null,
+                "P2",
+                "ACTIVE",
+                "entry smoke",
+                List.of("entry-smoke"),
+                null,
+                null,
+                false,
+                null,
+                List.of(),
+                List.of(),
+                List.of(new ApiScenarioStepInput(
+                        "step-api-ok",
+                        "Run saved definition",
+                        "API",
+                        "DEFINITION",
+                        definition.id(),
+                        true,
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        List.of()
+                ))
+        ));
+
+        ApiRunResponse run = apiAutomationService.runScenario(
+                scenario.id(),
+                WORKSPACE_CODE,
+                new ApiRunRequest(WORKSPACE_CODE, null, null)
+        );
+
+        assertThat(run.taskId()).isNotNull();
+        assertThat(run.reportId()).isNotNull();
+        assertThat(run.result()).isEqualTo("SUCCESS");
+        assertThat(run.stepResults())
+                .anySatisfy(step -> {
+                    assertThat(step.success()).isTrue();
+                    assertThat(step.response()).isNotNull();
+                    assertThat(step.response().statusCode()).isEqualTo(200);
+                });
+        ApiScenarioDetail refreshed = apiAutomationService.getScenario(scenario.id(), WORKSPACE_CODE);
+        assertThat(refreshed.lastRunResult()).isEqualTo("SUCCESS");
+        assertThat(refreshed.lastRunAt()).isNotNull();
+    }
+
     private void assertSuccessfulRun(ApiRunResponse run) {
         assertThat(run.taskId()).isNotNull();
         assertThat(run.reportId()).isNotNull();
@@ -147,18 +207,7 @@ class ApiExecutionEntryIntegrationTests extends IntegrationTestSupport {
     }
 
     private ApiDefinitionCaseDetail createSavedCase(String caseName) {
-        ApiDefinitionDetail definition = apiAutomationService.createDefinition(WORKSPACE_CODE, new SaveApiDefinitionRequest(
-                WORKSPACE_CODE,
-                caseName + " definition",
-                null,
-                "entry smoke",
-                List.of("entry-smoke"),
-                requestConfig(),
-                List.of(statusCodeAssertion()),
-                List.of(),
-                List.of(),
-                List.of()
-        ));
+        ApiDefinitionDetail definition = createDefinition(caseName + " definition");
         return apiAutomationService.createCase(WORKSPACE_CODE, new SaveApiDefinitionCaseRequest(
                 WORKSPACE_CODE,
                 definition.id(),
@@ -167,6 +216,21 @@ class ApiExecutionEntryIntegrationTests extends IntegrationTestSupport {
                 List.of("entry-smoke"),
                 requestConfig(),
                 List.of(statusCodeAssertion()),
+                List.of(),
+                List.of()
+        ));
+    }
+
+    private ApiDefinitionDetail createDefinition(String name) {
+        return apiAutomationService.createDefinition(WORKSPACE_CODE, new SaveApiDefinitionRequest(
+                WORKSPACE_CODE,
+                name,
+                null,
+                "entry smoke",
+                List.of("entry-smoke"),
+                requestConfig(),
+                List.of(statusCodeAssertion()),
+                List.of(),
                 List.of(),
                 List.of()
         ));

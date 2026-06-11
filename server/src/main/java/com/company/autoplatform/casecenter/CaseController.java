@@ -1,6 +1,5 @@
 package com.company.autoplatform.casecenter;
 
-import com.company.autoplatform.ai.AiCaseService;
 import com.company.autoplatform.ai.AiReviewResult;
 import com.company.autoplatform.common.ApiResponse;
 import com.company.autoplatform.common.PageResponse;
@@ -31,11 +30,11 @@ import java.util.List;
 @RequestMapping("/api/cases")
 public class CaseController {
     private final CaseService caseService;
-    private final AiCaseService aiCaseService;
+    private final CaseReviewDomainService caseReviewDomainService;
 
-    public CaseController(CaseService caseService, AiCaseService aiCaseService) {
+    public CaseController(CaseService caseService, CaseReviewDomainService caseReviewDomainService) {
         this.caseService = caseService;
-        this.aiCaseService = aiCaseService;
+        this.caseReviewDomainService = caseReviewDomainService;
     }
 
     @GetMapping
@@ -132,8 +131,7 @@ public class CaseController {
             @PathVariable Long id,
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
     ) {
-        CaseDetailResponse detail = caseService.getCase(id, workspaceCode);
-        return ApiResponse.ok(aiCaseService.reviewSavedCase(workspaceCode, detail), "AI 用例评审已完成");
+        return ApiResponse.ok(caseReviewDomainService.aiReviewCase(id, workspaceCode), "AI ???????");
     }
 
     @PostMapping("/{id}/execute")

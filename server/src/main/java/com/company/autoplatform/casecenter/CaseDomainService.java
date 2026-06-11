@@ -34,6 +34,7 @@ public class CaseDomainService {
     private final CaseMapper caseMapper;
     private final CaseDirectoryMapper caseDirectoryMapper;
     private final CaseExecutionAttachmentMapper caseExecutionAttachmentMapper;
+    private final CaseExecutionAttachmentSupport caseExecutionAttachmentSupport;
     private final UserService userService;
     private final WorkspaceService workspaceService;
 
@@ -41,12 +42,14 @@ public class CaseDomainService {
             CaseMapper caseMapper,
             CaseDirectoryMapper caseDirectoryMapper,
             CaseExecutionAttachmentMapper caseExecutionAttachmentMapper,
+            CaseExecutionAttachmentSupport caseExecutionAttachmentSupport,
             UserService userService,
             WorkspaceService workspaceService
     ) {
         this.caseMapper = caseMapper;
         this.caseDirectoryMapper = caseDirectoryMapper;
         this.caseExecutionAttachmentMapper = caseExecutionAttachmentMapper;
+        this.caseExecutionAttachmentSupport = caseExecutionAttachmentSupport;
         this.userService = userService;
         this.workspaceService = workspaceService;
     }
@@ -326,9 +329,9 @@ public class CaseDomainService {
         UserEntity updater = item.getUpdatedBy() == null ? null : userService.requireUser(item.getUpdatedBy());
         List<CaseExecutionAttachmentResponse> attachments = caseExecutionAttachmentMapper.selectList(new LambdaQueryWrapper<CaseExecutionAttachmentEntity>()
                         .eq(CaseExecutionAttachmentEntity::getCaseId, item.getId())
-                        .orderByAsc(CaseExecutionAttachmentEntity::getId))
+                .orderByAsc(CaseExecutionAttachmentEntity::getId))
                 .stream()
-                .map(attachment -> toAttachmentResponse(item, attachment))
+                .map(attachment -> caseExecutionAttachmentSupport.toAttachmentResponse(item, attachment))
                 .toList();
         return new CaseDetailResponse(
                 item.getId(),
@@ -365,17 +368,6 @@ public class CaseDomainService {
                 item.getSteps(),
                 item.getExpectedResult(),
                 attachments
-        );
-    }
-
-    private CaseExecutionAttachmentResponse toAttachmentResponse(CaseEntity item, CaseExecutionAttachmentEntity attachment) {
-        return new CaseExecutionAttachmentResponse(
-                attachment.getId(),
-                attachment.getFileName(),
-                attachment.getContentType(),
-                attachment.getFileSize(),
-                "/api/cases/" + item.getId() + "/attachments/" + attachment.getId() + "/download",
-                attachment.getCreatedAt()
         );
     }
 

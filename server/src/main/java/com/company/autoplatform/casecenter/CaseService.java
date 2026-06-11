@@ -35,6 +35,7 @@ public class CaseService {
 
     private final CaseDomainService caseDomainService;
     private final CaseDirectoryDomainService caseDirectoryDomainService;
+    private final CaseBatchDomainService caseBatchDomainService;
     private final CaseMapper caseMapper;
     private final CaseDirectoryMapper caseDirectoryMapper;
     private final CaseExecutionAttachmentMapper caseExecutionAttachmentMapper;
@@ -45,6 +46,7 @@ public class CaseService {
     public CaseService(
             CaseDomainService caseDomainService,
             CaseDirectoryDomainService caseDirectoryDomainService,
+            CaseBatchDomainService caseBatchDomainService,
             CaseMapper caseMapper,
             CaseDirectoryMapper caseDirectoryMapper,
             CaseExecutionAttachmentMapper caseExecutionAttachmentMapper,
@@ -54,6 +56,7 @@ public class CaseService {
     ) {
         this.caseDomainService = caseDomainService;
         this.caseDirectoryDomainService = caseDirectoryDomainService;
+        this.caseBatchDomainService = caseBatchDomainService;
         this.caseMapper = caseMapper;
         this.caseDirectoryMapper = caseDirectoryMapper;
         this.caseExecutionAttachmentMapper = caseExecutionAttachmentMapper;
@@ -194,57 +197,15 @@ public class CaseService {
     }
 
     public PageResponse<CaseSummaryResponse> batchMoveCases(String workspaceCode, BatchMoveCasesRequest request) {
-        List<CaseEntity> entities = requireWritableCases(request.caseIds(), workspaceCode);
-        Long workspaceId = assertSingleWorkspace(entities);
-        CaseDirectoryEntity targetDirectory = request.targetDirectoryId() == null ? null : requireDirectory(request.targetDirectoryId());
-        if (targetDirectory != null && !targetDirectory.getWorkspaceId().equals(workspaceId)) {
-            throw new BadRequestException("批量移动目标目录与用例不在同一空间");
-        }
-
-        LocalDateTime now = LocalDateTime.now();
-        for (CaseEntity entity : entities) {
-            entity.setCaseDirectoryId(targetDirectory == null ? null : targetDirectory.getId());
-            entity.setUpdatedAt(now);
-            entity.setUpdatedBy(CurrentUserContext.get());
-            caseMapper.updateById(entity);
-        }
-        return toSummaryPage(entities);
+        return caseBatchDomainService.batchMoveCases(workspaceCode, request);
     }
 
     public PageResponse<CaseSummaryResponse> batchUpdateCases(String workspaceCode, BatchUpdateCasesRequest request) {
-        if (blankToNull(request.priority()) == null
-                && blankToNull(request.reviewStatus()) == null
-                && blankToNull(request.executionStatus()) == null) {
-            throw new BadRequestException("批量编辑至少选择一个可修改字段");
-        }
-        List<CaseEntity> entities = requireWritableCases(request.caseIds(), workspaceCode);
-        LocalDateTime now = LocalDateTime.now();
-        for (CaseEntity entity : entities) {
-            if (blankToNull(request.priority()) != null) {
-                entity.setPriority(request.priority().trim());
-            }
-            if (blankToNull(request.reviewStatus()) != null) {
-                entity.setReviewStatus(normalizeReviewStatus(request.reviewStatus()));
-                entity.setReviewedBy(CurrentUserContext.require().userId());
-                entity.setReviewedAt(now);
-            }
-            if (blankToNull(request.executionStatus()) != null) {
-                entity.setExecutionStatus(normalizeExecutionStatus(request.executionStatus()));
-                entity.setExecutorId(CurrentUserContext.require().userId());
-                entity.setExecutedAt(now);
-            }
-            entity.setUpdatedAt(now);
-            entity.setUpdatedBy(CurrentUserContext.get());
-            caseMapper.updateById(entity);
-        }
-        return toSummaryPage(entities);
+        return caseBatchDomainService.batchUpdateCases(workspaceCode, request);
     }
 
     public void batchDeleteCases(String workspaceCode, BatchDeleteCasesRequest request) {
-        List<CaseEntity> entities = requireWritableCases(request.caseIds(), workspaceCode);
-        for (CaseEntity entity : entities) {
-            caseMapper.deleteById(entity.getId());
-        }
+        caseBatchDomainService.batchDeleteCases(workspaceCode, request);
     }
 
     public void deleteCase(Long id, String workspaceCode) {

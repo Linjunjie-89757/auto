@@ -223,7 +223,7 @@ public class CaseDomainService {
         return entity;
     }
 
-    private void validateReadable(CaseEntity entity, String workspaceCode) {
+    void validateReadable(CaseEntity entity, String workspaceCode) {
         String normalized = WorkspaceScope.normalize(workspaceCode);
         if (WorkspaceScope.isAll(normalized)) {
             if (!workspaceService.isPlatformAdmin()

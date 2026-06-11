@@ -14,33 +14,16 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.function.Function;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 @Service
 public class CaseService {
-    private static final int DEFAULT_PAGE_NO = 1;
-    private static final int DEFAULT_PAGE_SIZE = 10;
-    private static final Pattern CASE_NO_PATTERN = Pattern.compile("^CASE-(\\d+)$", Pattern.CASE_INSENSITIVE);
-
     private final CaseDomainService caseDomainService;
     private final CaseDirectoryDomainService caseDirectoryDomainService;
     private final CaseBatchDomainService caseBatchDomainService;
     private final CaseExecutionAttachmentSupport caseExecutionAttachmentSupport;
     private final CaseMapper caseMapper;
-    private final CaseDirectoryMapper caseDirectoryMapper;
     private final CaseExecutionAttachmentMapper caseExecutionAttachmentMapper;
-    private final CaseExecutionAttachmentStorageService caseExecutionAttachmentStorageService;
     private final UserService userService;
     private final WorkspaceService workspaceService;
 
@@ -50,9 +33,7 @@ public class CaseService {
             CaseBatchDomainService caseBatchDomainService,
             CaseExecutionAttachmentSupport caseExecutionAttachmentSupport,
             CaseMapper caseMapper,
-            CaseDirectoryMapper caseDirectoryMapper,
             CaseExecutionAttachmentMapper caseExecutionAttachmentMapper,
-            CaseExecutionAttachmentStorageService caseExecutionAttachmentStorageService,
             UserService userService,
             WorkspaceService workspaceService
     ) {
@@ -61,9 +42,7 @@ public class CaseService {
         this.caseBatchDomainService = caseBatchDomainService;
         this.caseExecutionAttachmentSupport = caseExecutionAttachmentSupport;
         this.caseMapper = caseMapper;
-        this.caseDirectoryMapper = caseDirectoryMapper;
         this.caseExecutionAttachmentMapper = caseExecutionAttachmentMapper;
-        this.caseExecutionAttachmentStorageService = caseExecutionAttachmentStorageService;
         this.userService = userService;
         this.workspaceService = workspaceService;
     }
@@ -207,101 +186,6 @@ public class CaseService {
         }
     }
 
-    private void validateDirectoryReadable(CaseDirectoryEntity entity, String workspaceCode) {
-        String normalized = WorkspaceScope.normalize(workspaceCode);
-        if (WorkspaceScope.isAll(normalized)) {
-            if (!workspaceService.isPlatformAdmin()
-                    && !workspaceService.listReadableWorkspaceIds().contains(entity.getWorkspaceId())) {
-                throw new BadRequestException("当前空间上下文不可访问该目录");
-            }
-            return;
-        }
-        WorkspaceEntity workspace = workspaceService.requireReadableWorkspace(normalized);
-        if (!workspace.getId().equals(entity.getWorkspaceId())) {
-            throw new BadRequestException("当前空间上下文不可访问该目录");
-        }
-    }
-
-    private CaseDirectoryEntity requireDirectoryForWorkspace(WorkspaceEntity workspace, Long directoryId) {
-        if (directoryId == null) {
-            return null;
-        }
-        CaseDirectoryEntity directory = requireDirectory(directoryId);
-        if (!directory.getWorkspaceId().equals(workspace.getId())) {
-            throw new BadRequestException("目录不属于当前工作空间");
-        }
-        return directory;
-    }
-
-    private CaseDirectoryEntity requireParentDirectory(WorkspaceEntity workspace, Long parentId) {
-        if (parentId == null) {
-            return null;
-        }
-        return requireDirectoryForWorkspace(workspace, parentId);
-    }
-
-    private PageResponse<CaseSummaryResponse> toSummaryPage(List<CaseEntity> entities) {
-        Map<Long, UserEntity> userMap = collectUserMap(entities);
-        Map<Long, WorkspaceEntity> workspaceMap = collectWorkspaceMap(entities);
-        Map<Long, CaseDirectoryEntity> directoryMap = collectDirectoryMap(entities);
-        List<CaseSummaryResponse> items = entities.stream()
-                .map(item -> toCaseSummary(item, userMap, workspaceMap, directoryMap))
-                .toList();
-        return PageResponse.of(items, items.size(), 1, items.size());
-    }
-
-    private CaseSummaryResponse getCaseSummary(Long id) {
-        CaseEntity item = requireCase(id);
-        Map<Long, UserEntity> userMap = collectUserMap(List.of(item));
-        Map<Long, WorkspaceEntity> workspaceMap = collectWorkspaceMap(List.of(item));
-        Map<Long, CaseDirectoryEntity> directoryMap = collectDirectoryMap(List.of(item));
-        return toCaseSummary(item, userMap, workspaceMap, directoryMap);
-    }
-
-    private CaseSummaryResponse toCaseSummary(
-            CaseEntity item,
-            Map<Long, UserEntity> userMap,
-            Map<Long, WorkspaceEntity> workspaceMap,
-            Map<Long, CaseDirectoryEntity> directoryMap
-    ) {
-        UserEntity owner = item.getOwnerId() == null ? null : userMap.get(item.getOwnerId());
-        WorkspaceEntity workspace = workspaceMap.get(item.getWorkspaceId());
-        CaseDirectoryEntity directory = item.getCaseDirectoryId() == null ? null : directoryMap.get(item.getCaseDirectoryId());
-        UserEntity reviewer = item.getReviewedBy() == null ? null : userMap.get(item.getReviewedBy());
-        UserEntity executor = item.getExecutorId() == null ? null : userMap.get(item.getExecutorId());
-        UserEntity creator = item.getCreatedBy() == null ? null : userMap.get(item.getCreatedBy());
-        UserEntity updater = item.getUpdatedBy() == null ? null : userMap.get(item.getUpdatedBy());
-        return new CaseSummaryResponse(
-                item.getId(),
-                item.getCaseNo(),
-                item.getTitle(),
-                item.getCaseType(),
-                item.getPriority(),
-                item.getSourceType(),
-                item.getCaseStatus(),
-                defaultExecutionStatus(item.getExecutionStatus()),
-                owner == null ? "-" : owner.getDisplayName(),
-                executor == null ? "-" : executor.getDisplayName(),
-                item.getExecutionComment(),
-                item.getExecutedAt() == null ? null : item.getExecutedAt().toString(),
-                workspace.getWorkspaceCode(),
-                workspace.getWorkspaceName(),
-                directory == null ? null : directory.getId(),
-                directory == null ? null : directory.getDirectoryName(),
-                item.getCreatedBy(),
-                creator == null ? null : creator.getDisplayName(),
-                item.getCreatedAt() == null ? null : item.getCreatedAt().toString(),
-                item.getUpdatedBy(),
-                updater == null ? null : updater.getDisplayName(),
-                item.getUpdatedAt() == null ? null : item.getUpdatedAt().toString(),
-                defaultReviewStatus(item.getReviewStatus()),
-                item.getReviewComment(),
-                item.getReviewedBy(),
-                reviewer == null ? null : reviewer.getDisplayName(),
-                item.getReviewedAt() == null ? null : item.getReviewedAt().toString()
-        );
-    }
-
     private CaseDetailResponse toCaseDetail(CaseEntity item) {
         UserEntity owner = item.getOwnerId() == null ? null : userService.requireUser(item.getOwnerId());
         WorkspaceEntity workspace = workspaceService.requireWorkspaceById(item.getWorkspaceId());
@@ -314,7 +198,7 @@ public class CaseService {
                         .eq(CaseExecutionAttachmentEntity::getCaseId, item.getId())
                         .orderByAsc(CaseExecutionAttachmentEntity::getId))
                 .stream()
-                .map(attachment -> toAttachmentResponse(item, attachment))
+                .map(attachment -> caseExecutionAttachmentSupport.toAttachmentResponse(item, attachment))
                 .toList();
         return new CaseDetailResponse(
                 item.getId(),
@@ -352,139 +236,6 @@ public class CaseService {
                 item.getExpectedResult(),
                 attachments
         );
-    }
-
-    private CaseExecutionAttachmentResponse toAttachmentResponse(CaseEntity item, CaseExecutionAttachmentEntity attachment) {
-        return new CaseExecutionAttachmentResponse(
-                attachment.getId(),
-                attachment.getFileName(),
-                attachment.getContentType(),
-                attachment.getFileSize(),
-                "/api/cases/" + item.getId() + "/attachments/" + attachment.getId() + "/download",
-                attachment.getCreatedAt()
-        );
-    }
-
-    private Map<Long, UserEntity> collectUserMap(List<CaseEntity> entities) {
-        List<Long> userIds = entities.stream()
-                .flatMap(item -> java.util.stream.Stream.of(
-                        item.getOwnerId(),
-                        item.getExecutorId(),
-                        item.getCreatedBy(),
-                        item.getUpdatedBy(),
-                        item.getReviewedBy()
-                ))
-                .filter(Objects::nonNull)
-                .distinct()
-                .toList();
-        if (userIds.isEmpty()) {
-            return Map.of();
-        }
-        return userIds.stream()
-                .map(userService::requireUser)
-                .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
-    }
-
-    private Map<Long, WorkspaceEntity> collectWorkspaceMap(List<CaseEntity> entities) {
-        List<Long> workspaceIds = entities.stream()
-                .map(CaseEntity::getWorkspaceId)
-                .filter(Objects::nonNull)
-                .distinct()
-                .toList();
-        return workspaceIds.stream()
-                .map(workspaceService::requireWorkspaceById)
-                .collect(Collectors.toMap(WorkspaceEntity::getId, Function.identity()));
-    }
-
-    private Map<Long, CaseDirectoryEntity> collectDirectoryMap(List<CaseEntity> entities) {
-        List<Long> directoryIds = entities.stream()
-                .map(CaseEntity::getCaseDirectoryId)
-                .filter(Objects::nonNull)
-                .distinct()
-                .toList();
-        if (directoryIds.isEmpty()) {
-            return Map.of();
-        }
-        return caseDirectoryMapper.selectList(new LambdaQueryWrapper<CaseDirectoryEntity>()
-                        .in(CaseDirectoryEntity::getId, directoryIds))
-                .stream()
-                .collect(Collectors.toMap(CaseDirectoryEntity::getId, Function.identity()));
-    }
-
-    private List<CaseDirectoryNodeResponse> buildDirectoryTree(WorkspaceEntity workspace, List<CaseDirectoryEntity> directories) {
-        Map<Long, List<CaseDirectoryEntity>> childrenByParent = directories.stream()
-                .collect(Collectors.groupingBy(item -> item.getParentId() == null ? 0L : item.getParentId(), LinkedHashMap::new, Collectors.toList()));
-        return buildDirectoryChildren(workspace, childrenByParent, 0L);
-    }
-
-    private List<CaseDirectoryNodeResponse> buildDirectoryChildren(
-            WorkspaceEntity workspace,
-            Map<Long, List<CaseDirectoryEntity>> childrenByParent,
-            Long parentId
-    ) {
-        List<CaseDirectoryEntity> currentChildren = childrenByParent.getOrDefault(parentId, List.of());
-        List<CaseDirectoryNodeResponse> result = new ArrayList<>();
-        for (CaseDirectoryEntity child : currentChildren) {
-            result.add(toDirectoryNode(child, workspace, buildDirectoryChildren(workspace, childrenByParent, child.getId())));
-        }
-        return result;
-    }
-
-    private CaseDirectoryNodeResponse toDirectoryNode(
-            CaseDirectoryEntity entity,
-            WorkspaceEntity workspace,
-            List<CaseDirectoryNodeResponse> children
-    ) {
-        return new CaseDirectoryNodeResponse(
-                entity.getId(),
-                entity.getDirectoryName(),
-                workspace.getWorkspaceCode(),
-                workspace.getWorkspaceName(),
-                entity.getParentId(),
-                children
-        );
-    }
-
-    private Set<Long> collectDescendantIds(Long workspaceId, Long rootId) {
-        List<CaseDirectoryEntity> directories = caseDirectoryMapper.selectList(new LambdaQueryWrapper<CaseDirectoryEntity>()
-                .eq(CaseDirectoryEntity::getWorkspaceId, workspaceId)
-                .orderByAsc(CaseDirectoryEntity::getId));
-        Map<Long, List<CaseDirectoryEntity>> childrenByParent = directories.stream()
-                .filter(item -> item.getParentId() != null)
-                .collect(Collectors.groupingBy(CaseDirectoryEntity::getParentId));
-
-        Set<Long> result = new HashSet<>();
-        List<Long> stack = new ArrayList<>();
-        stack.add(rootId);
-        while (!stack.isEmpty()) {
-            Long current = stack.remove(stack.size() - 1);
-            result.add(current);
-            for (CaseDirectoryEntity child : childrenByParent.getOrDefault(current, List.of())) {
-                stack.add(child.getId());
-            }
-        }
-        return result;
-    }
-
-    private List<CaseEntity> requireWritableCases(List<Long> caseIds, String workspaceCode) {
-        List<Long> distinctIds = caseIds == null ? List.of() : caseIds.stream().filter(Objects::nonNull).distinct().toList();
-        if (distinctIds.isEmpty()) {
-            throw new BadRequestException("用例列表不能为空");
-        }
-        List<CaseEntity> entities = distinctIds.stream().map(this::requireCase).toList();
-        for (CaseEntity entity : entities) {
-            validateReadable(entity, workspaceCode);
-            workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
-        }
-        return entities;
-    }
-
-    private Long assertSingleWorkspace(List<CaseEntity> entities) {
-        Set<Long> workspaceIds = entities.stream().map(CaseEntity::getWorkspaceId).collect(Collectors.toSet());
-        if (workspaceIds.size() != 1) {
-            throw new BadRequestException("批量操作暂不支持跨空间混合提交");
-        }
-        return entities.getFirst().getWorkspaceId();
     }
 
     private String normalizeReviewStatus(String reviewStatus) {
@@ -528,22 +279,5 @@ public class CaseService {
         return value.trim();
     }
 
-    private String generateCaseNo() {
-        List<CaseEntity> latestCases = caseMapper.selectList(new LambdaQueryWrapper<CaseEntity>()
-                .select(CaseEntity::getCaseNo)
-                .orderByDesc(CaseEntity::getId)
-                .last("limit 1"));
 
-        long nextSequence = 1;
-        if (!latestCases.isEmpty()) {
-            String latestCaseNo = latestCases.getFirst().getCaseNo();
-            Matcher matcher = CASE_NO_PATTERN.matcher(latestCaseNo == null ? "" : latestCaseNo.trim());
-            if (matcher.matches()) {
-                nextSequence = Long.parseLong(matcher.group(1)) + 1;
-            } else {
-                nextSequence = caseMapper.selectCount(new LambdaQueryWrapper<>()) + 1;
-            }
-        }
-        return "Case-" + String.format("%05d", nextSequence);
-    }
 }

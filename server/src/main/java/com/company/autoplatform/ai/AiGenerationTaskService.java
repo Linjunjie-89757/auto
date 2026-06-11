@@ -18,8 +18,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Service
 public class AiGenerationTaskService {
@@ -27,14 +25,13 @@ public class AiGenerationTaskService {
     private static final List<String> TERMINAL_STATUSES = List.of("COMPLETED", "FAILED", "CANCELED");
     private static final int RAW_OUTPUT_LIMIT = 12000;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-    private static final Pattern INTERNAL_CASE_INDEX_PATTERN = Pattern.compile("(?i)\\b(?:caseIndex|itemIndex|Index|Case)\\s*[:#=]?\\s*(\\d+)\\b");
-
     private final AiGenerationTaskMapper aiGenerationTaskMapper;
     private final AiGenerationTaskDomainService taskDomainService;
     private final AiCaseService aiCaseService;
     private final AiGenerationTaskEventService eventService;
     private final AiGenerationTaskResponseSupport responseSupport;
     private final AiGenerationTaskResultMergeSupport resultMergeSupport;
+    private final AiGenerationTaskEventMessageSupport eventMessageSupport;
     private final WorkspaceService workspaceService;
 
     public AiGenerationTaskService(
@@ -44,6 +41,7 @@ public class AiGenerationTaskService {
             AiGenerationTaskEventService eventService,
             AiGenerationTaskResponseSupport responseSupport,
             AiGenerationTaskResultMergeSupport resultMergeSupport,
+            AiGenerationTaskEventMessageSupport eventMessageSupport,
             WorkspaceService workspaceService
     ) {
         this.aiGenerationTaskMapper = aiGenerationTaskMapper;
@@ -52,6 +50,7 @@ public class AiGenerationTaskService {
         this.eventService = eventService;
         this.responseSupport = responseSupport;
         this.resultMergeSupport = resultMergeSupport;
+        this.eventMessageSupport = eventMessageSupport;
         this.workspaceService = workspaceService;
     }
 
@@ -204,7 +203,7 @@ public class AiGenerationTaskService {
                     }
                     generatedCases.add(update.item());
                     persistGeneratedCasesSnapshot(latest, generatedCases, update.rawOutput());
-                    appendEvent(taskId, "CASE_GENERATED", "GENERATING", "INFO", buildGeneratedCaseEventMessage(update.itemIndex(), update.item()), update.itemIndex(), update.item().title(), latest.getProvider(), latest.getModel(), responseSupport.writeValue(update.item()));
+                    appendEvent(taskId, "CASE_GENERATED", "GENERATING", "INFO", eventMessageSupport.buildGeneratedCaseEventMessage(update.itemIndex(), update.item()), update.itemIndex(), update.item().title(), latest.getProvider(), latest.getModel(), responseSupport.writeValue(update.item()));
                 }
         );
 
@@ -278,7 +277,7 @@ public class AiGenerationTaskService {
                         latest.setUpdatedAt(LocalDateTime.now());
                         aiGenerationTaskMapper.updateById(latest);
                         int itemIndex = generatedCases.size() - 1;
-                        appendEvent(taskId, "CASE_SUPPLEMENTED", "REVIEWING", "INFO", buildSupplementedCaseEventMessage(itemIndex, supplemented), itemIndex, supplemented.title(), reviewProvider[0], reviewModel[0], responseSupport.writeValue(Map.of(
+                        appendEvent(taskId, "CASE_SUPPLEMENTED", "REVIEWING", "INFO", eventMessageSupport.buildSupplementedCaseEventMessage(itemIndex, supplemented), itemIndex, supplemented.title(), reviewProvider[0], reviewModel[0], responseSupport.writeValue(Map.of(
                                 "status", update.status(),
                                 "summary", update.summary() == null ? "" : update.summary(),
                                 "supplementReason", update.supplementReason() == null ? "" : update.supplementReason(),
@@ -295,7 +294,7 @@ public class AiGenerationTaskService {
                     latest.setReviewRawOutput(limitRawOutput(update.rawOutput()));
                     latest.setUpdatedAt(LocalDateTime.now());
                     aiGenerationTaskMapper.updateById(latest);
-                    appendEvent(taskId, "CASE_REVIEWED", "REVIEWING", "INFO", buildReviewedCaseEventMessage(update.itemIndex(), reviewed.title(), update.status(), update.summary(), update.coverageComment(), update.evidenceComment()), update.itemIndex(), reviewed.title(), reviewProvider[0], reviewModel[0], responseSupport.writeValue(Map.of(
+                    appendEvent(taskId, "CASE_REVIEWED", "REVIEWING", "INFO", eventMessageSupport.buildReviewedCaseEventMessage(update.itemIndex(), reviewed.title(), update.status(), update.summary(), update.coverageComment(), update.evidenceComment()), update.itemIndex(), reviewed.title(), reviewProvider[0], reviewModel[0], responseSupport.writeValue(Map.of(
                             "status", update.status(),
                             "summary", update.summary() == null ? "" : update.summary(),
                             "coverageComment", update.coverageComment() == null ? "" : update.coverageComment(),
@@ -422,125 +421,6 @@ public class AiGenerationTaskService {
                 "unresolvedCoverageGaps", review == null || review.unresolvedCoverageGaps() == null ? List.of() : review.unresolvedCoverageGaps()
         )));
         appendEvent(taskId, "FINAL_CASES_READY", "DONE", "INFO", "Final usable case list contains " + finalCases.size() + " cases.", null, null, provider, model, null);
-    }
-
-    private String firstNonBlank(String... values) {
-        for (String value : values) {
-            String normalized = blankToNull(value);
-            if (normalized != null) {
-                return normalized;
-            }
-        }
-        return null;
-    }
-
-    private String reviewStatusLabel(String status) {
-        if ("APPROVED".equals(status)) {
-            return "通过";
-        }
-        if ("OPTIMIZED".equals(status)) {
-            return "已优化";
-        }
-        if ("SUPPLEMENTED".equals(status)) {
-            return "已补充";
-        }
-        if ("CONFIRM_REQUIRED".equals(status)) {
-            return "建议确认";
-        }
-        if ("NOT_RECOMMENDED".equals(status)) {
-            return "不推荐";
-        }
-        if ("REJECTED".equals(status)) {
-            return "需重生成";
-        }
-        return "建议优化";
-    }
-
-    private String buildGeneratedCaseEventMessage(Integer itemIndex, GeneratedAiCaseItem item) {
-        StringBuilder message = new StringBuilder("第 ")
-                .append((itemIndex == null ? 0 : itemIndex) + 1)
-                .append(" 条");
-        appendCaseTitle(message, item == null ? null : item.title());
-        message.append(" 已加入列表");
-        String angle = blankToNull(item.testAngle());
-        String reason = blankToNull(item.generationReason());
-        String evidence = blankToNull(item.requirementEvidence());
-        if (angle != null) {
-            message.append("｜角度：").append(cleanInternalCaseIndexText(angle));
-        }
-        if (evidence != null) {
-            message.append("｜依据：").append(cleanInternalCaseIndexText(evidence));
-        }
-        if (reason != null) {
-            message.append("｜原因：").append(cleanInternalCaseIndexText(reason));
-        } else if (blankToNull(item.riskNotes()) != null) {
-            message.append("｜关注：").append(cleanInternalCaseIndexText(item.riskNotes()));
-        }
-        return message.toString();
-    }
-
-    private String buildReviewedCaseEventMessage(Integer itemIndex, String itemTitle, String status, String summary, String coverageComment, String evidenceComment) {
-        StringBuilder message = new StringBuilder("第 ")
-                .append((itemIndex == null ? 0 : itemIndex) + 1)
-                .append(" 条");
-        appendCaseTitle(message, itemTitle);
-        message.append(" 评审")
-                .append(reviewStatusLabel(status));
-        String normalizedSummary = blankToNull(summary);
-        if (normalizedSummary != null) {
-            message.append("｜理由：").append(cleanInternalCaseIndexText(normalizedSummary));
-        }
-        String normalizedCoverage = blankToNull(coverageComment);
-        if (normalizedCoverage != null && !normalizedCoverage.equals(normalizedSummary)) {
-            message.append("｜覆盖：").append(cleanInternalCaseIndexText(normalizedCoverage));
-        }
-        String normalizedEvidence = blankToNull(evidenceComment);
-        if (normalizedEvidence != null) {
-            message.append("｜依据评价：").append(cleanInternalCaseIndexText(normalizedEvidence));
-        }
-        return message.toString();
-    }
-
-    private String buildSupplementedCaseEventMessage(Integer itemIndex, GeneratedAiCaseItem item) {
-        StringBuilder message = new StringBuilder("第 ")
-                .append((itemIndex == null ? 0 : itemIndex) + 1)
-                .append(" 条");
-        appendCaseTitle(message, item == null ? null : item.title());
-        message.append(" 由评审补充");
-        String reason = firstNonBlank(item.supplementReason(), item.coverageGap(), item.generationReason());
-        if (reason != null) {
-            message.append("｜原因：").append(cleanInternalCaseIndexText(reason));
-        }
-        return message.toString();
-    }
-
-    private void appendCaseTitle(StringBuilder message, String title) {
-        String normalized = blankToNull(title);
-        if (normalized != null) {
-            message.append("：").append(normalized);
-        } else {
-            message.append("用例");
-        }
-    }
-
-    private String cleanInternalCaseIndexText(String value) {
-        String normalized = blankToNull(value);
-        if (normalized == null) {
-            return "";
-        }
-        Matcher matcher = INTERNAL_CASE_INDEX_PATTERN.matcher(normalized);
-        StringBuffer buffer = new StringBuffer();
-        while (matcher.find()) {
-            int displayIndex;
-            try {
-                displayIndex = Integer.parseInt(matcher.group(1)) + 1;
-            } catch (NumberFormatException ignored) {
-                displayIndex = 1;
-            }
-            matcher.appendReplacement(buffer, Matcher.quoteReplacement("第 " + displayIndex + " 条"));
-        }
-        matcher.appendTail(buffer);
-        return buffer.toString();
     }
 
     private void markFailed(String taskId, Exception exception) {

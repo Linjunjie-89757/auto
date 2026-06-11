@@ -38,13 +38,17 @@ class ExecutionServiceTests {
             workspaceService,
             reportAttachmentStorageService
     );
-    private final ExecutionService executionService = new ExecutionService(
-            taskDomainService,
+    private final ExecutionReportAttachmentSupport reportAttachmentSupport = new ExecutionReportAttachmentSupport(
             reportDomainService,
             reportMapper,
             reportAttachmentMapper,
             workspaceService,
             reportAttachmentStorageService
+    );
+    private final ExecutionService executionService = new ExecutionService(
+            taskDomainService,
+            reportDomainService,
+            reportAttachmentSupport
     );
 
     @Test

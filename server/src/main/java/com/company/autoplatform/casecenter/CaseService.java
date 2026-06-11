@@ -33,6 +33,7 @@ public class CaseService {
     private static final int DEFAULT_PAGE_SIZE = 10;
     private static final Pattern CASE_NO_PATTERN = Pattern.compile("^CASE-(\\d+)$", Pattern.CASE_INSENSITIVE);
 
+    private final CaseDomainService caseDomainService;
     private final CaseMapper caseMapper;
     private final CaseDirectoryMapper caseDirectoryMapper;
     private final CaseExecutionAttachmentMapper caseExecutionAttachmentMapper;
@@ -41,6 +42,7 @@ public class CaseService {
     private final WorkspaceService workspaceService;
 
     public CaseService(
+            CaseDomainService caseDomainService,
             CaseMapper caseMapper,
             CaseDirectoryMapper caseDirectoryMapper,
             CaseExecutionAttachmentMapper caseExecutionAttachmentMapper,
@@ -48,6 +50,7 @@ public class CaseService {
             UserService userService,
             WorkspaceService workspaceService
     ) {
+        this.caseDomainService = caseDomainService;
         this.caseMapper = caseMapper;
         this.caseDirectoryMapper = caseDirectoryMapper;
         this.caseExecutionAttachmentMapper = caseExecutionAttachmentMapper;
@@ -66,143 +69,27 @@ public class CaseService {
             String reviewStatus,
             String executionStatus
     ) {
-        String normalized = WorkspaceScope.normalize(workspaceCode);
-        int safePageNo = pageNo == null || pageNo < 1 ? DEFAULT_PAGE_NO : pageNo;
-        int safePageSize = pageSize == null || pageSize < 1 ? DEFAULT_PAGE_SIZE : pageSize;
-
-        LambdaQueryWrapper<CaseEntity> query = new LambdaQueryWrapper<>();
-        if (!WorkspaceScope.isAll(normalized)) {
-            WorkspaceEntity workspace = workspaceService.requireReadableWorkspace(normalized);
-            query.eq(CaseEntity::getWorkspaceId, workspace.getId());
-        } else if (!workspaceService.isPlatformAdmin()) {
-            List<Long> workspaceIds = workspaceService.listReadableWorkspaceIds();
-            if (workspaceIds.isEmpty()) {
-                return PageResponse.of(List.of(), 0, safePageNo, safePageSize);
-            }
-            query.in(CaseEntity::getWorkspaceId, workspaceIds);
-        }
-
-        if (directoryId != null) {
-            CaseDirectoryEntity directory = requireDirectory(directoryId);
-            validateDirectoryReadable(directory, workspaceCode);
-            Set<Long> directoryIds = collectDescendantIds(directory.getWorkspaceId(), directory.getId());
-            query.in(CaseEntity::getCaseDirectoryId, directoryIds);
-        }
-
-        String normalizedKeyword = blankToNull(keyword);
-        if (normalizedKeyword != null) {
-            query.and(wrapper -> wrapper
-                    .like(CaseEntity::getCaseNo, normalizedKeyword)
-                    .or()
-                    .like(CaseEntity::getTitle, normalizedKeyword));
-        }
-
-        String normalizedPriority = blankToNull(priority);
-        if (normalizedPriority != null) {
-            query.eq(CaseEntity::getPriority, normalizedPriority.toUpperCase());
-        }
-
-        String normalizedReviewStatus = blankToNull(reviewStatus);
-        if (normalizedReviewStatus != null) {
-            query.eq(CaseEntity::getReviewStatus, normalizeReviewStatus(normalizedReviewStatus));
-        }
-
-        String normalizedExecutionStatus = blankToNull(executionStatus);
-        if (normalizedExecutionStatus != null) {
-            query.eq(CaseEntity::getExecutionStatus, normalizeExecutionStatus(normalizedExecutionStatus));
-        }
-
-        long total = caseMapper.selectCount(query);
-        if (total == 0) {
-            return PageResponse.of(List.of(), 0, safePageNo, safePageSize);
-        }
-
-        int offset = (safePageNo - 1) * safePageSize;
-        List<CaseEntity> entities = caseMapper.selectList(query
-                .orderByDesc(CaseEntity::getUpdatedAt)
-                .orderByDesc(CaseEntity::getId)
-                .last("limit " + safePageSize + " offset " + offset));
-
-        Map<Long, UserEntity> userMap = collectUserMap(entities);
-        Map<Long, WorkspaceEntity> workspaceMap = collectWorkspaceMap(entities);
-        Map<Long, CaseDirectoryEntity> directoryMap = collectDirectoryMap(entities);
-
-        List<CaseSummaryResponse> items = entities.stream()
-                .map(item -> toCaseSummary(item, userMap, workspaceMap, directoryMap))
-                .toList();
-        return PageResponse.of(items, total, safePageNo, safePageSize);
+        return caseDomainService.listCases(
+                workspaceCode,
+                pageNo,
+                pageSize,
+                directoryId,
+                keyword,
+                priority,
+                reviewStatus,
+                executionStatus);
     }
 
     public CaseDetailResponse getCase(Long id, String workspaceCode) {
-        CaseEntity entity = requireCase(id);
-        validateReadable(entity, workspaceCode);
-        return toCaseDetail(entity);
+        return caseDomainService.getCase(id, workspaceCode);
     }
 
     public CaseSummaryResponse createCase(String headerWorkspaceCode, CreateCaseRequest request) {
-        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
-                workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode()));
-        if (request.ownerId() != null) {
-            userService.requireUser(request.ownerId());
-        }
-        CaseDirectoryEntity directory = requireDirectoryForWorkspace(workspace, request.directoryId());
-
-        CaseEntity entity = new CaseEntity();
-        entity.setWorkspaceId(workspace.getId());
-        entity.setCaseNo(generateCaseNo());
-        entity.setTitle(request.title());
-        entity.setCaseType(request.caseType());
-        entity.setPriority(request.priority());
-        entity.setSourceType(request.sourceType());
-        entity.setCaseStatus(request.caseStatus());
-        entity.setOwnerId(request.ownerId());
-        entity.setExecutionStatus("NOT_RUN");
-        entity.setExecutorId(null);
-        entity.setExecutionComment(null);
-        entity.setExecutedAt(null);
-        entity.setCaseDirectoryId(directory == null ? null : directory.getId());
-        entity.setReviewStatus("PENDING");
-        entity.setReviewComment(null);
-        entity.setReviewedBy(null);
-        entity.setReviewedAt(null);
-        entity.setPrecondition(request.precondition());
-        entity.setSteps(request.steps());
-        entity.setExpectedResult(request.expectedResult());
-        entity.setCreatedAt(LocalDateTime.now());
-        entity.setUpdatedAt(LocalDateTime.now());
-        entity.setCreatedBy(CurrentUserContext.get());
-        entity.setUpdatedBy(CurrentUserContext.get());
-        caseMapper.insert(entity);
-        return getCaseSummary(entity.getId());
+        return caseDomainService.createCase(headerWorkspaceCode, request);
     }
 
     public CaseSummaryResponse updateCase(Long id, String headerWorkspaceCode, CreateCaseRequest request) {
-        CaseEntity entity = requireCase(id);
-        validateReadable(entity, headerWorkspaceCode);
-        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
-                workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode()));
-        if (!entity.getWorkspaceId().equals(workspace.getId())) {
-            throw new BadRequestException("不允许修改用例归属空间");
-        }
-        if (request.ownerId() != null) {
-            userService.requireUser(request.ownerId());
-        }
-        CaseDirectoryEntity directory = requireDirectoryForWorkspace(workspace, request.directoryId());
-
-        entity.setTitle(request.title());
-        entity.setCaseType(request.caseType());
-        entity.setPriority(request.priority());
-        entity.setSourceType(request.sourceType());
-        entity.setCaseStatus(request.caseStatus());
-        entity.setOwnerId(request.ownerId());
-        entity.setCaseDirectoryId(directory == null ? null : directory.getId());
-        entity.setPrecondition(request.precondition());
-        entity.setSteps(request.steps());
-        entity.setExpectedResult(request.expectedResult());
-        entity.setUpdatedAt(LocalDateTime.now());
-        entity.setUpdatedBy(CurrentUserContext.get());
-        caseMapper.updateById(entity);
-        return getCaseSummary(id);
+        return caseDomainService.updateCase(id, headerWorkspaceCode, request);
     }
 
     public CaseDetailResponse reviewCase(Long id, String workspaceCode, ReviewCaseRequest request) {
@@ -358,10 +245,7 @@ public class CaseService {
     }
 
     public void deleteCase(Long id, String workspaceCode) {
-        CaseEntity entity = requireCase(id);
-        validateReadable(entity, workspaceCode);
-        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
-        caseMapper.deleteById(id);
+        caseDomainService.deleteCase(id, workspaceCode);
     }
 
     public List<CaseDirectoryWorkspaceResponse> listDirectories(String workspaceCode) {
@@ -462,11 +346,7 @@ public class CaseService {
     }
 
     public CaseEntity requireCase(Long id) {
-        CaseEntity entity = caseMapper.selectById(id);
-        if (entity == null) {
-            throw new NotFoundException("关联用例不存在");
-        }
-        return entity;
+        return caseDomainService.requireCase(id);
     }
 
     private CaseExecutionAttachmentEntity requireExecutionAttachment(Long attachmentId) {

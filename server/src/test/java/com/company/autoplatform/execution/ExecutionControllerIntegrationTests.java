@@ -9,7 +9,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
+
+import java.nio.charset.StandardCharsets;
 
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.everyItem;
@@ -17,9 +20,12 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -200,6 +206,65 @@ class ExecutionControllerIntegrationTests extends IntegrationTestSupport {
                         .content(createBody))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success").value(false));
+    }
+
+    @Test
+    void reportAttachmentUploadDownloadAndDeleteKeepsMainFlow() throws Exception {
+        String unique = uniquePrefix("attachment");
+        TaskSummaryResponse task = createTask(RISK_OPS, unique + "-task", "API", "SUCCESS");
+        Integer reportId = createReport("""
+                {
+                  "workspaceCode": "%s",
+                  "taskId": %d,
+                  "reportName": "%s-report",
+                  "result": "SUCCESS",
+                  "logSource": "API",
+                  "failureSummary": null
+                }
+                """.formatted(RISK_OPS, task.id(), unique), RISK_OPS);
+
+        MockMultipartFile file = new MockMultipartFile(
+                "files",
+                "evidence.txt",
+                "text/plain",
+                "attachment evidence".getBytes(StandardCharsets.UTF_8)
+        );
+
+        String uploadResponse = mockMvc.perform(multipart("/api/reports/{id}/attachments", reportId)
+                        .file(file)
+                        .header(WorkspaceScope.HEADER, RISK_OPS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data[0].fileName").value("evidence.txt"))
+                .andExpect(jsonPath("$.data[0].contentType").value("text/plain"))
+                .andExpect(jsonPath("$.data[0].fileSize").value(19))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        Integer attachmentId = objectMapper.readTree(uploadResponse).path("data").get(0).path("id").asInt();
+
+        mockMvc.perform(get("/api/reports/{id}", reportId)
+                        .header(WorkspaceScope.HEADER, RISK_OPS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.attachments.length()").value(1))
+                .andExpect(jsonPath("$.data.attachments[0].id").value(attachmentId))
+                .andExpect(jsonPath("$.data.attachments[0].downloadUrl")
+                        .value("/api/reports/" + reportId + "/attachments/" + attachmentId + "/download"));
+
+        mockMvc.perform(get("/api/reports/{id}/attachments/{attachmentId}/download", reportId, attachmentId)
+                        .header(WorkspaceScope.HEADER, RISK_OPS))
+                .andExpect(status().isOk())
+                .andExpect(content().string("attachment evidence"));
+
+        mockMvc.perform(delete("/api/reports/{id}/attachments/{attachmentId}", reportId, attachmentId)
+                        .header(WorkspaceScope.HEADER, RISK_OPS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        mockMvc.perform(get("/api/reports/{id}", reportId)
+                        .header(WorkspaceScope.HEADER, RISK_OPS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.attachments.length()").value(0));
     }
 
     private TaskSummaryResponse createTask(String workspaceCode, String taskName, String engineType, String status) {

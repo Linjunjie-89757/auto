@@ -89,6 +89,7 @@ import type {
   ApiVariableItem,
   ApiVariableSetItem,
   CreateBugPayload,
+  PageResponse,
   ReportDetail,
   ReportItem,
   TaskItem,
@@ -912,15 +913,25 @@ const caseListSettings = useTableSettings({
   pageSizeOptions: [...CASE_LIST_PAGE_SIZE_OPTIONS],
 })
 const visibleCaseListColumnKeys = computed(() => new Set(caseListSettings.visibleColumns.value.map(item => item.key)))
+const definitionListPage = reactive({
+  total: 0,
+  pageNo: 1,
+  pageSize: 1000,
+  totalPages: 1,
+})
 const caseListCurrentPage = ref(1)
+const caseListPage = reactive({
+  total: 0,
+  pageNo: 1,
+  pageSize: caseListSettings.pageSize.value,
+  totalPages: 1,
+})
+const currentDefinitionCasePageItems = ref<ApiDefinitionCaseItem[]>([])
 const caseListTableRef = ref<{ doLayout?: () => void } | null>(null)
 const caseDrawerCreateSource = ref<'draft' | 'savedDefinition'>('draft')
 const caseDrawerMode = ref<CaseDrawerMode>('create')
-const pagedDefinitionCases = computed(() => {
-  const start = (caseListCurrentPage.value - 1) * caseListSettings.pageSize.value
-  return currentDefinitionCases.value.slice(start, start + caseListSettings.pageSize.value)
-})
-const caseListTotalPages = computed(() => Math.max(1, Math.ceil(currentDefinitionCases.value.length / caseListSettings.pageSize.value)))
+const pagedDefinitionCases = computed(() => currentDefinitionCasePageItems.value)
+const caseListTotalPages = computed(() => Math.max(1, caseListPage.totalPages || Math.ceil(caseListPage.total / caseListSettings.pageSize.value)))
 const caseDrawerTitle = computed(() => {
   if (aiCaseDrawerResultId.value) {
     return 'AI 生成接口用例详情'
@@ -2532,6 +2543,14 @@ watch(() => workspaceCode.value, () => {
   void bootstrap()
 })
 
+watch(
+  () => definitionFilters.keyword,
+  () => {
+    definitionListPage.pageNo = 1
+    void refreshDefinitionList(1)
+  },
+)
+
 watch(definitionForm, () => {
   syncActiveRequestEditorTab()
 }, { deep: true })
@@ -2584,7 +2603,7 @@ watch(filteredScenarios, (items) => {
 })
 
 watch(currentDefinitionCases, () => {
-  const maxPage = Math.max(1, Math.ceil(currentDefinitionCases.value.length / caseListSettings.pageSize.value))
+  const maxPage = Math.max(1, caseListPage.totalPages || Math.ceil(caseListPage.total / caseListSettings.pageSize.value))
   if (caseListCurrentPage.value > maxPage) {
     caseListCurrentPage.value = maxPage
   }
@@ -2618,7 +2637,7 @@ watch(
 )
 
 watch(() => caseListSettings.pageSize.value, () => {
-  caseListCurrentPage.value = 1
+  void refreshCurrentCaseList(1, caseListSettings.pageSize.value)
   scheduleCaseListTableLayout()
 })
 
@@ -2626,10 +2645,12 @@ watch(
   () => [
     showCaseListContent.value,
     activeRequestEditorKey.value,
-    caseListCurrentPage.value,
     caseListSettings.visibleColumns.value.map(item => item.key).join('|'),
   ],
   () => {
+    if (showCaseListContent.value) {
+      void refreshCurrentCaseList(1)
+    }
     scheduleCaseListTableLayout()
   },
 )
@@ -5611,6 +5632,66 @@ function ensureScopedTargetWorkspace(targetWorkspaceCode?: string) {
   }
 }
 
+function applyDefinitionPage(page: PageResponse<ApiDefinitionItem>) {
+  definitions.value = page.items
+  definitionListPage.total = page.total
+  definitionListPage.pageNo = page.pageNo
+  definitionListPage.pageSize = page.pageSize
+  definitionListPage.totalPages = page.totalPages
+}
+
+function applyCasePage(page: PageResponse<ApiDefinitionCaseItem>) {
+  apiCases.value = page.items
+}
+
+function applyCurrentCaseListPage(page: PageResponse<ApiDefinitionCaseItem>) {
+  currentDefinitionCasePageItems.value = page.items
+  caseListPage.total = page.total
+  caseListPage.pageNo = page.pageNo
+  caseListPage.pageSize = page.pageSize
+  caseListPage.totalPages = page.totalPages
+  caseListCurrentPage.value = page.pageNo || caseListCurrentPage.value
+}
+
+function currentDefinitionListParams(pageNo = definitionListPage.pageNo, pageSize = definitionListPage.pageSize) {
+  const selectedNode = selectedDefinitionTreeNode.value
+  return {
+    keyword: definitionFilters.keyword.trim() || undefined,
+    moduleId: selectedNode?.type === 'module' && selectedNode.moduleId ? selectedNode.moduleId : undefined,
+    pageNo,
+    pageSize,
+  }
+}
+
+function currentCaseListParams(pageNo = caseListCurrentPage.value, pageSize = caseListSettings.pageSize.value) {
+  const definitionId = activeRequestEditorTab.value?.definitionId
+  return {
+    definitionId: definitionId || undefined,
+    pageNo,
+    pageSize,
+  }
+}
+
+async function refreshDefinitionList(pageNo = definitionListPage.pageNo, pageSize = definitionListPage.pageSize) {
+  const page = await platformApi.getApiDefinitions(workspaceCode.value, currentDefinitionListParams(pageNo, pageSize))
+  applyDefinitionPage(page)
+}
+
+async function refreshCurrentCaseList(pageNo = caseListCurrentPage.value, pageSize = caseListSettings.pageSize.value) {
+  const definitionId = activeRequestEditorTab.value?.definitionId
+  if (!definitionId) {
+    currentDefinitionCasePageItems.value = []
+    caseListPage.total = 0
+    caseListPage.pageNo = 1
+    caseListPage.pageSize = pageSize
+    caseListPage.totalPages = 1
+    caseListCurrentPage.value = 1
+    return
+  }
+  const page = await platformApi.getApiDefinitionCases(workspaceCode.value, currentCaseListParams(pageNo, pageSize))
+  applyCurrentCaseListPage(page)
+}
+
 async function bootstrap() {
   loading.value = true
   try {
@@ -5641,9 +5722,9 @@ async function bootstrap() {
       platformApi.getUsers(),
       platformApi.getSwitchableWorkspaces(),
     ])
-    definitions.value = definitionPage.items
+    applyDefinitionPage(definitionPage)
     definitionModules.value = definitionModuleList
-    apiCases.value = casePage.items
+    applyCasePage(casePage)
     scenarios.value = scenarioPage.items
     scenarioModules.value = scenarioModuleList
     environments.value = envPage.items
@@ -5672,6 +5753,9 @@ async function bootstrap() {
 
 async function refreshData() {
   await bootstrap()
+  if (showCaseListContent.value) {
+    await refreshCurrentCaseList(caseListCurrentPage.value)
+  }
 }
 
 async function selectDefinition(id: number) {
@@ -5962,6 +6046,10 @@ function confirmBatchAdd() {
 
 function handleDefinitionTreeSelect(data: DefinitionDirectoryTreeNode | null) {
   selectedDefinitionTreeKey.value = data?.key ?? DEFINITION_TREE_ROOT_KEY
+  if (!data || data.type === 'root' || data.type === 'workspace' || data.type === 'module' || data.type === 'unassigned') {
+    definitionListPage.pageNo = 1
+    void refreshDefinitionList(1)
+  }
 }
 
 async function handleDefinitionTreeClick(data: DefinitionDirectoryTreeNode) {
@@ -7130,7 +7218,10 @@ function caseStatusLabel(item: ApiDefinitionCaseItem) {
 
 function updateCaseListPageSize(size: number) {
   caseListSettings.updatePageSize(size)
-  caseListCurrentPage.value = 1
+}
+
+function updateCaseListCurrentPage(pageNo: number) {
+  void refreshCurrentCaseList(pageNo)
 }
 
 function formatTimeLabel(value?: string | null) {
@@ -7866,7 +7957,7 @@ function formatTimeLabel(value?: string | null) {
                       <span>AI生成用例</span>
                     </button>
                   </div>
-                  <div v-if="!currentDefinitionCases.length" class="empty-hint">当前接口下还没有用例</div>
+                  <div v-if="!caseListPage.total" class="empty-hint">当前接口下还没有用例</div>
                   <div v-else class="case-list-table-wrap">
                   <el-table ref="caseListTableRef" :data="pagedDefinitionCases" size="small" class="case-list-table">
                     <el-table-column v-if="visibleCaseListColumnKeys.has('id')" prop="id" label="ID" width="92" />
@@ -7931,7 +8022,8 @@ function formatTimeLabel(value?: string | null) {
                       :page-sizes="[...CASE_LIST_PAGE_SIZE_OPTIONS]"
                       size="small"
                       layout="sizes, prev, pager, next"
-                      :total="currentDefinitionCases.length"
+                      :total="caseListPage.total"
+                      @current-change="updateCaseListCurrentPage"
                       @size-change="updateCaseListPageSize"
                     />
                   </div>

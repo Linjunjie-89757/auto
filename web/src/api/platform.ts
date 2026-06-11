@@ -779,8 +779,22 @@ export const platformApi = {
       workspaceCode,
     })
   },
-  getApiDefinitions(workspaceCode: string) {
-    return request<PageResponse<ApiDefinitionItem>>('/automation/api/definitions', { workspaceCode })
+  getApiDefinitions(workspaceCode: string, params?: { keyword?: string, moduleId?: number | null, pageNo?: number, pageSize?: number }) {
+    const query = new URLSearchParams()
+    if (params?.keyword) {
+      query.set('keyword', params.keyword)
+    }
+    if (params?.moduleId != null) {
+      query.set('moduleId', String(params.moduleId))
+    }
+    if (params?.pageNo) {
+      query.set('pageNo', String(params.pageNo))
+    }
+    if (params?.pageSize) {
+      query.set('pageSize', String(params.pageSize))
+    }
+    const suffix = query.toString() ? `?${query.toString()}` : ''
+    return request<PageResponse<ApiDefinitionItem>>(`/automation/api/definitions${suffix}`, { workspaceCode })
   },
   getApiDefinitionDetail(workspaceCode: string, id: number) {
     return request<ApiDefinitionDetail>(`/automation/api/definitions/${id}`, { workspaceCode })
@@ -842,13 +856,19 @@ export const platformApi = {
       body: JSON.stringify(payload),
     })
   },
-  getApiDefinitionCases(workspaceCode: string, params?: { definitionId?: number, keyword?: string }) {
+  getApiDefinitionCases(workspaceCode: string, params?: { definitionId?: number, keyword?: string, pageNo?: number, pageSize?: number }) {
     const query = new URLSearchParams()
     if (params?.definitionId != null) {
       query.set('definitionId', String(params.definitionId))
     }
     if (params?.keyword) {
       query.set('keyword', params.keyword)
+    }
+    if (params?.pageNo) {
+      query.set('pageNo', String(params.pageNo))
+    }
+    if (params?.pageSize) {
+      query.set('pageSize', String(params.pageSize))
     }
     const suffix = query.toString() ? `?${query.toString()}` : ''
     return request<PageResponse<ApiDefinitionCaseItem>>(`/automation/api/cases${suffix}`, { workspaceCode })

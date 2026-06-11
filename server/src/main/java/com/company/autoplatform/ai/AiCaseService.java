@@ -401,12 +401,6 @@ public class AiCaseService {
         }
         return value.trim();
     }
-
-    private String nullSafe(String value) {
-        return blankToNull(value) == null ? "-" : value.trim();
-    }
-
-
     public record AiStreamModelInfo(
             String provider,
             String model

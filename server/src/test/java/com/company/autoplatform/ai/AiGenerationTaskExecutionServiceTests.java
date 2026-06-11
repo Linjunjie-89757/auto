@@ -8,6 +8,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -181,6 +182,66 @@ class AiGenerationTaskExecutionServiceTests extends IntegrationTestSupport {
         assertThat(detail.reviewRawOutput()).isNull();
         assertThat(detail.events()).extracting(AiGenerationTaskEventResponse::eventType)
                 .contains("GENERATION_COMPLETED", "REVIEW_STARTED", "TASK_FAILED");
+    }
+
+    @Test
+    void executeTaskKeepsCanceledWhenCanceledBeforeStart() {
+        reset(aiProviderClient);
+        String unique = uniquePrefix("cancel-before-start");
+        AiGenerationTaskResponse created = createTask(unique, "COMPLETE");
+
+        aiGenerationTaskService.cancelTask(created.taskId(), WORKSPACE_CODE);
+        aiGenerationTaskService.executeTask(created.taskId(), WORKSPACE_CODE);
+
+        AiGenerationTaskResponse detail = aiGenerationTaskService.getTask(created.taskId(), WORKSPACE_CODE);
+        assertThat(detail.status()).isEqualTo("CANCELED");
+        assertThat(detail.cancelRequested()).isTrue();
+        assertThat(detail.finishedAt()).isNotBlank();
+        assertThat(detail.generatedCount()).isZero();
+        assertThat(detail.generatedCases()).isEmpty();
+        assertThat(detail.events()).extracting(AiGenerationTaskEventResponse::eventType)
+                .contains("TASK_CANCELED")
+                .doesNotContain("TASK_STARTED", "TASK_FAILED", "GENERATION_COMPLETED", "REVIEW_STARTED");
+    }
+
+    @Test
+    void executeCompleteTaskKeepsCanceledWhenCanceledAfterGenerationReturns() {
+        reset(aiProviderClient);
+        String unique = uniquePrefix("complete-cancel-after-generation");
+        String model = unique + "-model";
+        AiProviderConnectionItem provider = createProvider(unique, model);
+        upsertConfig("CASE_GENERATOR", provider.id(), model, unique + " generator prompt");
+        upsertConfig("CASE_REVIEWER", provider.id(), model, unique + " reviewer prompt");
+        AtomicReference<String> taskId = new AtomicReference<>();
+        GeneratedAiCaseItem generatedCase = generatedCase(unique + " generated before cancel");
+        when(aiProviderClient.generate(any(), any(), any(), any())).thenAnswer(invocation -> {
+            aiGenerationTaskService.cancelTask(taskId.get(), WORKSPACE_CODE);
+            return new AiGeneratedCasesResult(
+                    List.of(generatedCase),
+                    "coverage summary",
+                    List.of("remaining gap"),
+                    List.of("generation warning"),
+                    List.of(),
+                    "{\"cases\":[{\"title\":\"" + unique + " generated before cancel\"}]}"
+            );
+        });
+        AiGenerationTaskResponse created = createTask(unique, "COMPLETE");
+        taskId.set(created.taskId());
+
+        aiGenerationTaskService.executeTask(created.taskId(), WORKSPACE_CODE);
+
+        AiGenerationTaskResponse detail = aiGenerationTaskService.getTask(created.taskId(), WORKSPACE_CODE);
+        assertThat(detail.status()).isEqualTo("CANCELED");
+        assertThat(detail.cancelRequested()).isTrue();
+        assertThat(detail.finishedAt()).isNotBlank();
+        assertThat(detail.generatedCount()).isZero();
+        assertThat(detail.generatedCases()).isEmpty();
+        assertThat(detail.generationRawOutput()).isNull();
+        assertThat(detail.reviewResult()).isNull();
+        assertThat(detail.reviewRawOutput()).isNull();
+        assertThat(detail.events()).extracting(AiGenerationTaskEventResponse::eventType)
+                .contains("TASK_STARTED", "TASK_CANCELED")
+                .doesNotContain("TASK_FAILED", "GENERATION_COMPLETED", "REVIEW_STARTED");
     }
 
     @Test

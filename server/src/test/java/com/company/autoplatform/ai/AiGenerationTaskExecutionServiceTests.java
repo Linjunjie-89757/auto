@@ -13,6 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.when;
 
@@ -117,6 +118,72 @@ class AiGenerationTaskExecutionServiceTests extends IntegrationTestSupport {
     }
 
     @Test
+    void executeCompleteTaskMarksFailedWhenGenerationFails() {
+        reset(aiProviderClient);
+        String unique = uniquePrefix("complete-generation-fail");
+        String model = unique + "-model";
+        AiProviderConnectionItem provider = createProvider(unique, model);
+        upsertConfig("CASE_GENERATOR", provider.id(), model, unique + " generator prompt");
+        upsertConfig("CASE_REVIEWER", provider.id(), model, unique + " reviewer prompt");
+        when(aiProviderClient.generate(any(), any(), any(), any()))
+                .thenThrow(new IllegalStateException("mock generation failed"));
+        AiGenerationTaskResponse created = createTask(unique, "COMPLETE");
+
+        aiGenerationTaskService.executeTask(created.taskId(), WORKSPACE_CODE);
+
+        AiGenerationTaskResponse detail = aiGenerationTaskService.getTask(created.taskId(), WORKSPACE_CODE);
+        assertThat(detail.status()).isEqualTo("FAILED");
+        assertThat(detail.finishedAt()).isNotBlank();
+        assertThat(detail.errorMessage()).isEqualTo("mock generation failed");
+        assertThat(detail.generatedCount()).isZero();
+        assertThat(detail.generatedCases()).isEmpty();
+        assertThat(detail.generationRawOutput()).isNull();
+        assertThat(detail.reviewResult()).isNull();
+        assertThat(detail.reviewRawOutput()).isNull();
+        assertThat(detail.events()).extracting(AiGenerationTaskEventResponse::eventType)
+                .contains("TASK_STARTED", "TASK_FAILED")
+                .doesNotContain("GENERATION_COMPLETED", "REVIEW_STARTED");
+    }
+
+    @Test
+    void executeCompleteTaskKeepsGenerationResultWhenReviewFails() {
+        reset(aiProviderClient);
+        String unique = uniquePrefix("complete-review-fail");
+        String model = unique + "-model";
+        AiProviderConnectionItem provider = createProvider(unique, model);
+        upsertConfig("CASE_GENERATOR", provider.id(), model, unique + " generator prompt");
+        upsertConfig("CASE_REVIEWER", provider.id(), model, unique + " reviewer prompt");
+        GeneratedAiCaseItem generatedCase = generatedCase(unique + " generated before review failure");
+        when(aiProviderClient.generate(any(), any(), any(), any())).thenReturn(new AiGeneratedCasesResult(
+                List.of(generatedCase),
+                "coverage summary",
+                List.of("remaining gap"),
+                List.of("generation warning"),
+                List.of(),
+                "{\"cases\":[{\"title\":\"" + unique + " generated before review failure\"}]}"
+        ));
+        doThrow(new IllegalStateException("mock review failed"))
+                .when(aiProviderClient)
+                .review(any(), any(), any());
+        AiGenerationTaskResponse created = createTask(unique, "COMPLETE");
+
+        aiGenerationTaskService.executeTask(created.taskId(), WORKSPACE_CODE);
+
+        AiGenerationTaskResponse detail = aiGenerationTaskService.getTask(created.taskId(), WORKSPACE_CODE);
+        assertThat(detail.status()).isEqualTo("FAILED");
+        assertThat(detail.finishedAt()).isNotBlank();
+        assertThat(detail.errorMessage()).isEqualTo("mock review failed");
+        assertThat(detail.generatedCount()).isEqualTo(1);
+        assertThat(detail.generatedCases()).hasSize(1);
+        assertThat(detail.generatedCases().get(0).title()).isEqualTo(unique + " generated before review failure");
+        assertThat(detail.generationRawOutput()).contains(unique + " generated before review failure");
+        assertThat(detail.reviewResult()).isNull();
+        assertThat(detail.reviewRawOutput()).isNull();
+        assertThat(detail.events()).extracting(AiGenerationTaskEventResponse::eventType)
+                .contains("GENERATION_COMPLETED", "REVIEW_STARTED", "TASK_FAILED");
+    }
+
+    @Test
     void executeStreamTaskPersistsGenerationReviewAndEvents() {
         reset(aiProviderClient);
         String unique = uniquePrefix("stream");
@@ -198,6 +265,32 @@ class AiGenerationTaskExecutionServiceTests extends IntegrationTestSupport {
                         "REVIEW_COMPLETED",
                         "TASK_COMPLETED"
                 );
+    }
+
+    private AiProviderConnectionItem createProvider(String unique, String model) {
+        return aiCaseService.createProvider(WORKSPACE_CODE, new SaveAiProviderConnectionRequest(
+                WORKSPACE_CODE,
+                unique + "-provider",
+                AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_CHAT,
+                "https://ai.example.test/v1",
+                30,
+                model,
+                unique + "-secret",
+                1
+        ));
+    }
+
+    private AiGenerationTaskResponse createTask(String unique, String outputMode) {
+        return aiGenerationTaskService.createTask(WORKSPACE_CODE, new CreateAiGenerationTaskRequest(
+                WORKSPACE_CODE,
+                unique + " requirement",
+                "User can login and view dashboard.",
+                outputMode,
+                null,
+                unique + " directory",
+                List.of(),
+                0
+        ));
     }
 
     private void upsertConfig(String roleType, Long providerId, String model, String promptTemplate) {

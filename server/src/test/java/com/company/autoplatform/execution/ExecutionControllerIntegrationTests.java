@@ -1,5 +1,6 @@
 package com.company.autoplatform.execution;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.company.autoplatform.IntegrationTestSupport;
 import com.company.autoplatform.auth.CurrentUserPrincipal;
 import com.company.autoplatform.auth.PlatformRole;
@@ -17,6 +18,8 @@ import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -32,6 +35,9 @@ class ExecutionControllerIntegrationTests extends IntegrationTestSupport {
 
     @Autowired
     private ExecutionService executionService;
+
+    @Autowired
+    private ObjectMapper objectMapper;
 
     @Test
     void listTasksWithoutPaginationReturnsAllMatchedTasks() throws Exception {
@@ -116,6 +122,86 @@ class ExecutionControllerIntegrationTests extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.data.items[*].workspaceCode", everyItem(startsWith(RETAIL_ONBOARDING))));
     }
 
+    @Test
+    void reportCrudKeepsResponseShapeAndContentUpdateBehavior() throws Exception {
+        String unique = uniquePrefix("report-crud");
+        TaskSummaryResponse task = createTask(RISK_OPS, unique + "-task", "API", "SUCCESS");
+
+        String createBody = """
+                {
+                  "workspaceCode": "%s",
+                  "taskId": %d,
+                  "reportName": "%s-report",
+                  "result": "SUCCESS",
+                  "logSource": "api",
+                  "failureSummary": ""
+                }
+                """.formatted(RISK_OPS, task.id(), unique);
+
+        Integer reportId = createReport(createBody, RISK_OPS);
+
+        mockMvc.perform(get("/api/reports/{id}", reportId)
+                        .header(WorkspaceScope.HEADER, RISK_OPS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value(reportId))
+                .andExpect(jsonPath("$.data.taskId").value(task.id().intValue()))
+                .andExpect(jsonPath("$.data.taskName").value(unique + "-task"))
+                .andExpect(jsonPath("$.data.reportName").value(unique + "-report"))
+                .andExpect(jsonPath("$.data.result").value("SUCCESS"))
+                .andExpect(jsonPath("$.data.logSource").value("API"))
+                .andExpect(jsonPath("$.data.workspaceCode").value(RISK_OPS))
+                .andExpect(jsonPath("$.data.attachments.length()").value(0));
+
+        mockMvc.perform(get("/api/reports")
+                        .header(WorkspaceScope.HEADER, RISK_OPS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.items[*].id").value(hasItem(reportId)));
+
+        String contentBody = """
+                {
+                  "failureSummary": "failed reason",
+                  "logText": "line 1\\nline 2",
+                  "logSource": "manual"
+                }
+                """;
+
+        mockMvc.perform(put("/api/reports/{id}/content", reportId)
+                        .header(WorkspaceScope.HEADER, RISK_OPS)
+                        .contentType("application/json")
+                        .content(contentBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value(reportId))
+                .andExpect(jsonPath("$.data.failureSummary").value("failed reason"))
+                .andExpect(jsonPath("$.data.logText").value("line 1\nline 2"))
+                .andExpect(jsonPath("$.data.logSource").value("MANUAL"));
+    }
+
+    @Test
+    void createReportRejectsTaskFromDifferentWorkspace() throws Exception {
+        String unique = uniquePrefix("report-scope");
+        TaskSummaryResponse task = createTask(PAYMENTS_CORE, unique + "-task", "API", "SUCCESS");
+        String createBody = """
+                {
+                  "workspaceCode": "%s",
+                  "taskId": %d,
+                  "reportName": "%s-report",
+                  "result": "SUCCESS",
+                  "logSource": "API",
+                  "failureSummary": null
+                }
+                """.formatted(RISK_OPS, task.id(), unique);
+
+        mockMvc.perform(post("/api/reports")
+                        .header(WorkspaceScope.HEADER, RISK_OPS)
+                        .contentType("application/json")
+                        .content(createBody))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false));
+    }
+
     private TaskSummaryResponse createTask(String workspaceCode, String taskName, String engineType, String status) {
         return executionService.createTask(workspaceCode, new CreateTaskRequest(
                 workspaceCode,
@@ -124,6 +210,20 @@ class ExecutionControllerIntegrationTests extends IntegrationTestSupport {
                 status,
                 "created by integration test"
         ));
+    }
+
+    private Integer createReport(String body, String workspaceCode) throws Exception {
+        String response = mockMvc.perform(post("/api/reports")
+                        .header(WorkspaceScope.HEADER, workspaceCode)
+                        .contentType("application/json")
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").isNumber())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return objectMapper.readTree(response).path("data").path("id").asInt();
     }
 
     private UsernamePasswordAuthenticationToken memberAuthentication(Long userId, String username) {
@@ -141,4 +241,5 @@ class ExecutionControllerIntegrationTests extends IntegrationTestSupport {
     private String uniquePrefix(String label) {
         return "execution-" + label + "-" + System.nanoTime();
     }
+
 }

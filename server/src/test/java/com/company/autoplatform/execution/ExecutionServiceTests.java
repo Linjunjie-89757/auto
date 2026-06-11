@@ -31,8 +31,16 @@ class ExecutionServiceTests {
             reportMapper,
             workspaceService
     );
+    private final ExecutionReportDomainService reportDomainService = new ExecutionReportDomainService(
+            taskDomainService,
+            reportMapper,
+            reportAttachmentMapper,
+            workspaceService,
+            reportAttachmentStorageService
+    );
     private final ExecutionService executionService = new ExecutionService(
             taskDomainService,
+            reportDomainService,
             reportMapper,
             reportAttachmentMapper,
             workspaceService,

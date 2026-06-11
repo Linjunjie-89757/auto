@@ -1,7 +1,6 @@
 package com.company.autoplatform.apiautomation;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.company.autoplatform.auth.CurrentUserContext;
 import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.common.NotFoundException;
 import com.company.autoplatform.execution.ReportEntity;
@@ -21,7 +20,6 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -66,11 +64,9 @@ public class ApiExecutionEngineSupport {
 
     private final ApiDefinitionMapper definitionMapper;
     private final ApiDefinitionCaseMapper caseMapper;
-    private final ApiDefinitionCaseRunHistoryMapper caseRunHistoryMapper;
     private final ApiScenarioMapper scenarioMapper;
     private final ApiDefinitionModuleMapper definitionModuleMapper;
     private final ApiScenarioModuleMapper scenarioModuleMapper;
-    private final ApiRunStepResultMapper runStepResultMapper;
     private final EnvConfigMapper envConfigMapper;
     private final ParamSetMapper paramSetMapper;
     private final TaskMapper taskMapper;
@@ -82,15 +78,14 @@ public class ApiExecutionEngineSupport {
     private final ApiRequestExecutionSupport requestExecutionSupport;
     private final ApiProcessorExecutor processorExecutor;
     private final ApiScenarioExecutionSupport scenarioExecutionSupport;
+    private final ApiRunResultPersistenceSupport runResultPersistenceSupport;
 
     public ApiExecutionEngineSupport(
             ApiDefinitionMapper definitionMapper,
             ApiDefinitionCaseMapper caseMapper,
-            ApiDefinitionCaseRunHistoryMapper caseRunHistoryMapper,
             ApiScenarioMapper scenarioMapper,
             ApiDefinitionModuleMapper definitionModuleMapper,
             ApiScenarioModuleMapper scenarioModuleMapper,
-            ApiRunStepResultMapper runStepResultMapper,
             EnvConfigMapper envConfigMapper,
             ParamSetMapper paramSetMapper,
             TaskMapper taskMapper,
@@ -101,15 +96,14 @@ public class ApiExecutionEngineSupport {
             ApiAssertionSupport assertionSupport,
             ApiRequestExecutionSupport requestExecutionSupport,
             ApiProcessorExecutor processorExecutor,
-            ApiScenarioExecutionSupport scenarioExecutionSupport
+            ApiScenarioExecutionSupport scenarioExecutionSupport,
+            ApiRunResultPersistenceSupport runResultPersistenceSupport
     ) {
         this.definitionMapper = definitionMapper;
         this.caseMapper = caseMapper;
-        this.caseRunHistoryMapper = caseRunHistoryMapper;
         this.scenarioMapper = scenarioMapper;
         this.definitionModuleMapper = definitionModuleMapper;
         this.scenarioModuleMapper = scenarioModuleMapper;
-        this.runStepResultMapper = runStepResultMapper;
         this.envConfigMapper = envConfigMapper;
         this.paramSetMapper = paramSetMapper;
         this.taskMapper = taskMapper;
@@ -121,6 +115,7 @@ public class ApiExecutionEngineSupport {
         this.requestExecutionSupport = requestExecutionSupport;
         this.processorExecutor = processorExecutor;
         this.scenarioExecutionSupport = scenarioExecutionSupport;
+        this.runResultPersistenceSupport = runResultPersistenceSupport;
     }
     ExecutionContext buildExecutionContext(Long workspaceId, Long environmentId, Long variableSetId) {
         ResolvedEnvironment environment = resolveEnvironment(workspaceId, environmentId);
@@ -459,26 +454,7 @@ public class ApiExecutionEngineSupport {
     }
 
     void persistStep(ReportEntity report, Long workspaceId, RunStepComputation computation) {
-        ApiRunStepResultResponse response = computation.response();
-        ApiRunStepResultEntity entity = new ApiRunStepResultEntity();
-        entity.setWorkspaceId(workspaceId);
-        entity.setReportId(report.getId());
-        entity.setStepOrder(response.stepOrder());
-        entity.setStepName(response.stepName());
-        entity.setDefinitionId(response.definitionId());
-        entity.setSuccess(response.success());
-        entity.setDurationMs(response.durationMs());
-        entity.setRequestSnapshotJson(ApiAutomationJsonSupport.toJson(response.request(), "Failed to serialize request snapshot"));
-        entity.setResponseSnapshotJson(ApiAutomationJsonSupport.toJson(response.response(), "Failed to serialize response snapshot"));
-        entity.setAssertionResultsJson(ApiAutomationJsonSupport.toJson(response.assertionResults(), "Failed to serialize assertion results"));
-        entity.setExtractionResultsJson(ApiAutomationJsonSupport.toJson(response.extractionResults(), "Failed to serialize extraction results"));
-        entity.setProcessorResultsJson(ApiAutomationJsonSupport.toJson(response.processorResults(), "Failed to serialize processor results"));
-        entity.setErrorMessage(response.errorMessage());
-        entity.setCreatedAt(LocalDateTime.now());
-        entity.setUpdatedAt(LocalDateTime.now());
-        runStepResultMapper.insert(entity);
-        report.setUpdatedAt(LocalDateTime.now());
-        reportMapper.updateById(report);
+        runResultPersistenceSupport.persistStep(report, workspaceId, computation);
     }
 
     void finalizeRunDefinition(ApiDefinitionEntity definition, boolean success, TaskEntity task, ReportEntity report, RunStepComputation step) {
@@ -526,47 +502,7 @@ public class ApiExecutionEngineSupport {
             Long environmentId,
             Long variableSetId
     ) {
-        ApiRunStepResultResponse response = step.response();
-        ApiDefinitionCaseRunHistoryEntity entity = new ApiDefinitionCaseRunHistoryEntity();
-        entity.setWorkspaceId(apiCase.getWorkspaceId());
-        entity.setDefinitionId(apiCase.getDefinitionId());
-        entity.setCaseId(apiCase.getId());
-        entity.setReportId(report.getId());
-        entity.setCaseName(apiCase.getCaseName());
-        entity.setRunResult(report.getResult());
-        entity.setFailureSummary(blankToNull(report.getFailureSummary()));
-        entity.setOperatorName(CurrentUserContext.require().displayName());
-        entity.setEnvironmentId(environmentId);
-        entity.setEnvironmentName(resolveEnvironmentName(environmentId));
-        entity.setVariableSetId(variableSetId);
-        entity.setVariableSetName(resolveVariableSetName(variableSetId));
-        entity.setStatusCode(response.response() == null ? null : response.response().statusCode());
-        entity.setDurationMs(response.durationMs());
-        entity.setResponseSize(computeResponseSize(response.response()));
-        entity.setCreatedAt(LocalDateTime.now());
-        entity.setUpdatedAt(LocalDateTime.now());
-        caseRunHistoryMapper.insert(entity);
-    }
-
-    private String resolveEnvironmentName(Long environmentId) {
-        if (environmentId == null) {
-            return null;
-        }
-        return requireEnvironment(environmentId).getEnvName();
-    }
-
-    private String resolveVariableSetName(Long variableSetId) {
-        if (variableSetId == null) {
-            return null;
-        }
-        return requireVariableSet(variableSetId).getParamName();
-    }
-
-    private Long computeResponseSize(ApiResponseSnapshot response) {
-        if (response == null || response.body() == null) {
-            return 0L;
-        }
-        return (long) response.body().getBytes(StandardCharsets.UTF_8).length;
+        runResultPersistenceSupport.persistCaseRunHistory(apiCase, report, step, environmentId, variableSetId);
     }
 
     private String extractJsonValue(String body, String expression) throws IOException {
@@ -769,14 +705,6 @@ public class ApiExecutionEngineSupport {
         ApiDefinitionCaseEntity entity = caseMapper.selectById(id);
         if (entity == null) {
             throw new NotFoundException("API case not found");
-        }
-        return entity;
-    }
-
-    private ApiDefinitionCaseRunHistoryEntity requireCaseRunHistory(Long id) {
-        ApiDefinitionCaseRunHistoryEntity entity = caseRunHistoryMapper.selectById(id);
-        if (entity == null) {
-            throw new NotFoundException("API case run history not found");
         }
         return entity;
     }

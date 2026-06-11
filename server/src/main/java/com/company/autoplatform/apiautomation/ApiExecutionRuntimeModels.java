@@ -15,7 +15,8 @@ import static com.company.autoplatform.apiautomation.ApiAutomationFormatSupport.
 import static com.company.autoplatform.apiautomation.ApiAutomationFormatSupport.normalizeAuth;
 import static com.company.autoplatform.apiautomation.ApiAutomationModels.*;
 
-public final class ApiExecutionRuntimeModels {
+// Package-private runtime models shared by api execution support classes only.
+final class ApiExecutionRuntimeModels {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -58,7 +59,7 @@ public final class ApiExecutionRuntimeModels {
     ) {
     }
 
-    static class MutableRequestConfig {
+    static final class MutableRequestConfig {
         private String method;
         private String path;
         private Integer timeoutMs;

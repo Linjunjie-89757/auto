@@ -1,11 +1,11 @@
 package com.company.autoplatform.ai;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.company.autoplatform.auth.CurrentUserContext;
 import com.company.autoplatform.casecenter.CaseDetailResponse;
 import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.workspace.WorkspaceEntity;
 import com.company.autoplatform.workspace.WorkspaceService;
+import com.company.autoplatform.ai.AiCaseConfigDomainService.ResolvedRoleConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.poi.xwpf.usermodel.BodyElementType;
@@ -16,7 +16,6 @@ import org.apache.poi.xwpf.usermodel.XWPFPictureData;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.apache.poi.xwpf.usermodel.XWPFTableCell;
 import org.apache.poi.xwpf.usermodel.XWPFTableRow;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,141 +31,60 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 @Service
 public class AiCaseService {
 
-    private static final long PERSONAL_SCOPE_WORKSPACE_ID = 0L;
-    private static final String PERSONAL_SCOPE_WORKSPACE_CODE = "PERSONAL";
-    private static final String PERSONAL_SCOPE_WORKSPACE_NAME = "我的配置";
-    private static final String ROLE_GENERATOR = "CASE_GENERATOR";
-    private static final String ROLE_REVIEWER = "CASE_REVIEWER";
+    private static final String ROLE_GENERATOR = AiCaseConfigDomainService.ROLE_GENERATOR;
+    private static final String ROLE_REVIEWER = AiCaseConfigDomainService.ROLE_REVIEWER;
     public static final int INITIAL_SMART_MAX_CASES = 50;
     public static final int REVIEW_SUPPLEMENT_MAX_CASES = 30;
     public static final int FINAL_MAX_CASES = 80;
-    private static final double DEFAULT_GENERATOR_TOP_P = 0.9;
-    private static final double DEFAULT_REVIEWER_TOP_P = 0.7;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-    private final AiCaseConfigMapper aiCaseConfigMapper;
+    private final AiCaseConfigDomainService aiCaseConfigDomainService;
     private final AiRequirementAssetMapper aiRequirementAssetMapper;
     private final WorkspaceService workspaceService;
-    private final AiSecretCodec aiSecretCodec;
     private final AiProviderClient aiProviderClient;
     private final AiProviderDomainService aiProviderDomainService;
     private final AiRequirementAssetStorageService aiRequirementAssetStorageService;
-    private final int defaultRequestTimeoutSeconds;
 
     public AiCaseService(
-            AiCaseConfigMapper aiCaseConfigMapper,
+            AiCaseConfigDomainService aiCaseConfigDomainService,
             AiRequirementAssetMapper aiRequirementAssetMapper,
             WorkspaceService workspaceService,
-            AiSecretCodec aiSecretCodec,
             AiProviderClient aiProviderClient,
             AiProviderDomainService aiProviderDomainService,
-            AiRequirementAssetStorageService aiRequirementAssetStorageService,
-            @Value("${app.ai.request-timeout-seconds:60}") int defaultRequestTimeoutSeconds
+            AiRequirementAssetStorageService aiRequirementAssetStorageService
     ) {
-        this.aiCaseConfigMapper = aiCaseConfigMapper;
+        this.aiCaseConfigDomainService = aiCaseConfigDomainService;
         this.aiRequirementAssetMapper = aiRequirementAssetMapper;
         this.workspaceService = workspaceService;
-        this.aiSecretCodec = aiSecretCodec;
         this.aiProviderClient = aiProviderClient;
         this.aiProviderDomainService = aiProviderDomainService;
         this.aiRequirementAssetStorageService = aiRequirementAssetStorageService;
-        this.defaultRequestTimeoutSeconds = Math.max(10, Math.min(600, defaultRequestTimeoutSeconds));
     }
 
     public AiCaseConfigResponse getConfig(String headerWorkspaceCode, String targetWorkspaceCode) {
-        Long ownerUserId = CurrentUserContext.get();
-        AiCaseConfigItem generatorConfig = toItem(findByOwnerUserIdAndRoleType(ownerUserId, ROLE_GENERATOR));
-        AiCaseConfigItem reviewerConfig = toItem(findByOwnerUserIdAndRoleType(ownerUserId, ROLE_REVIEWER));
-        boolean hasLegacyConfig = hasLegacyConfig();
-        return new AiCaseConfigResponse(
-                generatorConfig,
-                reviewerConfig,
-                hasLegacyConfig,
-                hasLegacyConfig && generatorConfig == null && reviewerConfig == null
-        );
+        return aiCaseConfigDomainService.getConfig(headerWorkspaceCode, targetWorkspaceCode);
     }
 
     public AiCaseConfigItem createConfig(String headerWorkspaceCode, SaveAiCaseConfigRequest request) {
-        Long ownerUserId = CurrentUserContext.get();
-        String roleType = normalizeRoleType(request.roleType());
-        if (findByOwnerUserIdAndRoleType(ownerUserId, roleType) != null) {
-            throw new BadRequestException("AI config already exists for this role");
-        }
-        AiCaseConfigEntity entity = new AiCaseConfigEntity();
-        entity.setWorkspaceId(PERSONAL_SCOPE_WORKSPACE_ID);
-        entity.setOwnerUserId(ownerUserId);
-        entity.setRoleType(roleType);
-        applyRoleRequest(entity, request, null, true);
-        entity.setCreatedAt(LocalDateTime.now());
-        entity.setUpdatedAt(LocalDateTime.now());
-        aiCaseConfigMapper.insert(entity);
-        return toItem(entity);
+        return aiCaseConfigDomainService.createConfig(headerWorkspaceCode, request);
     }
 
     public AiCaseConfigItem updateConfig(Long id, String headerWorkspaceCode, SaveAiCaseConfigRequest request) {
-        AiCaseConfigEntity entity = requireConfig(id);
-        String roleType = normalizeRoleType(request.roleType());
-        if (!entity.getRoleType().equals(roleType)) {
-            throw new BadRequestException("AI config role type cannot be changed");
-        }
-        applyRoleRequest(entity, request, entity, false);
-        entity.setUpdatedAt(LocalDateTime.now());
-        aiCaseConfigMapper.updateById(entity);
-        return toItem(entity);
+        return aiCaseConfigDomainService.updateConfig(id, headerWorkspaceCode, request);
     }
 
     public TestAiCaseConfigResponse testConfig(String headerWorkspaceCode, SaveAiCaseConfigRequest request) {
-        Long ownerUserId = CurrentUserContext.get();
-        String roleType = normalizeRoleType(request.roleType());
-        if (request.providerConnectionId() != null) {
-            AiProviderConnectionEntity connection = aiProviderDomainService.requireProviderConnection(request.providerConnectionId());
-            String apiKey = aiProviderDomainService.requireProviderApiKey(connection);
-            AiProviderRequestProfile profile = aiProviderDomainService.buildProviderProfile(
-                    connection,
-                    request.model().trim(),
-                    request.temperature(),
-                    normalizeTopP(request.roleType(), request.topP()),
-                    request.maxCases()
-            );
-            aiProviderClient.testConnection(profile, apiKey);
-            return new TestAiCaseConfigResponse(true, profile.provider(), profile.model(), "AI connection is available");
-        }
-        String apiKey = blankToNull(request.apiKey());
-        if (apiKey == null) {
-            AiCaseConfigEntity existing = findByOwnerUserIdAndRoleType(ownerUserId, roleType);
-            if (existing != null) {
-                AiProviderConnectionEntity connection = aiProviderDomainService.resolveBoundConnection(existing);
-                apiKey = connection != null
-                        ? aiSecretCodec.decrypt(connection.getApiKeyCipherText())
-                        : aiSecretCodec.decrypt(existing.getApiKeyCipherText());
-            }
-        }
-        if (apiKey == null || apiKey.isBlank()) {
-            throw new BadRequestException("AI API key is required for connection test");
-        }
-        AiProviderRequestProfile profile = buildLegacyProfile(roleType, request, findByOwnerUserIdAndRoleType(ownerUserId, roleType));
-        aiProviderClient.testConnection(profile, apiKey);
-        return new TestAiCaseConfigResponse(true, profile.provider(), profile.model(), "AI connection is available");
+        return aiCaseConfigDomainService.testConfig(headerWorkspaceCode, request);
     }
 
     public AiCaseConfigSecretResponse getConfigSecret(Long id, String headerWorkspaceCode) {
-        AiCaseConfigEntity entity = requireConfig(id);
-        AiProviderConnectionEntity connection = aiProviderDomainService.resolveBoundConnection(entity);
-        String apiKey = connection != null
-                ? aiSecretCodec.decrypt(connection.getApiKeyCipherText())
-                : aiSecretCodec.decrypt(entity.getApiKeyCipherText());
-        return new AiCaseConfigSecretResponse(
-                entity.getId(),
-                entity.getRoleType(),
-                apiKey
-        );
+        return aiCaseConfigDomainService.getConfigSecret(id, headerWorkspaceCode);
     }
 
     public AiProviderConnectionSecretResponse getProviderSecret(Long id, String headerWorkspaceCode) {
@@ -178,8 +96,8 @@ public class AiCaseService {
         if (assets.isEmpty()) {
             return;
         }
-        ResolvedRoleConfig resolved = requireResolvedRoleConfig(ROLE_GENERATOR);
-        if (!supportsImageInputForGeneration(resolved)) {
+        ResolvedRoleConfig resolved = aiCaseConfigDomainService.requireResolvedRoleConfig(ROLE_GENERATOR);
+        if (!aiCaseConfigDomainService.supportsImageInputForGeneration(resolved)) {
             throw new BadRequestException("当前生成模型不支持图片识别，是否忽略图片并仅基于文本继续生成？");
         }
     }
@@ -188,16 +106,16 @@ public class AiCaseService {
         WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
                 workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode())
         );
-        ResolvedRoleConfig resolved = requireResolvedRoleConfig(ROLE_GENERATOR);
+        ResolvedRoleConfig resolved = aiCaseConfigDomainService.requireResolvedRoleConfig(ROLE_GENERATOR);
         AiCaseConfigEntity config = resolved.roleConfig();
-        if (normalizeStatus(config.getStatus()) != 1) {
+        if (aiCaseConfigDomainService.normalizeStatus(config.getStatus()) != 1) {
             throw new BadRequestException("No active personal case generator config found");
         }
         int systemMaxCases = INITIAL_SMART_MAX_CASES;
         int requestedMaxCases = request.maxCases() == null ? INITIAL_SMART_MAX_CASES : request.maxCases();
         int effectiveMaxCases = Math.min(requestedMaxCases, INITIAL_SMART_MAX_CASES);
         List<AiRequirementAssetEntity> assets = loadRequirementAssets(request.assetIds());
-        if (!assets.isEmpty() && !supportsImageInputForGeneration(resolved)) {
+        if (!assets.isEmpty() && !aiCaseConfigDomainService.supportsImageInputForGeneration(resolved)) {
             throw new BadRequestException("The current AI config does not support image input. Remove the images or enable an image-capable model.");
         }
         boolean ignoredImages = false;
@@ -251,16 +169,16 @@ public class AiCaseService {
         WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
                 workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode())
         );
-        ResolvedRoleConfig resolved = requireResolvedRoleConfig(ROLE_GENERATOR);
+        ResolvedRoleConfig resolved = aiCaseConfigDomainService.requireResolvedRoleConfig(ROLE_GENERATOR);
         AiCaseConfigEntity config = resolved.roleConfig();
-        if (normalizeStatus(config.getStatus()) != 1) {
+        if (aiCaseConfigDomainService.normalizeStatus(config.getStatus()) != 1) {
             throw new BadRequestException("No active personal case generator config found");
         }
         int systemMaxCases = INITIAL_SMART_MAX_CASES;
         int requestedMaxCases = request.maxCases() == null ? INITIAL_SMART_MAX_CASES : request.maxCases();
         int effectiveMaxCases = Math.min(requestedMaxCases, INITIAL_SMART_MAX_CASES);
         List<AiRequirementAssetEntity> assets = loadRequirementAssets(request.assetIds());
-        if (!assets.isEmpty() && !supportsImageInputForGeneration(resolved)) {
+        if (!assets.isEmpty() && !aiCaseConfigDomainService.supportsImageInputForGeneration(resolved)) {
             throw new BadRequestException("The current AI config does not support image input. Remove the images or enable an image-capable model.");
         }
         if (modelConsumer != null) {
@@ -401,17 +319,7 @@ public class AiCaseService {
     }
 
     public AiCaseConfigResponse bootstrapConfigFromLegacy(String headerWorkspaceCode) {
-        Long ownerUserId = CurrentUserContext.get();
-        if (findByOwnerUserIdAndRoleType(ownerUserId, ROLE_GENERATOR) != null
-                || findByOwnerUserIdAndRoleType(ownerUserId, ROLE_REVIEWER) != null) {
-            throw new BadRequestException("Personal AI config already exists");
-        }
-        if (!hasLegacyConfig()) {
-            throw new BadRequestException("No legacy AI config available");
-        }
-        cloneLegacyRoleConfig(ownerUserId, ROLE_GENERATOR);
-        cloneLegacyRoleConfig(ownerUserId, ROLE_REVIEWER);
-        return getConfig(headerWorkspaceCode, null);
+        return aiCaseConfigDomainService.bootstrapConfigFromLegacy(headerWorkspaceCode);
     }
 
     public ImportRequirementDocumentResponse importRequirementDocument(String headerWorkspaceCode, MultipartFile file) {
@@ -500,7 +408,7 @@ public class AiCaseService {
     }
 
     public AiReviewResult reviewGeneratedCases(String headerWorkspaceCode, ReviewAiGeneratedCasesRequest request) {
-        ResolvedRoleConfig resolved = requireResolvedRoleConfig(ROLE_REVIEWER);
+        ResolvedRoleConfig resolved = aiCaseConfigDomainService.requireResolvedRoleConfig(ROLE_REVIEWER);
         AiCaseConfigEntity config = resolved.roleConfig();
         String prompt = buildGeneratedCasesReviewPrompt(config, request, false);
         return aiProviderClient.review(resolved.profile(), resolved.apiKey(), prompt);
@@ -512,7 +420,7 @@ public class AiCaseService {
             Consumer<AiStreamModelInfo> modelConsumer,
             Consumer<ReviewCaseStreamUpdate> reviewConsumer
     ) {
-        ResolvedRoleConfig resolved = requireResolvedRoleConfig(ROLE_REVIEWER);
+        ResolvedRoleConfig resolved = aiCaseConfigDomainService.requireResolvedRoleConfig(ROLE_REVIEWER);
         AiCaseConfigEntity config = resolved.roleConfig();
         if (modelConsumer != null) {
             modelConsumer.accept(new AiStreamModelInfo(resolved.profile().provider(), config.getModel()));
@@ -564,40 +472,10 @@ public class AiCaseService {
     }
 
     public AiReviewResult reviewSavedCase(String headerWorkspaceCode, CaseDetailResponse detail) {
-        ResolvedRoleConfig resolved = requireResolvedRoleConfig(ROLE_REVIEWER);
+        ResolvedRoleConfig resolved = aiCaseConfigDomainService.requireResolvedRoleConfig(ROLE_REVIEWER);
         AiCaseConfigEntity config = resolved.roleConfig();
         String prompt = buildSavedCaseReviewPrompt(config, detail);
         return aiProviderClient.review(resolved.profile(), resolved.apiKey(), prompt);
-    }
-
-    private AiCaseConfigEntity findByOwnerUserIdAndRoleType(Long ownerUserId, String roleType) {
-        return aiCaseConfigMapper.selectOne(new LambdaQueryWrapper<AiCaseConfigEntity>()
-                .eq(AiCaseConfigEntity::getOwnerUserId, ownerUserId)
-                .eq(AiCaseConfigEntity::getRoleType, roleType)
-                .last("limit 1"));
-    }
-
-    private AiCaseConfigEntity findLegacyRoleConfig(String roleType) {
-        return aiCaseConfigMapper.selectOne(new LambdaQueryWrapper<AiCaseConfigEntity>()
-                .isNull(AiCaseConfigEntity::getOwnerUserId)
-                .eq(AiCaseConfigEntity::getWorkspaceId, PERSONAL_SCOPE_WORKSPACE_ID)
-                .eq(AiCaseConfigEntity::getRoleType, roleType)
-                .last("limit 1"));
-    }
-
-    private boolean hasLegacyConfig() {
-        Long count = aiCaseConfigMapper.selectCount(new LambdaQueryWrapper<AiCaseConfigEntity>()
-                .isNull(AiCaseConfigEntity::getOwnerUserId)
-                .eq(AiCaseConfigEntity::getWorkspaceId, PERSONAL_SCOPE_WORKSPACE_ID));
-        return count != null && count > 0;
-    }
-
-    private AiCaseConfigEntity requireConfig(Long id) {
-        AiCaseConfigEntity entity = aiCaseConfigMapper.selectById(id);
-        if (entity == null || !Objects.equals(entity.getOwnerUserId(), CurrentUserContext.get())) {
-            throw new BadRequestException("AI config does not exist");
-        }
-        return entity;
     }
 
     private AiRequirementAssetEntity requireRequirementAsset(Long id) {
@@ -606,231 +484,6 @@ public class AiCaseService {
             throw new BadRequestException("Requirement asset does not exist");
         }
         return entity;
-    }
-
-    private void applyRoleRequest(
-            AiCaseConfigEntity entity,
-            SaveAiCaseConfigRequest request,
-            AiCaseConfigEntity existing,
-            boolean creating
-    ) {
-        entity.setRoleType(normalizeRoleType(request.roleType()));
-        entity.setModel(request.model().trim());
-        entity.setPromptTemplate(request.promptTemplate().trim());
-        entity.setReviewChecklist(blankToNull(request.reviewChecklist()));
-        entity.setTemperature(request.temperature());
-        entity.setTopP(normalizeTopP(entity.getRoleType(), request.topP()));
-        entity.setMaxCases(normalizeRoleMaxCases(request.maxCases()));
-        entity.setStatus(normalizeStatus(request.status()));
-        AiProviderConnectionEntity connection = aiProviderDomainService.resolveRequestedConnection(request, existing, creating);
-        entity.setProviderConnectionId(connection.getId());
-        aiProviderDomainService.mirrorConnectionSnapshot(entity, connection);
-        AiCapabilityOverride override = mergeCapabilityOverride(request);
-        entity.setCapabilityOverrideJson(writeCapabilityOverride(override));
-        AiModelCapabilities detectedCapabilities = aiProviderDomainService.resolveDetectedCapabilities(connection, entity.getModel());
-        AiModelCapabilities effectiveCapabilities = detectedCapabilities.applyOverride(override);
-        entity.setSupportsImageInput(Boolean.TRUE.equals(effectiveCapabilities.imageInput().supported()) ? 1 : 0);
-    }
-
-    private AiCaseConfigItem toItem(AiCaseConfigEntity entity) {
-        if (entity == null) {
-            return null;
-        }
-        AiProviderConnectionEntity connection = aiProviderDomainService.resolveBoundConnection(entity);
-        String protocolType = connection != null
-                ? aiProviderDomainService.normalizeProtocolType(connection.getProtocolType(), null, connection.getBaseUrl())
-                : aiProviderDomainService.normalizeProtocolType(entity.getProtocolType(), entity.getProvider(), entity.getBaseUrl());
-        String baseUrl = connection != null ? connection.getBaseUrl() : entity.getBaseUrl();
-        String apiKey = connection != null
-                ? aiSecretCodec.decrypt(connection.getApiKeyCipherText())
-                : aiSecretCodec.decrypt(entity.getApiKeyCipherText());
-        AiCapabilityOverride override = readCapabilityOverride(entity);
-        AiModelCapabilities detectedCapabilities = connection != null
-                ? aiProviderDomainService.resolveDetectedCapabilities(connection, entity.getModel())
-                : AiModelCapabilities.infer(protocolType, entity.getModel(), apiKey != null && !apiKey.isBlank());
-        AiModelCapabilities effectiveCapabilities = detectedCapabilities.applyOverride(override);
-        return new AiCaseConfigItem(
-                entity.getId(),
-                PERSONAL_SCOPE_WORKSPACE_CODE,
-                PERSONAL_SCOPE_WORKSPACE_NAME,
-                entity.getRoleType(),
-                connection == null ? null : connection.getId(),
-                connection == null ? null : connection.getConnectionName(),
-                protocolType,
-                aiProviderDomainService.providerForProtocolType(protocolType),
-                entity.getModel(),
-                baseUrl,
-                maskApiKey(apiKey),
-                apiKey != null && !apiKey.isBlank(),
-                entity.getPromptTemplate(),
-                entity.getReviewChecklist(),
-                entity.getTemperature(),
-                normalizeTopP(entity.getRoleType(), entity.getTopP()),
-                entity.getMaxCases(),
-                detectedCapabilities,
-                effectiveCapabilities,
-                override,
-                Boolean.TRUE.equals(effectiveCapabilities.imageInput().supported()),
-                normalizeStatus(entity.getStatus())
-        );
-    }
-
-    private void cloneLegacyRoleConfig(Long ownerUserId, String roleType) {
-        AiCaseConfigEntity legacyConfig = findLegacyRoleConfig(roleType);
-        if (legacyConfig == null) {
-            return;
-        }
-        AiProviderConnectionEntity personalConnection = aiProviderDomainService.cloneLegacyConnection(ownerUserId, legacyConfig);
-        AiCaseConfigEntity cloned = new AiCaseConfigEntity();
-        cloned.setWorkspaceId(PERSONAL_SCOPE_WORKSPACE_ID);
-        cloned.setOwnerUserId(ownerUserId);
-        cloned.setRoleType(legacyConfig.getRoleType());
-        cloned.setProtocolType(legacyConfig.getProtocolType());
-        cloned.setProvider(legacyConfig.getProvider());
-        cloned.setModel(legacyConfig.getModel());
-        cloned.setBaseUrl(personalConnection.getBaseUrl());
-        cloned.setApiKeyCipherText(personalConnection.getApiKeyCipherText());
-        cloned.setPromptTemplate(legacyConfig.getPromptTemplate());
-        cloned.setReviewChecklist(legacyConfig.getReviewChecklist());
-        cloned.setTemperature(legacyConfig.getTemperature());
-        cloned.setTopP(normalizeTopP(roleType, legacyConfig.getTopP()));
-        cloned.setMaxCases(legacyConfig.getMaxCases());
-        cloned.setProviderConnectionId(personalConnection.getId());
-        cloned.setCapabilityOverrideJson(legacyConfig.getCapabilityOverrideJson());
-        cloned.setSupportsImageInput(legacyConfig.getSupportsImageInput());
-        cloned.setStatus(normalizeStatus(legacyConfig.getStatus()));
-        cloned.setCreatedAt(LocalDateTime.now());
-        cloned.setUpdatedAt(LocalDateTime.now());
-        aiCaseConfigMapper.insert(cloned);
-    }
-
-    private AiCapabilityOverride mergeCapabilityOverride(SaveAiCaseConfigRequest request) {
-        AiCapabilityOverride base = request.capabilityOverride();
-        if (request.supportsImageInput() == null) {
-            return base;
-        }
-        return new AiCapabilityOverride(
-                base == null ? null : base.textChat(),
-                base == null ? null : base.streamOutput(),
-                base == null ? null : base.structuredOutput(),
-                request.supportsImageInput(),
-                base == null ? null : base.longContext(),
-                base == null ? null : base.stableAvailable()
-        );
-    }
-
-    private String writeCapabilityOverride(AiCapabilityOverride override) {
-        if (override == null || !override.hasAnyValue()) {
-            return null;
-        }
-        return AiCaseJsonSupport.toJson(override, "AI 能力覆盖配置序列化失败");
-    }
-
-    private AiCapabilityOverride readCapabilityOverride(AiCaseConfigEntity entity) {
-        AiCapabilityOverride override = AiCaseJsonSupport.read(entity.getCapabilityOverrideJson(), AiCapabilityOverride.class, null);
-        if (override != null) {
-            return override;
-        }
-        if (entity.getSupportsImageInput() == null) {
-            return null;
-        }
-        return new AiCapabilityOverride(null, null, null, entity.getSupportsImageInput() == 1, null, null);
-    }
-
-    private boolean supportsImageInputForGeneration(ResolvedRoleConfig resolved) {
-        AiCapabilityValue effectiveImage = resolved.effectiveCapabilities().imageInput();
-        if (Boolean.FALSE.equals(effectiveImage.supported())) {
-            return false;
-        }
-        return Boolean.TRUE.equals(resolved.detectedCapabilities().imageInput().supported());
-    }
-
-    private ResolvedRoleConfig requireResolvedRoleConfig(String roleType) {
-        AiCaseConfigEntity roleConfig = findByOwnerUserIdAndRoleType(CurrentUserContext.get(), roleType);
-        if (roleConfig == null || normalizeStatus(roleConfig.getStatus()) != 1) {
-            throw new BadRequestException("No active personal " + roleType + " config found");
-        }
-        AiProviderConnectionEntity connection = aiProviderDomainService.resolveBoundConnection(roleConfig);
-        String apiKey;
-        AiProviderRequestProfile profile;
-        if (connection != null) {
-            apiKey = aiProviderDomainService.requireProviderApiKey(connection);
-            profile = aiProviderDomainService.buildProviderProfile(
-                    connection,
-                    roleConfig.getModel(),
-                    roleConfig.getTemperature(),
-                    normalizeTopP(roleConfig.getRoleType(), roleConfig.getTopP()),
-                    roleConfig.getMaxCases()
-            );
-        } else {
-            apiKey = requireConfigApiKey(roleConfig);
-            profile = buildLegacyProfile(roleType, new SaveAiCaseConfigRequest(
-                    roleConfig.getWorkspaceId() == null ? null : PERSONAL_SCOPE_WORKSPACE_CODE,
-                    roleConfig.getRoleType(),
-                    null,
-                    roleConfig.getProtocolType(),
-                    roleConfig.getProvider(),
-                    roleConfig.getModel(),
-                    roleConfig.getBaseUrl(),
-                    apiKey,
-                    roleConfig.getPromptTemplate(),
-                    roleConfig.getReviewChecklist(),
-                    roleConfig.getTemperature(),
-                    roleConfig.getTopP(),
-                    roleConfig.getMaxCases(),
-                    readCapabilityOverride(roleConfig),
-                    roleConfig.getSupportsImageInput() != null && roleConfig.getSupportsImageInput() == 1,
-                    roleConfig.getStatus()
-            ), roleConfig);
-        }
-        AiCapabilityOverride override = readCapabilityOverride(roleConfig);
-        AiModelCapabilities detectedCapabilities = connection != null
-                ? aiProviderDomainService.resolveDetectedCapabilities(connection, roleConfig.getModel())
-                : AiModelCapabilities.infer(profile.protocolType(), roleConfig.getModel(), true);
-        AiModelCapabilities effectiveCapabilities = detectedCapabilities.applyOverride(override);
-        return new ResolvedRoleConfig(roleConfig, connection, profile, apiKey, detectedCapabilities, effectiveCapabilities);
-    }
-
-    private String requireConfigApiKey(AiCaseConfigEntity config) {
-        String decryptedApiKey = aiSecretCodec.decrypt(config.getApiKeyCipherText());
-        if (decryptedApiKey == null || decryptedApiKey.isBlank()) {
-            throw new BadRequestException("AI config API key is missing");
-        }
-        return decryptedApiKey;
-    }
-
-    private AiProviderRequestProfile buildLegacyProfile(
-            String roleType,
-            SaveAiCaseConfigRequest request,
-            AiCaseConfigEntity existing
-    ) {
-        String protocolType = aiProviderDomainService.normalizeProtocolType(request.protocolType(), request.provider(), request.baseUrl());
-        String baseUrl = blankToNull(request.baseUrl());
-        if (baseUrl == null && existing != null) {
-            baseUrl = existing.getBaseUrl();
-        }
-        if (baseUrl == null) {
-            throw new BadRequestException("AI API URL 不能为空");
-        }
-        Double temperature = request.temperature() == null
-                ? (existing == null ? 0.3 : existing.getTemperature())
-                : request.temperature();
-        Double topP = request.topP() == null
-                ? (existing == null ? defaultTopPForRole(roleType) : normalizeTopP(roleType, existing.getTopP()))
-                : normalizeTopP(roleType, request.topP());
-        Integer maxCases = request.maxCases() == null
-                ? (existing == null ? INITIAL_SMART_MAX_CASES : existing.getMaxCases())
-                : request.maxCases();
-        return new AiProviderRequestProfile(
-                protocolType,
-                aiProviderDomainService.providerForProtocolType(protocolType),
-                request.model().trim(),
-                baseUrl,
-                temperature,
-                topP,
-                maxCases,
-                defaultRequestTimeoutSeconds
-        );
     }
 
     private String buildGeneratorPrompt(
@@ -1082,66 +735,6 @@ public class AiCaseService {
                 3. Focus on whether the case is clear, complete, executable, and verifiable.
                 """);
         return builder.toString();
-    }
-
-    private String normalizeRoleType(String roleType) {
-        String normalized = roleType == null ? "" : roleType.trim().toUpperCase(Locale.ROOT);
-        if (!ROLE_GENERATOR.equals(normalized) && !ROLE_REVIEWER.equals(normalized)) {
-            throw new BadRequestException("AI role type must be CASE_GENERATOR or CASE_REVIEWER");
-        }
-        return normalized;
-    }
-
-    private Integer normalizeStatus(Integer status) {
-        if (status == null) {
-            return 1;
-        }
-        if (status != 0 && status != 1) {
-            throw new BadRequestException("AI config status must be 0 or 1");
-        }
-        return status;
-    }
-
-    private Integer normalizeRoleMaxCases(Integer maxCases) {
-        if (maxCases == null) {
-            return INITIAL_SMART_MAX_CASES;
-        }
-        if (maxCases < 1 || maxCases > 100) {
-            throw new BadRequestException("Max cases must be between 1 and 100");
-        }
-        return Math.min(maxCases, INITIAL_SMART_MAX_CASES);
-    }
-
-    private Double normalizeTopP(String roleType, Double topP) {
-        if (topP == null) {
-            return defaultTopPForRole(roleType);
-        }
-        if (topP < 0.1 || topP > 1.0) {
-            throw new BadRequestException("Top-p must be between 0.1 and 1.0");
-        }
-        return Math.round(topP * 10.0) / 10.0;
-    }
-
-    private double defaultTopPForRole(String roleType) {
-        if (roleType == null || roleType.isBlank()) {
-            return DEFAULT_REVIEWER_TOP_P;
-        }
-        return ROLE_REVIEWER.equals(normalizeRoleType(roleType)) ? DEFAULT_REVIEWER_TOP_P : DEFAULT_GENERATOR_TOP_P;
-    }
-
-    private Integer normalizeRequestTimeoutSeconds(Integer requestTimeoutSeconds) {
-        if (requestTimeoutSeconds == null) {
-            return null;
-        }
-        if (requestTimeoutSeconds < 10 || requestTimeoutSeconds > 600) {
-            throw new BadRequestException("AI request timeout must be between 10 and 600 seconds");
-        }
-        return requestTimeoutSeconds;
-    }
-
-    private int resolveRequestTimeoutSeconds(Integer requestTimeoutSeconds) {
-        Integer normalized = normalizeRequestTimeoutSeconds(requestTimeoutSeconds);
-        return normalized == null ? defaultRequestTimeoutSeconds : normalized;
     }
 
     private String blankToNull(String value) {
@@ -1874,16 +1467,6 @@ public class AiCaseService {
     ) {
     }
 
-    private String maskApiKey(String apiKey) {
-        if (apiKey == null || apiKey.isBlank()) {
-            return "";
-        }
-        if (apiKey.length() <= 8) {
-            return "*".repeat(apiKey.length());
-        }
-        return apiKey.substring(0, 4) + "*".repeat(apiKey.length() - 8) + apiKey.substring(apiKey.length() - 4);
-    }
-
     public record AiStreamModelInfo(
             String provider,
             String model
@@ -1942,27 +1525,5 @@ public class AiCaseService {
             boolean fallbackToComplete,
             String fallbackReason
     ) {
-    }
-
-    private record ResolvedRoleConfig(
-            AiCaseConfigEntity roleConfig,
-            AiProviderConnectionEntity connection,
-            AiProviderRequestProfile profile,
-            String apiKey,
-            AiModelCapabilities detectedCapabilities,
-            AiModelCapabilities effectiveCapabilities
-    ) {
-        private AiProviderRequestProfile profileWithMaxCases(Integer maxCases) {
-            return new AiProviderRequestProfile(
-                    profile.protocolType(),
-                    profile.provider(),
-                    profile.model(),
-                    profile.baseUrl(),
-                    profile.temperature(),
-                    profile.topP(),
-                    maxCases,
-                    profile.requestTimeoutSeconds()
-            );
-        }
     }
 }

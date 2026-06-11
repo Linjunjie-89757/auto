@@ -5,7 +5,6 @@ import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.workspace.WorkspaceEntity;
 import com.company.autoplatform.workspace.WorkspaceScope;
 import com.company.autoplatform.workspace.WorkspaceService;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
@@ -34,6 +33,7 @@ public class AiGenerationTaskService {
     private final AiGenerationTaskDomainService taskDomainService;
     private final AiCaseService aiCaseService;
     private final AiGenerationTaskEventService eventService;
+    private final AiGenerationTaskResponseSupport responseSupport;
     private final WorkspaceService workspaceService;
 
     public AiGenerationTaskService(
@@ -41,12 +41,14 @@ public class AiGenerationTaskService {
             AiGenerationTaskDomainService taskDomainService,
             AiCaseService aiCaseService,
             AiGenerationTaskEventService eventService,
+            AiGenerationTaskResponseSupport responseSupport,
             WorkspaceService workspaceService
     ) {
         this.aiGenerationTaskMapper = aiGenerationTaskMapper;
         this.taskDomainService = taskDomainService;
         this.aiCaseService = aiCaseService;
         this.eventService = eventService;
+        this.responseSupport = responseSupport;
         this.workspaceService = workspaceService;
     }
 
@@ -107,7 +109,7 @@ public class AiGenerationTaskService {
                 entity.getRequirementContent(),
                 null,
                 null,
-                readValue(entity.getAssetIdsJson(), new TypeReference<List<Long>>() {}, List.of()),
+                responseSupport.readValue(entity.getAssetIdsJson(), new TypeReference<List<Long>>() {}, List.of()),
                 List.of(),
                 null,
                 null
@@ -121,9 +123,9 @@ public class AiGenerationTaskService {
         entity.setProvider(generation.provider());
         entity.setModel(generation.model());
         entity.setGeneratedCount(generation.actualGeneratedCount() == null ? 0 : generation.actualGeneratedCount());
-        entity.setWarningsJson(writeValue(generation.warnings()));
-        entity.setInvalidCasesJson(writeValue(generation.invalidCases()));
-        entity.setGeneratedCasesJson(writeValue(generation.generatedCases()));
+        entity.setWarningsJson(responseSupport.writeValue(generation.warnings()));
+        entity.setInvalidCasesJson(responseSupport.writeValue(generation.invalidCases()));
+        entity.setGeneratedCasesJson(responseSupport.writeValue(generation.generatedCases()));
         entity.setGenerationRawOutput(limitRawOutput(generation.rawContent()));
         entity.setStatus("REVIEWING");
         entity.setCurrentStep(3);
@@ -155,9 +157,9 @@ public class AiGenerationTaskService {
         entity.setCurrentStep(4);
         entity.setStepMessage("任务已完成，可在记录详情中查看生成结果并继续处理。");
         List<GeneratedAiCaseItem> finalCases = mergeCompleteReviewResult(generation.generatedCases(), review);
-        entity.setGeneratedCasesJson(writeValue(finalCases));
+        entity.setGeneratedCasesJson(responseSupport.writeValue(finalCases));
         entity.setGeneratedCount(finalCases.size());
-        entity.setReviewResultJson(writeValue(review));
+        entity.setReviewResultJson(responseSupport.writeValue(review));
         entity.setReviewRawOutput(limitRawOutput(review.rawContent()));
         entity.setFinishedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
@@ -179,7 +181,7 @@ public class AiGenerationTaskService {
                         entity.getRequirementContent(),
                         null,
                         null,
-                        readValue(entity.getAssetIdsJson(), new TypeReference<List<Long>>() {}, List.of()),
+                        responseSupport.readValue(entity.getAssetIdsJson(), new TypeReference<List<Long>>() {}, List.of()),
                         List.of(),
                         null,
                         null
@@ -199,7 +201,7 @@ public class AiGenerationTaskService {
                     }
                     generatedCases.add(update.item());
                     persistGeneratedCasesSnapshot(latest, generatedCases, update.rawOutput());
-                    appendEvent(taskId, "CASE_GENERATED", "GENERATING", "INFO", buildGeneratedCaseEventMessage(update.itemIndex(), update.item()), update.itemIndex(), update.item().title(), latest.getProvider(), latest.getModel(), writeValue(update.item()));
+                    appendEvent(taskId, "CASE_GENERATED", "GENERATING", "INFO", buildGeneratedCaseEventMessage(update.itemIndex(), update.item()), update.itemIndex(), update.item().title(), latest.getProvider(), latest.getModel(), responseSupport.writeValue(update.item()));
                 }
         );
 
@@ -212,9 +214,9 @@ public class AiGenerationTaskService {
         entity.setProvider(generation.provider());
         entity.setModel(generation.model());
         entity.setGeneratedCount(generation.actualGeneratedCount() == null ? generatedCases.size() : generation.actualGeneratedCount());
-        entity.setWarningsJson(writeValue(generation.warnings()));
-        entity.setInvalidCasesJson(writeValue(generation.invalidCases()));
-        entity.setGeneratedCasesJson(writeValue(generatedCases));
+        entity.setWarningsJson(responseSupport.writeValue(generation.warnings()));
+        entity.setInvalidCasesJson(responseSupport.writeValue(generation.invalidCases()));
+        entity.setGeneratedCasesJson(responseSupport.writeValue(generatedCases));
         entity.setGenerationRawOutput(limitRawOutput(generation.rawContent()));
         entity.setStatus("REVIEWING");
         entity.setCurrentStep(3);
@@ -235,7 +237,7 @@ public class AiGenerationTaskService {
                     null,
                     generation.provider(),
                     generation.model(),
-                    writeValue(Map.of("reason", blankToNull(generation.fallbackReason()) == null ? "" : generation.fallbackReason()))
+                    responseSupport.writeValue(Map.of("reason", blankToNull(generation.fallbackReason()) == null ? "" : generation.fallbackReason()))
             );
         }
         appendEvent(taskId, "GENERATION_COMPLETED", "GENERATING", "INFO", "已完成 " + generatedCases.size() + " 条用例生成", null, null, generation.provider(), generation.model(), null);
@@ -267,13 +269,13 @@ public class AiGenerationTaskService {
                         }
                         GeneratedAiCaseItem supplemented = withStreamSupplementMetadata(update);
                         generatedCases.add(supplemented);
-                        latest.setGeneratedCasesJson(writeValue(generatedCases));
+                        latest.setGeneratedCasesJson(responseSupport.writeValue(generatedCases));
                         latest.setGeneratedCount(generatedCases.size());
                         latest.setReviewRawOutput(limitRawOutput(update.rawOutput()));
                         latest.setUpdatedAt(LocalDateTime.now());
                         aiGenerationTaskMapper.updateById(latest);
                         int itemIndex = generatedCases.size() - 1;
-                        appendEvent(taskId, "CASE_SUPPLEMENTED", "REVIEWING", "INFO", buildSupplementedCaseEventMessage(itemIndex, supplemented), itemIndex, supplemented.title(), reviewProvider[0], reviewModel[0], writeValue(Map.of(
+                        appendEvent(taskId, "CASE_SUPPLEMENTED", "REVIEWING", "INFO", buildSupplementedCaseEventMessage(itemIndex, supplemented), itemIndex, supplemented.title(), reviewProvider[0], reviewModel[0], responseSupport.writeValue(Map.of(
                                 "status", update.status(),
                                 "summary", update.summary() == null ? "" : update.summary(),
                                 "supplementReason", update.supplementReason() == null ? "" : update.supplementReason(),
@@ -286,11 +288,11 @@ public class AiGenerationTaskService {
                     }
                     GeneratedAiCaseItem reviewed = applyReviewUpdate(generatedCases.get(update.itemIndex()), update);
                     generatedCases.set(update.itemIndex(), reviewed);
-                    latest.setGeneratedCasesJson(writeValue(generatedCases));
+                    latest.setGeneratedCasesJson(responseSupport.writeValue(generatedCases));
                     latest.setReviewRawOutput(limitRawOutput(update.rawOutput()));
                     latest.setUpdatedAt(LocalDateTime.now());
                     aiGenerationTaskMapper.updateById(latest);
-                    appendEvent(taskId, "CASE_REVIEWED", "REVIEWING", "INFO", buildReviewedCaseEventMessage(update.itemIndex(), reviewed.title(), update.status(), update.summary(), update.coverageComment(), update.evidenceComment()), update.itemIndex(), reviewed.title(), reviewProvider[0], reviewModel[0], writeValue(Map.of(
+                    appendEvent(taskId, "CASE_REVIEWED", "REVIEWING", "INFO", buildReviewedCaseEventMessage(update.itemIndex(), reviewed.title(), update.status(), update.summary(), update.coverageComment(), update.evidenceComment()), update.itemIndex(), reviewed.title(), reviewProvider[0], reviewModel[0], responseSupport.writeValue(Map.of(
                             "status", update.status(),
                             "summary", update.summary() == null ? "" : update.summary(),
                             "coverageComment", update.coverageComment() == null ? "" : update.coverageComment(),
@@ -313,9 +315,9 @@ public class AiGenerationTaskService {
             generatedCases.clear();
             generatedCases.addAll(mergeCompleteReviewResult(generation.generatedCases(), review.reviewResult()));
         }
-        entity.setGeneratedCasesJson(writeValue(generatedCases));
+        entity.setGeneratedCasesJson(responseSupport.writeValue(generatedCases));
         entity.setGeneratedCount(generatedCases.size());
-        entity.setReviewResultJson(writeValue(review.reviewResult()));
+        entity.setReviewResultJson(responseSupport.writeValue(review.reviewResult()));
         entity.setReviewRawOutput(limitRawOutput(review.rawContent()));
         entity.setFinishedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
@@ -331,7 +333,7 @@ public class AiGenerationTaskService {
                     null,
                     review.provider(),
                     review.model(),
-                    writeValue(Map.of("reason", blankToNull(review.fallbackReason()) == null ? "" : review.fallbackReason()))
+                    responseSupport.writeValue(Map.of("reason", blankToNull(review.fallbackReason()) == null ? "" : review.fallbackReason()))
             );
         }
         appendEvent(taskId, "REVIEW_COMPLETED", "REVIEWING", "INFO", "AI stream review completed", null, null, review.provider(), review.model(), null);
@@ -399,7 +401,7 @@ public class AiGenerationTaskService {
     }
 
     private void persistGeneratedCasesSnapshot(AiGenerationTaskEntity entity, List<GeneratedAiCaseItem> generatedCases, String rawOutput) {
-        entity.setGeneratedCasesJson(writeValue(generatedCases));
+        entity.setGeneratedCasesJson(responseSupport.writeValue(generatedCases));
         entity.setGeneratedCount(generatedCases.size());
         entity.setGenerationRawOutput(limitRawOutput(rawOutput));
         entity.setUpdatedAt(LocalDateTime.now());
@@ -585,7 +587,7 @@ public class AiGenerationTaskService {
         long optimized = finalCases.stream().filter(item -> "OPTIMIZED".equals(item.aiReviewStatus())).count();
         long supplemented = finalCases.stream().filter(item -> "SUPPLEMENTED".equals(item.aiReviewStatus())).count();
         long notRecommended = finalCases.stream().filter(item -> "NOT_RECOMMENDED".equals(item.aiReviewStatus())).count();
-        appendEvent(taskId, "REVIEW_COMPLETED", "REVIEWING", "INFO", "AI review completed: optimized " + optimized + ", supplemented " + supplemented + ", not recommended " + notRecommended + ".", null, null, provider, model, writeValue(Map.of(
+        appendEvent(taskId, "REVIEW_COMPLETED", "REVIEWING", "INFO", "AI review completed: optimized " + optimized + ", supplemented " + supplemented + ", not recommended " + notRecommended + ".", null, null, provider, model, responseSupport.writeValue(Map.of(
                 "optimized", optimized,
                 "supplemented", supplemented,
                 "notRecommended", notRecommended,
@@ -799,25 +801,6 @@ public class AiGenerationTaskService {
             return null;
         }
         return value.trim();
-    }
-
-    private String writeValue(Object value) {
-        try {
-            return OBJECT_MAPPER.writeValueAsString(value);
-        } catch (JsonProcessingException exception) {
-            throw new BadRequestException("Failed to serialize AI generation task data");
-        }
-    }
-
-    private <T> T readValue(String raw, TypeReference<T> typeReference, T fallback) {
-        if (raw == null || raw.isBlank()) {
-            return fallback;
-        }
-        try {
-            return OBJECT_MAPPER.readValue(raw, typeReference);
-        } catch (JsonProcessingException exception) {
-            return fallback;
-        }
     }
 
     private static class TaskCanceledException extends RuntimeException {

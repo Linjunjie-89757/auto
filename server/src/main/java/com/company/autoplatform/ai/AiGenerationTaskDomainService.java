@@ -6,52 +6,43 @@ import com.company.autoplatform.casecenter.CaseDirectoryEntity;
 import com.company.autoplatform.casecenter.CaseDirectoryMapper;
 import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.user.UserEntity;
-import com.company.autoplatform.user.UserService;
 import com.company.autoplatform.workspace.WorkspaceEntity;
 import com.company.autoplatform.workspace.WorkspaceScope;
 import com.company.autoplatform.workspace.WorkspaceService;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
-import java.util.function.Function;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 @Service
 public class AiGenerationTaskDomainService {
 
     private static final List<String> RUNNING_STATUSES = List.of("PENDING", "GENERATING", "REVIEWING");
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final AiGenerationTaskMapper aiGenerationTaskMapper;
     private final AiCaseService aiCaseService;
     private final AiGenerationTaskEventService eventService;
+    private final AiGenerationTaskResponseSupport responseSupport;
     private final WorkspaceService workspaceService;
     private final CaseDirectoryMapper caseDirectoryMapper;
-    private final UserService userService;
 
     public AiGenerationTaskDomainService(
             AiGenerationTaskMapper aiGenerationTaskMapper,
             AiCaseService aiCaseService,
             AiGenerationTaskEventService eventService,
+            AiGenerationTaskResponseSupport responseSupport,
             WorkspaceService workspaceService,
-            CaseDirectoryMapper caseDirectoryMapper,
-            UserService userService
+            CaseDirectoryMapper caseDirectoryMapper
     ) {
         this.aiGenerationTaskMapper = aiGenerationTaskMapper;
         this.aiCaseService = aiCaseService;
         this.eventService = eventService;
+        this.responseSupport = responseSupport;
         this.workspaceService = workspaceService;
         this.caseDirectoryMapper = caseDirectoryMapper;
-        this.userService = userService;
     }
 
     public AiGenerationTaskResponse createTask(String headerWorkspaceCode, CreateAiGenerationTaskRequest request) {
@@ -78,15 +69,15 @@ public class AiGenerationTaskDomainService {
         entity.setDirectoryName(blankToNull(request.directoryName()));
         entity.setProvider(null);
         entity.setModel(null);
-        entity.setAssetIdsJson(writeValue(request.assetIds() == null ? List.of() : request.assetIds()));
-        entity.setWarningsJson(writeValue(List.of()));
-        entity.setInvalidCasesJson(writeValue(List.of()));
-        entity.setGeneratedCasesJson(writeValue(List.of()));
+        entity.setAssetIdsJson(responseSupport.writeValue(request.assetIds() == null ? List.of() : request.assetIds()));
+        entity.setWarningsJson(responseSupport.writeValue(List.of()));
+        entity.setInvalidCasesJson(responseSupport.writeValue(List.of()));
+        entity.setGeneratedCasesJson(responseSupport.writeValue(List.of()));
         entity.setReviewResultJson(null);
         entity.setGenerationRawOutput(null);
         entity.setReviewRawOutput(null);
-        entity.setAdoptedCaseIndexesJson(writeValue(List.of()));
-        entity.setDeletedCaseIndexesJson(writeValue(List.of()));
+        entity.setAdoptedCaseIndexesJson(responseSupport.writeValue(List.of()));
+        entity.setDeletedCaseIndexesJson(responseSupport.writeValue(List.of()));
         entity.setSavedCaseCount(0);
         entity.setGeneratedCount(0);
         entity.setCancelRequested(0);
@@ -110,11 +101,11 @@ public class AiGenerationTaskDomainService {
                     null,
                     null,
                     null,
-                    writeValue(Map.of("ignoredAssetCount", ignoredAssetCount))
+                    responseSupport.writeValue(Map.of("ignoredAssetCount", ignoredAssetCount))
             );
         }
 
-        return toResponse(entity, workspace, collectUserMap(List.of(entity)));
+        return responseSupport.toResponse(entity, workspace, responseSupport.collectUserMap(List.of(entity)));
     }
 
     public List<AiGenerationTaskResponse> listTasks(String workspaceCode) {
@@ -127,10 +118,10 @@ public class AiGenerationTaskDomainService {
                 .in(AiGenerationTaskEntity::getWorkspaceId, workspaceIds)
                 .orderByDesc(AiGenerationTaskEntity::getUpdatedAt)
                 .orderByDesc(AiGenerationTaskEntity::getId));
-        Map<Long, UserEntity> userMap = collectUserMap(tasks);
+        Map<Long, UserEntity> userMap = responseSupport.collectUserMap(tasks);
 
         return tasks.stream()
-                .map(task -> toResponse(task, workspaces.stream()
+                .map(task -> responseSupport.toResponse(task, workspaces.stream()
                         .filter(item -> item.getId().equals(task.getWorkspaceId()))
                         .findFirst()
                         .orElseGet(() -> workspaceService.requireWorkspaceById(task.getWorkspaceId())), userMap, false))
@@ -143,7 +134,7 @@ public class AiGenerationTaskDomainService {
                 workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode()
         );
         validateReadableWorkspaceScope(workspaceCode, workspace);
-        return toResponse(entity, workspace, collectUserMap(List.of(entity)));
+        return responseSupport.toResponse(entity, workspace, responseSupport.collectUserMap(List.of(entity)));
     }
 
     public AiGenerationTaskResponse cancelTask(String taskId, String workspaceCode) {
@@ -153,12 +144,12 @@ public class AiGenerationTaskDomainService {
         );
         validateReadableWorkspaceScope(workspaceCode, workspace);
         if (!RUNNING_STATUSES.contains(entity.getStatus())) {
-            return toResponse(entity, workspace, collectUserMap(List.of(entity)));
+            return responseSupport.toResponse(entity, workspace, responseSupport.collectUserMap(List.of(entity)));
         }
         entity.setUpdatedBy(CurrentUserContext.get());
         markCanceled(entity, "任务已取消，后续步骤不再继续执行。");
         AiGenerationTaskEntity latest = requireTask(taskId);
-        return toResponse(latest, workspace, collectUserMap(List.of(latest)));
+        return responseSupport.toResponse(latest, workspace, responseSupport.collectUserMap(List.of(latest)));
     }
 
     public AiGenerationTaskResponse retryTask(String taskId, String workspaceCode) {
@@ -188,14 +179,14 @@ public class AiGenerationTaskDomainService {
         entity.setProvider(null);
         entity.setModel(null);
         entity.setAssetIdsJson(source.getAssetIdsJson());
-        entity.setWarningsJson(writeValue(List.of()));
-        entity.setInvalidCasesJson(writeValue(List.of()));
-        entity.setGeneratedCasesJson(writeValue(List.of()));
+        entity.setWarningsJson(responseSupport.writeValue(List.of()));
+        entity.setInvalidCasesJson(responseSupport.writeValue(List.of()));
+        entity.setGeneratedCasesJson(responseSupport.writeValue(List.of()));
         entity.setReviewResultJson(null);
         entity.setGenerationRawOutput(null);
         entity.setReviewRawOutput(null);
-        entity.setAdoptedCaseIndexesJson(writeValue(List.of()));
-        entity.setDeletedCaseIndexesJson(writeValue(List.of()));
+        entity.setAdoptedCaseIndexesJson(responseSupport.writeValue(List.of()));
+        entity.setDeletedCaseIndexesJson(responseSupport.writeValue(List.of()));
         entity.setSavedCaseCount(0);
         entity.setGeneratedCount(0);
         entity.setCancelRequested(0);
@@ -206,9 +197,9 @@ public class AiGenerationTaskDomainService {
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
         aiGenerationTaskMapper.insert(entity);
-        appendEvent(entity.getTaskId(), "TASK_RETRIED", "SETUP", "INFO", "已创建重试任务，等待重新生成", null, null, null, null, writeValue(Map.of("sourceTaskId", source.getTaskId())));
+        appendEvent(entity.getTaskId(), "TASK_RETRIED", "SETUP", "INFO", "已创建重试任务，等待重新生成", null, null, null, null, responseSupport.writeValue(Map.of("sourceTaskId", source.getTaskId())));
 
-        return toResponse(entity, workspace, collectUserMap(List.of(entity)));
+        return responseSupport.toResponse(entity, workspace, responseSupport.collectUserMap(List.of(entity)));
     }
 
     public AiGenerationTaskResponse updateTask(String taskId, String workspaceCode, UpdateAiGenerationTaskRequest request) {
@@ -229,13 +220,13 @@ public class AiGenerationTaskDomainService {
             entity.setDirectoryName(blankToNull(request.directoryName()));
         }
         if (request.generatedCases() != null) {
-            entity.setGeneratedCasesJson(writeValue(request.generatedCases()));
+            entity.setGeneratedCasesJson(responseSupport.writeValue(request.generatedCases()));
         }
         if (request.adoptedCaseIndexes() != null) {
-            entity.setAdoptedCaseIndexesJson(writeValue(normalizeIndexes(request.adoptedCaseIndexes())));
+            entity.setAdoptedCaseIndexesJson(responseSupport.writeValue(responseSupport.normalizeIndexes(request.adoptedCaseIndexes())));
         }
         if (request.deletedCaseIndexes() != null) {
-            entity.setDeletedCaseIndexesJson(writeValue(normalizeIndexes(request.deletedCaseIndexes())));
+            entity.setDeletedCaseIndexesJson(responseSupport.writeValue(responseSupport.normalizeIndexes(request.deletedCaseIndexes())));
         }
         if (request.savedCaseCount() != null) {
             entity.setSavedCaseCount(Math.max(request.savedCaseCount(), 0));
@@ -243,7 +234,7 @@ public class AiGenerationTaskDomainService {
         entity.setUpdatedBy(CurrentUserContext.get());
         entity.setUpdatedAt(LocalDateTime.now());
         aiGenerationTaskMapper.updateById(entity);
-        return toResponse(entity, workspace, collectUserMap(List.of(entity)));
+        return responseSupport.toResponse(entity, workspace, responseSupport.collectUserMap(List.of(entity)));
     }
 
     public void deleteTask(String taskId, String workspaceCode) {
@@ -352,86 +343,4 @@ public class AiGenerationTaskDomainService {
         return value.trim();
     }
 
-    private List<Integer> normalizeIndexes(List<Integer> indexes) {
-        return indexes == null ? List.of() : indexes.stream()
-                .filter(item -> item != null && item >= 0)
-                .distinct()
-                .sorted(Comparator.naturalOrder())
-                .toList();
-    }
-
-    private String writeValue(Object value) {
-        try {
-            return OBJECT_MAPPER.writeValueAsString(value);
-        } catch (JsonProcessingException exception) {
-            throw new BadRequestException("Failed to serialize AI generation task data");
-        }
-    }
-
-    private <T> T readValue(String raw, TypeReference<T> typeReference, T fallback) {
-        if (raw == null || raw.isBlank()) {
-            return fallback;
-        }
-        try {
-            return OBJECT_MAPPER.readValue(raw, typeReference);
-        } catch (JsonProcessingException exception) {
-            return fallback;
-        }
-    }
-
-    private AiReviewResult readReviewResult(String raw) {
-        return readValue(raw, new TypeReference<AiReviewResult>() {}, null);
-    }
-
-    private AiGenerationTaskResponse toResponse(AiGenerationTaskEntity entity, WorkspaceEntity workspace, Map<Long, UserEntity> userMap) {
-        return toResponse(entity, workspace, userMap, true);
-    }
-
-    private AiGenerationTaskResponse toResponse(AiGenerationTaskEntity entity, WorkspaceEntity workspace, Map<Long, UserEntity> userMap, boolean includeEvents) {
-        UserEntity creator = entity.getCreatedBy() == null ? null : userMap.get(entity.getCreatedBy());
-        UserEntity updater = entity.getUpdatedBy() == null ? null : userMap.get(entity.getUpdatedBy());
-        return new AiGenerationTaskResponse(
-                entity.getTaskId(),
-                workspace.getWorkspaceCode(),
-                workspace.getWorkspaceName(),
-                entity.getRequirementTitle(),
-                entity.getRequirementContent(),
-                entity.getOutputMode(),
-                entity.getStatus(),
-                entity.getCurrentStep(),
-                entity.getStepMessage(),
-                entity.getErrorMessage(),
-                entity.getDirectoryId(),
-                entity.getDirectoryName(),
-                creator == null ? null : creator.getDisplayName(),
-                updater == null ? null : updater.getDisplayName(),
-                entity.getProvider(),
-                entity.getModel(),
-                entity.getGeneratedCount() == null ? 0 : entity.getGeneratedCount(),
-                entity.getSavedCaseCount() == null ? 0 : entity.getSavedCaseCount(),
-                readValue(entity.getWarningsJson(), new TypeReference<List<String>>() {}, List.of()),
-                readValue(entity.getInvalidCasesJson(), new TypeReference<List<AiInvalidCaseItem>>() {}, List.of()),
-                readValue(entity.getGeneratedCasesJson(), new TypeReference<List<GeneratedAiCaseItem>>() {}, List.of()),
-                readReviewResult(entity.getReviewResultJson()),
-                entity.getGenerationRawOutput(),
-                entity.getReviewRawOutput(),
-                includeEvents ? eventService.list(entity.getTaskId()) : List.of(),
-                readValue(entity.getAdoptedCaseIndexesJson(), new TypeReference<List<Integer>>() {}, List.of()),
-                readValue(entity.getDeletedCaseIndexesJson(), new TypeReference<List<Integer>>() {}, List.of()),
-                entity.getCancelRequested() != null && entity.getCancelRequested() == 1,
-                entity.getSourceTaskId(),
-                entity.getCreatedAt() == null ? null : entity.getCreatedAt().toString(),
-                entity.getUpdatedAt() == null ? null : entity.getUpdatedAt().toString(),
-                entity.getFinishedAt() == null ? null : entity.getFinishedAt().toString()
-        );
-    }
-
-    private Map<Long, UserEntity> collectUserMap(List<AiGenerationTaskEntity> entities) {
-        return entities.stream()
-                .flatMap(item -> Stream.of(item.getCreatedBy(), item.getUpdatedBy()))
-                .filter(id -> id != null && id > 0)
-                .distinct()
-                .map(userService::requireUser)
-                .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
-    }
 }

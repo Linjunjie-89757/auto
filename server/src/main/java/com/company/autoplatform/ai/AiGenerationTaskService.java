@@ -34,6 +34,7 @@ public class AiGenerationTaskService {
     private final AiCaseService aiCaseService;
     private final AiGenerationTaskEventService eventService;
     private final AiGenerationTaskResponseSupport responseSupport;
+    private final AiGenerationTaskResultMergeSupport resultMergeSupport;
     private final WorkspaceService workspaceService;
 
     public AiGenerationTaskService(
@@ -42,6 +43,7 @@ public class AiGenerationTaskService {
             AiCaseService aiCaseService,
             AiGenerationTaskEventService eventService,
             AiGenerationTaskResponseSupport responseSupport,
+            AiGenerationTaskResultMergeSupport resultMergeSupport,
             WorkspaceService workspaceService
     ) {
         this.aiGenerationTaskMapper = aiGenerationTaskMapper;
@@ -49,6 +51,7 @@ public class AiGenerationTaskService {
         this.aiCaseService = aiCaseService;
         this.eventService = eventService;
         this.responseSupport = responseSupport;
+        this.resultMergeSupport = resultMergeSupport;
         this.workspaceService = workspaceService;
     }
 
@@ -144,7 +147,7 @@ public class AiGenerationTaskService {
                 null,
                 generation.remainingCoverageGaps(),
                 generation.generatedCases().stream()
-                        .map(this::toExistingCaseItem)
+                        .map(resultMergeSupport::toExistingCaseItem)
                         .toList()
         ));
 
@@ -156,7 +159,7 @@ public class AiGenerationTaskService {
         entity.setStatus("COMPLETED");
         entity.setCurrentStep(4);
         entity.setStepMessage("任务已完成，可在记录详情中查看生成结果并继续处理。");
-        List<GeneratedAiCaseItem> finalCases = mergeCompleteReviewResult(generation.generatedCases(), review);
+        List<GeneratedAiCaseItem> finalCases = resultMergeSupport.mergeCompleteReviewResult(generation.generatedCases(), review);
         entity.setGeneratedCasesJson(responseSupport.writeValue(finalCases));
         entity.setGeneratedCount(finalCases.size());
         entity.setReviewResultJson(responseSupport.writeValue(review));
@@ -251,7 +254,7 @@ public class AiGenerationTaskService {
                         entity.getRequirementContent(),
                         null,
                         generation.remainingCoverageGaps(),
-                        generatedCases.stream().map(this::toExistingCaseItem).toList()
+                        generatedCases.stream().map(resultMergeSupport::toExistingCaseItem).toList()
                 ),
                 modelInfo -> {
                     reviewProvider[0] = modelInfo.provider();
@@ -267,7 +270,7 @@ public class AiGenerationTaskService {
                         if (generatedCases.size() >= AiCaseService.FINAL_MAX_CASES) {
                             return;
                         }
-                        GeneratedAiCaseItem supplemented = withStreamSupplementMetadata(update);
+                        GeneratedAiCaseItem supplemented = resultMergeSupport.withStreamSupplementMetadata(update);
                         generatedCases.add(supplemented);
                         latest.setGeneratedCasesJson(responseSupport.writeValue(generatedCases));
                         latest.setGeneratedCount(generatedCases.size());
@@ -286,7 +289,7 @@ public class AiGenerationTaskService {
                     if (update.itemIndex() == null || update.itemIndex() < 0 || update.itemIndex() >= generatedCases.size()) {
                         return;
                     }
-                    GeneratedAiCaseItem reviewed = applyReviewUpdate(generatedCases.get(update.itemIndex()), update);
+                    GeneratedAiCaseItem reviewed = resultMergeSupport.applyReviewUpdate(generatedCases.get(update.itemIndex()), update);
                     generatedCases.set(update.itemIndex(), reviewed);
                     latest.setGeneratedCasesJson(responseSupport.writeValue(generatedCases));
                     latest.setReviewRawOutput(limitRawOutput(update.rawOutput()));
@@ -313,7 +316,7 @@ public class AiGenerationTaskService {
         entity.setStepMessage("任务已完成，可在记录详情中查看生成结果并继续处理。");
         if (review.fallbackToComplete()) {
             generatedCases.clear();
-            generatedCases.addAll(mergeCompleteReviewResult(generation.generatedCases(), review.reviewResult()));
+            generatedCases.addAll(resultMergeSupport.mergeCompleteReviewResult(generation.generatedCases(), review.reviewResult()));
         }
         entity.setGeneratedCasesJson(responseSupport.writeValue(generatedCases));
         entity.setGeneratedCount(generatedCases.size());
@@ -406,181 +409,6 @@ public class AiGenerationTaskService {
         entity.setGenerationRawOutput(limitRawOutput(rawOutput));
         entity.setUpdatedAt(LocalDateTime.now());
         aiGenerationTaskMapper.updateById(entity);
-    }
-
-    private AiExistingCaseItem toExistingCaseItem(GeneratedAiCaseItem item) {
-        return new AiExistingCaseItem(
-                item.title(),
-                item.caseType(),
-                item.priority(),
-                item.precondition(),
-                item.steps(),
-                item.expectedResult(),
-                item.testAngle(),
-                item.generationReason(),
-                item.requirementEvidence()
-        );
-    }
-
-    private GeneratedAiCaseItem withReview(GeneratedAiCaseItem item, String status, String summary) {
-        return new GeneratedAiCaseItem(
-                item.title(),
-                item.caseType(),
-                item.priority(),
-                item.precondition(),
-                item.steps(),
-                item.expectedResult(),
-                item.riskNotes(),
-                item.testAngle(),
-                item.generationReason(),
-                item.requirementEvidence(),
-                item.aiSource() == null ? "INITIAL" : item.aiSource(),
-                item.reviewComment(),
-                item.optimizationReason(),
-                item.supplementReason(),
-                item.coverageGap(),
-                item.originalCaseSnapshot(),
-                item.warnings(),
-                status,
-                summary,
-                item.manualEdited(),
-                item.manualEditedByName(),
-                item.manualEditedAt()
-        );
-    }
-
-    private GeneratedAiCaseItem applyReviewUpdate(GeneratedAiCaseItem original, AiCaseService.ReviewCaseStreamUpdate update) {
-        GeneratedAiCaseItem base = update.optimizedCase() != null && "OPTIMIZED".equals(update.status())
-                ? update.optimizedCase()
-                : original;
-        return new GeneratedAiCaseItem(
-                base.title(),
-                base.caseType(),
-                base.priority(),
-                base.precondition(),
-                base.steps(),
-                base.expectedResult(),
-                base.riskNotes(),
-                firstNonBlank(base.testAngle(), original.testAngle()),
-                firstNonBlank(base.generationReason(), original.generationReason()),
-                firstNonBlank(base.requirementEvidence(), original.requirementEvidence()),
-                "OPTIMIZED".equals(update.status()) && update.optimizedCase() != null ? "REVIEW_OPTIMIZED" : firstNonBlank(original.aiSource(), "INITIAL"),
-                firstNonBlank(update.reviewComment(), update.summary(), base.reviewComment(), original.reviewComment()),
-                firstNonBlank(update.optimizationReason(), base.optimizationReason(), original.optimizationReason()),
-                firstNonBlank(base.supplementReason(), original.supplementReason()),
-                firstNonBlank(update.coverageGap(), base.coverageGap(), original.coverageGap()),
-                "OPTIMIZED".equals(update.status()) && update.optimizedCase() != null ? original : original.originalCaseSnapshot(),
-                base.warnings() == null ? original.warnings() : base.warnings(),
-                update.status(),
-                update.summary(),
-                original.manualEdited(),
-                original.manualEditedByName(),
-                original.manualEditedAt()
-        );
-    }
-
-    private GeneratedAiCaseItem withStreamSupplementMetadata(AiCaseService.ReviewCaseStreamUpdate update) {
-        GeneratedAiCaseItem item = update.supplementCase();
-        return new GeneratedAiCaseItem(
-                item.title(),
-                item.caseType(),
-                item.priority(),
-                item.precondition(),
-                item.steps(),
-                item.expectedResult(),
-                item.riskNotes(),
-                item.testAngle(),
-                item.generationReason(),
-                item.requirementEvidence(),
-                "REVIEW_SUPPLEMENTED",
-                firstNonBlank(item.reviewComment(), update.reviewComment()),
-                item.optimizationReason(),
-                firstNonBlank(item.supplementReason(), update.supplementReason(), update.summary()),
-                firstNonBlank(item.coverageGap(), update.coverageGap()),
-                null,
-                item.warnings(),
-                "SUPPLEMENTED",
-                firstNonBlank(item.aiReviewSummary(), update.summary(), update.supplementReason(), update.coverageGap()),
-                item.manualEdited(),
-                item.manualEditedByName(),
-                item.manualEditedAt()
-        );
-    }
-
-    private List<GeneratedAiCaseItem> mergeCompleteReviewResult(List<GeneratedAiCaseItem> generatedCases, AiReviewResult review) {
-        List<GeneratedAiCaseItem> finalCases = new ArrayList<>();
-        for (GeneratedAiCaseItem item : generatedCases) {
-            finalCases.add(withSource(item, "INITIAL"));
-        }
-        if (review == null) {
-            return finalCases;
-        }
-        for (AiReviewCaseDecision decision : review.caseDecisions() == null ? List.<AiReviewCaseDecision>of() : review.caseDecisions()) {
-            if (decision.caseIndex() == null || decision.caseIndex() < 0 || decision.caseIndex() >= finalCases.size()) {
-                continue;
-            }
-            GeneratedAiCaseItem current = finalCases.get(decision.caseIndex());
-            GeneratedAiCaseItem next = applyReviewDecision(current, decision);
-            finalCases.set(decision.caseIndex(), next);
-        }
-        for (GeneratedAiCaseItem item : review.supplementCases() == null ? List.<GeneratedAiCaseItem>of() : review.supplementCases()) {
-            if (finalCases.size() >= AiCaseService.FINAL_MAX_CASES) {
-                break;
-            }
-            finalCases.add(withSupplementMetadata(item));
-        }
-        return finalCases;
-    }
-
-    private GeneratedAiCaseItem applyReviewDecision(GeneratedAiCaseItem original, AiReviewCaseDecision decision) {
-        String status = decision.status() == null ? "CONFIRM_REQUIRED" : decision.status();
-        GeneratedAiCaseItem base = "OPTIMIZED".equals(status) && decision.optimizedCase() != null
-                ? decision.optimizedCase()
-                : original;
-        return new GeneratedAiCaseItem(
-                base.title(),
-                base.caseType(),
-                base.priority(),
-                base.precondition(),
-                base.steps(),
-                base.expectedResult(),
-                base.riskNotes(),
-                firstNonBlank(base.testAngle(), original.testAngle()),
-                firstNonBlank(base.generationReason(), original.generationReason()),
-                firstNonBlank(base.requirementEvidence(), original.requirementEvidence()),
-                "OPTIMIZED".equals(status) && decision.optimizedCase() != null ? "REVIEW_OPTIMIZED" : firstNonBlank(original.aiSource(), "INITIAL"),
-                firstNonBlank(decision.reviewComment(), decision.summary(), base.reviewComment(), original.reviewComment()),
-                firstNonBlank(decision.optimizationReason(), base.optimizationReason(), original.optimizationReason()),
-                firstNonBlank(base.supplementReason(), original.supplementReason()),
-                firstNonBlank(decision.coverageGap(), base.coverageGap(), original.coverageGap()),
-                "OPTIMIZED".equals(status) && decision.optimizedCase() != null ? original : original.originalCaseSnapshot(),
-                base.warnings() == null ? original.warnings() : base.warnings(),
-                status,
-                decision.summary(),
-                original.manualEdited(),
-                original.manualEditedByName(),
-                original.manualEditedAt()
-        );
-    }
-
-    private GeneratedAiCaseItem withSource(GeneratedAiCaseItem item, String source) {
-        return new GeneratedAiCaseItem(
-                item.title(), item.caseType(), item.priority(), item.precondition(), item.steps(), item.expectedResult(),
-                item.riskNotes(), item.testAngle(), item.generationReason(), item.requirementEvidence(),
-                firstNonBlank(item.aiSource(), source), item.reviewComment(), item.optimizationReason(), item.supplementReason(),
-                item.coverageGap(), item.originalCaseSnapshot(), item.warnings(), item.aiReviewStatus(), item.aiReviewSummary(),
-                item.manualEdited(), item.manualEditedByName(), item.manualEditedAt()
-        );
-    }
-
-    private GeneratedAiCaseItem withSupplementMetadata(GeneratedAiCaseItem item) {
-        return new GeneratedAiCaseItem(
-                item.title(), item.caseType(), item.priority(), item.precondition(), item.steps(), item.expectedResult(),
-                item.riskNotes(), item.testAngle(), item.generationReason(), item.requirementEvidence(),
-                "REVIEW_SUPPLEMENTED", item.reviewComment(), item.optimizationReason(), item.supplementReason(),
-                item.coverageGap(), null, item.warnings(), "SUPPLEMENTED", firstNonBlank(item.aiReviewSummary(), item.supplementReason(), item.coverageGap()),
-                item.manualEdited(), item.manualEditedByName(), item.manualEditedAt()
-        );
     }
 
     private void appendCompleteReviewEvents(String taskId, List<GeneratedAiCaseItem> finalCases, AiReviewResult review, String provider, String model) {

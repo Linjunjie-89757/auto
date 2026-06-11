@@ -1,10 +1,12 @@
 package com.company.autoplatform.settings;
 
 import com.company.autoplatform.IntegrationTestSupport;
+import com.company.autoplatform.common.BadRequestException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class DbConnectionServiceTests extends IntegrationTestSupport {
 
@@ -13,6 +15,12 @@ class DbConnectionServiceTests extends IntegrationTestSupport {
 
     @Autowired
     private DbConnectionMapper dbConnectionMapper;
+
+    @Autowired
+    private EnvConfigMapper envConfigMapper;
+
+    @Autowired
+    private ParamSetMapper paramSetMapper;
 
     @Test
     void settingsListsSupportOptionalFilters() {
@@ -139,5 +147,102 @@ class DbConnectionServiceTests extends IntegrationTestSupport {
 
         settingsService.deleteDbConnection(created.id(), WORKSPACE_CODE);
         assertThat(dbConnectionMapper.selectById(created.id())).isNull();
+    }
+
+    @Test
+    void envAndParamCrudUpdatesStatusAndDeletesRecords() {
+        String unique = "settings-crud-" + System.nanoTime();
+
+        EnvConfigItem env = settingsService.createEnv(WORKSPACE_CODE, new CreateEnvConfigRequest(
+                null,
+                "DEV",
+                unique + "-env",
+                "https://" + unique + ".example.com",
+                "{\"token\":\"one\"}"
+        ));
+        assertThat(env.id()).isNotNull();
+        assertThat(env.workspaceCode()).isEqualTo(WORKSPACE_CODE);
+        assertThat(env.status()).isOne();
+
+        EnvConfigItem updatedEnv = settingsService.updateEnv(env.id(), WORKSPACE_CODE, new CreateEnvConfigRequest(
+                null,
+                "TEST",
+                unique + "-env-updated",
+                "https://" + unique + "-updated.example.com",
+                "{\"token\":\"two\"}"
+        ));
+        assertThat(updatedEnv.envType()).isEqualTo("TEST");
+        assertThat(updatedEnv.envName()).isEqualTo(unique + "-env-updated");
+        assertThat(updatedEnv.configJson()).contains("two");
+
+        EnvConfigItem disabledEnv = settingsService.updateEnvStatus(
+                env.id(),
+                WORKSPACE_CODE,
+                new UpdateSettingStatusRequest(0)
+        );
+        assertThat(disabledEnv.status()).isZero();
+
+        ParamSetItem param = settingsService.createParam(WORKSPACE_CODE, new CreateParamSetRequest(
+                null,
+                "API",
+                unique + "-param",
+                "{\"value\":\"one\"}"
+        ));
+        assertThat(param.id()).isNotNull();
+        assertThat(param.workspaceCode()).isEqualTo(WORKSPACE_CODE);
+        assertThat(param.status()).isOne();
+
+        ParamSetItem updatedParam = settingsService.updateParam(param.id(), WORKSPACE_CODE, new CreateParamSetRequest(
+                null,
+                "GLOBAL",
+                unique + "-param-updated",
+                "{\"value\":\"two\"}"
+        ));
+        assertThat(updatedParam.paramType()).isEqualTo("GLOBAL");
+        assertThat(updatedParam.paramName()).isEqualTo(unique + "-param-updated");
+        assertThat(updatedParam.contentJson()).contains("two");
+
+        ParamSetItem disabledParam = settingsService.updateParamStatus(
+                param.id(),
+                WORKSPACE_CODE,
+                new UpdateSettingStatusRequest(0)
+        );
+        assertThat(disabledParam.status()).isZero();
+
+        settingsService.deleteEnv(env.id(), WORKSPACE_CODE);
+        settingsService.deleteParam(param.id(), WORKSPACE_CODE);
+        assertThat(envConfigMapper.selectById(env.id())).isNull();
+        assertThat(paramSetMapper.selectById(param.id())).isNull();
+    }
+
+    @Test
+    void dbConnectionTestFailureKeepsExistingExceptionSemantics() {
+        assertThatThrownBy(() -> settingsService.testDbConnection(WORKSPACE_CODE, new DbConnectionTestRequest(
+                null,
+                null,
+                null,
+                "H2",
+                "com.example.MissingDriver",
+                "jdbc:h2:mem:missing-driver;MODE=MySQL",
+                "sa",
+                "",
+                1000
+        )))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("JDBC driver is not available");
+
+        assertThatThrownBy(() -> settingsService.testDbConnection(WORKSPACE_CODE, new DbConnectionTestRequest(
+                null,
+                null,
+                null,
+                "H2",
+                "org.h2.Driver",
+                "",
+                "sa",
+                "",
+                1000
+        )))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("JDBC URL cannot be blank");
     }
 }

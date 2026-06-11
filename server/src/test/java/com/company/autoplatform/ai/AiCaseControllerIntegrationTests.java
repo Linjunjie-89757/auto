@@ -1,6 +1,8 @@
 package com.company.autoplatform.ai;
 
 import com.company.autoplatform.IntegrationTestSupport;
+import com.company.autoplatform.auth.CurrentUserPrincipal;
+import com.company.autoplatform.auth.PlatformRole;
 import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.workspace.WorkspaceScope;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -8,6 +10,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -332,6 +336,150 @@ class AiCaseControllerIntegrationTests extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.data.message").value("AI connection is available"));
     }
 
+    @Test
+    void generateReviewAndImageSupportValidateKeepSynchronousResponseShape() throws Exception {
+        reset(aiProviderClient);
+        switchToTestUser(101L, "ai-sync-user");
+        String unique = uniquePrefix("sync");
+        Long providerId = createProvider(unique + "-provider", "gpt-4o-mini", unique + "-secret");
+        createConfig(providerId, "CASE_GENERATOR", "gpt-4o-mini", unique + " generator prompt", 1, true);
+        createConfig(providerId, "CASE_REVIEWER", "gpt-4o-mini", unique + " reviewer prompt", 1, true);
+        Long assetId = uploadImageAsset(unique + "-asset");
+        GeneratedAiCaseItem generatedCase = generatedCase(unique + " generated case");
+        AiReviewResult reviewResult = new AiReviewResult(
+                "APPROVE",
+                "review summary",
+                List.of("issue one"),
+                List.of("suggestion one"),
+                List.of(new AiReviewCaseDecision(
+                        1,
+                        "APPROVED",
+                        "case approved",
+                        "coverage ok",
+                        "evidence ok",
+                        "review comment",
+                        null,
+                        null,
+                        null
+                )),
+                List.of(),
+                List.of("unresolved gap"),
+                "{\"result\":\"APPROVE\"}",
+                true
+        );
+        when(aiProviderClient.generate(any(), any(), any(), any())).thenReturn(new AiGeneratedCasesResult(
+                List.of(generatedCase),
+                "coverage summary",
+                List.of("remaining gap"),
+                List.of("generation warning"),
+                List.of(),
+                "{\"cases\":[{\"title\":\"" + unique + "\"}]}"
+        ));
+        when(aiProviderClient.review(any(), any(), any())).thenReturn(reviewResult);
+
+        mockMvc.perform(post("/api/cases/ai/tasks/image-support/validate")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "assetIds": [%d]
+                                }
+                                """.formatted(assetId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.message").value("AI generation image support validated"));
+
+        mockMvc.perform(post("/api/cases/ai/generate")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "workspaceCode": "%s",
+                                  "requirementTitle": "%s requirement",
+                                  "requirementContent": "User can login and view dashboard.",
+                                  "sceneFocus": "login",
+                                  "improvementNotes": "cover happy path",
+                                  "assetIds": [],
+                                  "existingCases": [],
+                                  "ownerId": 101,
+                                  "maxCases": 2
+                                }
+                                """.formatted(WORKSPACE_CODE, unique)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.workspaceCode").value(WORKSPACE_CODE))
+                .andExpect(jsonPath("$.data.provider").value("OPENAI_COMPATIBLE_CHAT"))
+                .andExpect(jsonPath("$.data.model").value("gpt-4o-mini"))
+                .andExpect(jsonPath("$.data.systemMaxCases").value(50))
+                .andExpect(jsonPath("$.data.requestedMaxCases").value(2))
+                .andExpect(jsonPath("$.data.effectiveMaxCases").value(2))
+                .andExpect(jsonPath("$.data.actualGeneratedCount").value(1))
+                .andExpect(jsonPath("$.data.generatedCases.length()").value(1))
+                .andExpect(jsonPath("$.data.generatedCases[0].title").value(unique + " generated case"))
+                .andExpect(jsonPath("$.data.generatedCases[0].caseType").value("FUNCTION"))
+                .andExpect(jsonPath("$.data.generatedCases[0].priority").value("P1"))
+                .andExpect(jsonPath("$.data.generatedCases[0].steps").value("1. Open login page"))
+                .andExpect(jsonPath("$.data.generatedCases[0].expectedResult").value("Dashboard is visible"))
+                .andExpect(jsonPath("$.data.generatedCases[0].aiSource").value("AI_GENERATED"))
+                .andExpect(jsonPath("$.data.coverageSummary").value("coverage summary"))
+                .andExpect(jsonPath("$.data.remainingCoverageGaps[0]").value("remaining gap"))
+                .andExpect(jsonPath("$.data.warnings[0]").value("generation warning"))
+                .andExpect(jsonPath("$.data.invalidCases.length()").value(0))
+                .andExpect(jsonPath("$.data.rawContent").isString())
+                .andExpect(jsonPath("$.data.ignoredImages").value(false));
+
+        mockMvc.perform(post("/api/cases/ai/review")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "requirementTitle": "%s requirement",
+                                  "requirementContent": "User can login and view dashboard.",
+                                  "sceneFocus": "login",
+                                  "remainingCoverageGaps": ["remaining gap"],
+                                  "generatedCases": [
+                                    %s
+                                  ]
+                                }
+                                """.formatted(unique, existingCaseJson(unique + " generated case"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.result").value("APPROVE"))
+                .andExpect(jsonPath("$.data.summary").value("review summary"))
+                .andExpect(jsonPath("$.data.issues[0]").value("issue one"))
+                .andExpect(jsonPath("$.data.suggestions[0]").value("suggestion one"))
+                .andExpect(jsonPath("$.data.caseDecisions.length()").value(1))
+                .andExpect(jsonPath("$.data.caseDecisions[0].caseIndex").value(1))
+                .andExpect(jsonPath("$.data.caseDecisions[0].status").value("APPROVED"))
+                .andExpect(jsonPath("$.data.caseDecisions[0].summary").value("case approved"))
+                .andExpect(jsonPath("$.data.supplementCases.length()").value(0))
+                .andExpect(jsonPath("$.data.unresolvedCoverageGaps[0]").value("unresolved gap"))
+                .andExpect(jsonPath("$.data.rawContent").value("{\"result\":\"APPROVE\"}"))
+                .andExpect(jsonPath("$.data.structured").value(true));
+    }
+
+    @Test
+    void imageSupportValidateFailsWhenGeneratorModelDoesNotSupportImages() throws Exception {
+        reset(aiProviderClient);
+        switchToTestUser(102L, "ai-image-user");
+        String unique = uniquePrefix("image-fail");
+        Long providerId = createProvider(unique + "-provider", "text-only-model", unique + "-secret");
+        createConfig(providerId, "CASE_GENERATOR", "text-only-model", unique + " generator prompt", 1, false);
+        Long assetId = uploadImageAsset(unique + "-asset");
+
+        mockMvc.perform(post("/api/cases/ai/tasks/image-support/validate")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "assetIds": [%d]
+                                }
+                                """.formatted(assetId)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message").isString());
+    }
+
     private Long createProvider(String connectionName, String modelName, String apiKey) throws Exception {
         String response = mockMvc.perform(post("/api/cases/ai/providers")
                         .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
@@ -352,6 +500,44 @@ class AiCaseControllerIntegrationTests extends IntegrationTestSupport {
                 .getResponse()
                 .getContentAsString();
         return objectMapper.readTree(response).path("data").path("id").asLong();
+    }
+
+    private Long createConfig(
+            Long providerId,
+            String roleType,
+            String model,
+            String promptTemplate,
+            int status,
+            Boolean supportsImageInput
+    ) throws Exception {
+        String response = mockMvc.perform(post("/api/cases/ai/config")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType("application/json")
+                        .content(configRequest(providerId, roleType, model, promptTemplate, status, supportsImageInput)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").isNumber())
+                .andExpect(jsonPath("$.data.roleType").value(roleType))
+                .andExpect(jsonPath("$.data.providerConnectionId").value(providerId.intValue()))
+                .andExpect(jsonPath("$.data.model").value(model))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return objectMapper.readTree(response).path("data").path("id").asLong();
+    }
+
+    private Long uploadImageAsset(String fileName) throws Exception {
+        byte[] png = tinyPng();
+        String response = mockMvc.perform(multipart("/api/cases/ai/assets")
+                        .file(new MockMultipartFile("files", fileName + ".png", "image/png", png))
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data[0].id").isNumber())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return objectMapper.readTree(response).path("data").get(0).path("id").asLong();
     }
 
     private String providerRequest(String connectionName, String modelName, String apiKey) {
@@ -376,6 +562,23 @@ class AiCaseControllerIntegrationTests extends IntegrationTestSupport {
     }
 
     private String configRequest(Long providerId, String roleType, String model, String promptTemplate, int status) {
+        return configRequest(providerId, roleType, model, promptTemplate, status, null);
+    }
+
+    private String configRequest(
+            Long providerId,
+            String roleType,
+            String model,
+            String promptTemplate,
+            int status,
+            Boolean supportsImageInput
+    ) {
+        String supportsImageInputField = supportsImageInput == null
+                ? ""
+                : """
+                  ,
+                  "supportsImageInput": %s
+                """.formatted(supportsImageInput);
         return """
                 {
                   "workspaceCode": "%s",
@@ -387,9 +590,9 @@ class AiCaseControllerIntegrationTests extends IntegrationTestSupport {
                   "temperature": 0.3,
                   "topP": 0.9,
                   "maxCases": 12,
-                  "status": %d
+                  "status": %d%s
                 }
-                """.formatted(WORKSPACE_CODE, roleType, providerId, model, promptTemplate, status);
+                """.formatted(WORKSPACE_CODE, roleType, providerId, model, promptTemplate, status, supportsImageInputField);
     }
 
     private AiModelCapabilities capabilities(boolean stableAvailable, boolean streamOutput, boolean imageInput) {
@@ -400,6 +603,63 @@ class AiCaseControllerIntegrationTests extends IntegrationTestSupport {
                 AiModelCapabilities.value(imageInput, AiModelCapabilities.SOURCE_PROBED, "image input capability"),
                 AiModelCapabilities.value(false, AiModelCapabilities.SOURCE_PROBED, "long context unsupported"),
                 AiModelCapabilities.value(stableAvailable, AiModelCapabilities.SOURCE_PROBED, "stable availability")
+        );
+    }
+
+    private GeneratedAiCaseItem generatedCase(String title) {
+        return new GeneratedAiCaseItem(
+                title,
+                "FUNCTION",
+                "P1",
+                "User has valid account",
+                "1. Open login page",
+                "Dashboard is visible",
+                "Login risk",
+                "Happy path",
+                "Core login flow",
+                "Requirement line 1",
+                "AI_GENERATED",
+                null,
+                null,
+                null,
+                null,
+                null,
+                List.of(),
+                "PENDING_REVIEW",
+                "Pending review",
+                false,
+                null,
+                null
+        );
+    }
+
+    private String existingCaseJson(String title) {
+        return """
+                {
+                  "title": "%s",
+                  "caseType": "FUNCTION",
+                  "priority": "P1",
+                  "precondition": "User has valid account",
+                  "steps": "1. Open login page",
+                  "expectedResult": "Dashboard is visible",
+                  "testAngle": "Happy path",
+                  "generationReason": "Core login flow",
+                  "requirementEvidence": "Requirement line 1"
+                }
+                """.formatted(title);
+    }
+
+    private void switchToTestUser(Long userId, String username) {
+        CurrentUserPrincipal principal = new CurrentUserPrincipal(
+                userId,
+                username,
+                username,
+                "{noop}123456",
+                PlatformRole.PLATFORM_ADMIN,
+                1
+        );
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(principal, principal.getPassword(), principal.getAuthorities())
         );
     }
 

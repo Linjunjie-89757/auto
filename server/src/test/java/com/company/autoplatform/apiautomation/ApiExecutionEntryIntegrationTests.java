@@ -87,6 +87,41 @@ class ApiExecutionEntryIntegrationTests extends IntegrationTestSupport {
         assertThat(refreshed.lastRunAt()).isNotNull();
     }
 
+    @Test
+    void runSavedCaseReturnsSuccessfulRunUpdatesLastRunResultAndWritesHistory() {
+        ApiDefinitionCaseDetail apiCase = createSavedCase("saved case entry smoke " + System.nanoTime());
+
+        ApiRunResponse run = apiAutomationService.runCase(
+                apiCase.id(),
+                WORKSPACE_CODE,
+                new ApiRunRequest(WORKSPACE_CODE, null, null)
+        );
+
+        assertSuccessfulRun(run);
+        assertCaseRunPersisted(apiCase.id(), run.reportId());
+    }
+
+    @Test
+    void debugRunCaseDraftWithSavedCaseReturnsSuccessfulRunAndWritesHistory() {
+        ApiDefinitionCaseDetail apiCase = createSavedCase("draft case entry smoke " + System.nanoTime());
+
+        ApiRunResponse run = apiAutomationService.debugRunCaseDraft(WORKSPACE_CODE, new ApiDebugCaseRequest(
+                WORKSPACE_CODE,
+                apiCase.id(),
+                apiCase.definitionId(),
+                "draft run for " + apiCase.name(),
+                requestConfig(),
+                List.of(statusCodeAssertion()),
+                List.of(),
+                List.of(),
+                null,
+                null
+        ));
+
+        assertSuccessfulRun(run);
+        assertCaseRunPersisted(apiCase.id(), run.reportId());
+    }
+
     private void assertSuccessfulRun(ApiRunResponse run) {
         assertThat(run.taskId()).isNotNull();
         assertThat(run.reportId()).isNotNull();
@@ -97,6 +132,44 @@ class ApiExecutionEntryIntegrationTests extends IntegrationTestSupport {
         assertThat(step.response()).isNotNull();
         assertThat(step.response().statusCode()).isEqualTo(200);
         assertThat(step.assertionResults()).allMatch(ApiAssertionResult::success);
+    }
+
+    private void assertCaseRunPersisted(Long caseId, Long reportId) {
+        ApiDefinitionCaseDetail refreshed = apiAutomationService.getCase(caseId, WORKSPACE_CODE);
+        assertThat(refreshed.lastRunResult()).isEqualTo("SUCCESS");
+        assertThat(refreshed.lastRunAt()).isNotNull();
+        assertThat(apiAutomationService.listCaseRunHistory(caseId, WORKSPACE_CODE).items())
+                .anySatisfy(history -> {
+                    assertThat(history.reportId()).isEqualTo(reportId);
+                    assertThat(history.result()).isEqualTo("PASSED");
+                    assertThat(history.statusCode()).isEqualTo(200);
+                });
+    }
+
+    private ApiDefinitionCaseDetail createSavedCase(String caseName) {
+        ApiDefinitionDetail definition = apiAutomationService.createDefinition(WORKSPACE_CODE, new SaveApiDefinitionRequest(
+                WORKSPACE_CODE,
+                caseName + " definition",
+                null,
+                "entry smoke",
+                List.of("entry-smoke"),
+                requestConfig(),
+                List.of(statusCodeAssertion()),
+                List.of(),
+                List.of(),
+                List.of()
+        ));
+        return apiAutomationService.createCase(WORKSPACE_CODE, new SaveApiDefinitionCaseRequest(
+                WORKSPACE_CODE,
+                definition.id(),
+                caseName,
+                "entry smoke",
+                List.of("entry-smoke"),
+                requestConfig(),
+                List.of(statusCodeAssertion()),
+                List.of(),
+                List.of()
+        ));
     }
 
     private ApiRequestConfigInput requestConfig() {

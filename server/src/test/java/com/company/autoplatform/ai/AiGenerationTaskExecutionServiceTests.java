@@ -267,6 +267,129 @@ class AiGenerationTaskExecutionServiceTests extends IntegrationTestSupport {
                 );
     }
 
+    @Test
+    void executeStreamTaskMarksFailedWhenGenerationStreamFails() {
+        reset(aiProviderClient);
+        String unique = uniquePrefix("stream-generation-fail");
+        String model = unique + "-model";
+        AiProviderConnectionItem provider = createProvider(unique, model);
+        upsertConfig("CASE_GENERATOR", provider.id(), model, unique + " generator prompt");
+        upsertConfig("CASE_REVIEWER", provider.id(), model, unique + " reviewer prompt");
+        when(aiProviderClient.streamStructuredContentWithResult(any(), any(), any(), any()))
+                .thenThrow(new IllegalStateException("mock stream generation failed"));
+        AiGenerationTaskResponse created = createTask(unique, "STREAM");
+
+        aiGenerationTaskService.executeTask(created.taskId(), WORKSPACE_CODE);
+
+        AiGenerationTaskResponse detail = aiGenerationTaskService.getTask(created.taskId(), WORKSPACE_CODE);
+        assertThat(detail.status()).isEqualTo("FAILED");
+        assertThat(detail.finishedAt()).isNotBlank();
+        assertThat(detail.errorMessage()).isEqualTo("mock stream generation failed");
+        assertThat(detail.generatedCount()).isZero();
+        assertThat(detail.generatedCases()).isEmpty();
+        assertThat(detail.generationRawOutput()).isNull();
+        assertThat(detail.reviewResult()).isNull();
+        assertThat(detail.reviewRawOutput()).isNull();
+        assertThat(detail.events()).extracting(AiGenerationTaskEventResponse::eventType)
+                .contains("TASK_STARTED", "GENERATION_MODEL_READY", "TASK_FAILED")
+                .doesNotContain("CASE_GENERATED", "GENERATION_COMPLETED", "REVIEW_STARTED");
+    }
+
+    @Test
+    void executeStreamTaskKeepsGenerationResultWhenReviewStreamFails() {
+        reset(aiProviderClient);
+        String unique = uniquePrefix("stream-review-fail");
+        String model = unique + "-model";
+        AiProviderConnectionItem provider = createProvider(unique, model);
+        upsertConfig("CASE_GENERATOR", provider.id(), model, unique + " generator prompt");
+        upsertConfig("CASE_REVIEWER", provider.id(), model, unique + " reviewer prompt");
+        GeneratedAiCaseItem generatedCase = generatedCase(unique + " streamed before review failure");
+        String generationLine = "{\"title\":\"" + unique + " streamed before review failure\",\"caseType\":\"FUNCTION\",\"priority\":\"P1\","
+                + "\"precondition\":\"User has valid account\",\"steps\":\"1. Open login page\","
+                + "\"expectedResult\":\"Dashboard is visible\",\"aiSource\":\"AI_STREAM\"}";
+        when(aiProviderClient.parseGeneratedCasesContent(anyString(), anyInt())).thenReturn(new AiGeneratedCasesResult(
+                List.of(generatedCase),
+                "coverage summary",
+                List.of("remaining gap"),
+                List.of(),
+                List.of(),
+                generationLine
+        ));
+        when(aiProviderClient.streamStructuredContentWithResult(any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    Consumer<String> deltaConsumer = invocation.getArgument(3);
+                    deltaConsumer.accept(generationLine + "\n");
+                    return new AiProviderClient.StreamContentResult(generationLine + "\n", false, null);
+                })
+                .thenThrow(new IllegalStateException("mock stream review failed"));
+        AiGenerationTaskResponse created = createTask(unique, "STREAM");
+
+        aiGenerationTaskService.executeTask(created.taskId(), WORKSPACE_CODE);
+
+        AiGenerationTaskResponse detail = aiGenerationTaskService.getTask(created.taskId(), WORKSPACE_CODE);
+        assertThat(detail.status()).isEqualTo("FAILED");
+        assertThat(detail.finishedAt()).isNotBlank();
+        assertThat(detail.errorMessage()).isEqualTo("mock stream review failed");
+        assertThat(detail.generatedCount()).isEqualTo(1);
+        assertThat(detail.generatedCases()).hasSize(1);
+        assertThat(detail.generatedCases().get(0).title()).isEqualTo(unique + " streamed before review failure");
+        assertThat(detail.generationRawOutput()).contains(unique + " streamed before review failure");
+        assertThat(detail.reviewResult()).isNull();
+        assertThat(detail.reviewRawOutput()).isNull();
+        assertThat(detail.events()).extracting(AiGenerationTaskEventResponse::eventType)
+                .contains("CASE_GENERATED", "GENERATION_COMPLETED", "REVIEW_STARTED", "TASK_FAILED");
+    }
+
+    @Test
+    void executeStreamTaskCompletesWhenGenerationFallsBackToCompleteOutput() {
+        reset(aiProviderClient);
+        String unique = uniquePrefix("stream-fallback");
+        String model = unique + "-model";
+        AiProviderConnectionItem provider = createProvider(unique, model);
+        upsertConfig("CASE_GENERATOR", provider.id(), model, unique + " generator prompt");
+        upsertConfig("CASE_REVIEWER", provider.id(), model, unique + " reviewer prompt");
+        GeneratedAiCaseItem generatedCase = generatedCase(unique + " fallback case");
+        String generationContent = "{\"cases\":[{\"title\":\"" + unique + " fallback case\",\"caseType\":\"FUNCTION\",\"priority\":\"P1\","
+                + "\"precondition\":\"User has valid account\",\"steps\":\"1. Open login page\","
+                + "\"expectedResult\":\"Dashboard is visible\",\"aiSource\":\"AI_FALLBACK\"}]}";
+        String reviewLine = "{\"caseIndex\":0,\"status\":\"APPROVED\",\"summary\":\"fallback case approved\","
+                + "\"coverageComment\":\"coverage ok\",\"evidenceComment\":\"evidence ok\","
+                + "\"reviewComment\":\"review comment\"}";
+        when(aiProviderClient.parseGeneratedCasesContent(anyString(), anyInt())).thenReturn(new AiGeneratedCasesResult(
+                List.of(generatedCase),
+                "coverage summary",
+                List.of("remaining gap"),
+                List.of(),
+                List.of(),
+                generationContent
+        ));
+        when(aiProviderClient.streamStructuredContentWithResult(any(), any(), any(), any()))
+                .thenReturn(new AiProviderClient.StreamContentResult(generationContent, true, "mock generation fallback"))
+                .thenAnswer(invocation -> {
+                    Consumer<String> deltaConsumer = invocation.getArgument(3);
+                    deltaConsumer.accept(reviewLine + "\n");
+                    return new AiProviderClient.StreamContentResult(reviewLine + "\n", false, null);
+                });
+        AiGenerationTaskResponse created = createTask(unique, "STREAM");
+
+        aiGenerationTaskService.executeTask(created.taskId(), WORKSPACE_CODE);
+
+        AiGenerationTaskResponse detail = aiGenerationTaskService.getTask(created.taskId(), WORKSPACE_CODE);
+        assertThat(detail.status()).isEqualTo("COMPLETED");
+        assertThat(detail.currentStep()).isEqualTo(4);
+        assertThat(detail.finishedAt()).isNotBlank();
+        assertThat(detail.generatedCount()).isEqualTo(1);
+        assertThat(detail.generatedCases()).hasSize(1);
+        assertThat(detail.generatedCases().get(0).title()).isEqualTo(unique + " fallback case");
+        assertThat(detail.generatedCases().get(0).aiReviewStatus()).isEqualTo("APPROVED");
+        assertThat(detail.reviewResult()).isNotNull();
+        assertThat(detail.reviewResult().result()).isEqualTo("APPROVE");
+        assertThat(detail.generationRawOutput()).contains(unique + " fallback case");
+        assertThat(detail.reviewRawOutput()).contains("fallback case approved");
+        assertThat(detail.events()).extracting(AiGenerationTaskEventResponse::eventType)
+                .contains("GENERATION_STREAM_FALLBACK", "GENERATION_COMPLETED", "REVIEW_STARTED", "REVIEW_COMPLETED", "TASK_COMPLETED");
+    }
+
     private AiProviderConnectionItem createProvider(String unique, String model) {
         return aiCaseService.createProvider(WORKSPACE_CODE, new SaveAiProviderConnectionRequest(
                 WORKSPACE_CODE,

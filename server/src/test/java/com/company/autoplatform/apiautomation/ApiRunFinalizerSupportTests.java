@@ -127,8 +127,8 @@ class ApiRunFinalizerSupportTests {
         verify(reportMapper).updateById(blankReport);
     }
 
-    private ApiExecutionEngineSupport.RunStepComputation step(boolean success, String errorMessage) {
-        return new ApiExecutionEngineSupport.RunStepComputation(success, new ApiRunStepResultResponse(
+    private ApiExecutionRuntimeModels.RunStepComputation step(boolean success, String errorMessage) {
+        return new ApiExecutionRuntimeModels.RunStepComputation(success, new ApiRunStepResultResponse(
                 null,
                 null,
                 1,

@@ -139,8 +139,8 @@ class ApiProcessorExecutorTests {
                 .hasMessage("Missing variable: missing");
     }
 
-    private ApiExecutionEngineSupport.MutableRequestConfig requestConfig() {
-        return new ApiExecutionEngineSupport.MutableRequestConfig(
+    private ApiExecutionRuntimeModels.MutableRequestConfig requestConfig() {
+        return new ApiExecutionRuntimeModels.MutableRequestConfig(
                 "GET",
                 "/api",
                 1000,

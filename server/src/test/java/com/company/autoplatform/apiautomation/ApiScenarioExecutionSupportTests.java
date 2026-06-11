@@ -24,7 +24,7 @@ class ApiScenarioExecutionSupportTests {
     void scriptScenarioStepWritesVariablesForLaterSteps() {
         Map<String, String> variables = new HashMap<>();
 
-        List<ApiExecutionEngineSupport.RunStepComputation> results = scenarioSupport.executeScenarioSteps(
+        List<ApiExecutionRuntimeModels.RunStepComputation> results = scenarioSupport.executeScenarioSteps(
                 List.of(scriptStep("Script", "setVar('token', 'alpha'); log('ok');")),
                 new int[]{1},
                 variables,
@@ -51,7 +51,7 @@ class ApiScenarioExecutionSupportTests {
         Map<String, String> variables = new HashMap<>();
         variables.put("enabled", "yes");
 
-        List<ApiExecutionEngineSupport.RunStepComputation> matched = scenarioSupport.executeScenarioSteps(
+        List<ApiExecutionRuntimeModels.RunStepComputation> matched = scenarioSupport.executeScenarioSteps(
                 List.of(ifStep("{{enabled}} == yes", List.of(apiStep(10L)))),
                 new int[]{1},
                 variables,
@@ -69,7 +69,7 @@ class ApiScenarioExecutionSupportTests {
 
         delegate.executedDefinitions = 0;
         variables.put("enabled", "no");
-        List<ApiExecutionEngineSupport.RunStepComputation> skipped = scenarioSupport.executeScenarioSteps(
+        List<ApiExecutionRuntimeModels.RunStepComputation> skipped = scenarioSupport.executeScenarioSteps(
                 List.of(ifStep("{{enabled}} == yes", List.of(apiStep(10L)))),
                 new int[]{1},
                 variables,
@@ -92,7 +92,7 @@ class ApiScenarioExecutionSupportTests {
         FakeDelegate delegate = new FakeDelegate();
         Map<String, String> variables = new HashMap<>();
 
-        List<ApiExecutionEngineSupport.RunStepComputation> results = scenarioSupport.executeScenarioSteps(
+        List<ApiExecutionRuntimeModels.RunStepComputation> results = scenarioSupport.executeScenarioSteps(
                 List.of(loopStep("FOREACH", null, "A,B,C", List.of(apiStep(10L)))),
                 new int[]{1},
                 variables,
@@ -115,7 +115,7 @@ class ApiScenarioExecutionSupportTests {
     void referencedScenarioDepthLimitStillFails() {
         FakeDelegate delegate = new FakeDelegate();
 
-        List<ApiExecutionEngineSupport.RunStepComputation> results = scenarioSupport.executeScenarioSteps(
+        List<ApiExecutionRuntimeModels.RunStepComputation> results = scenarioSupport.executeScenarioSteps(
                 List.of(referencedScenarioStep(2L)),
                 new int[]{1},
                 new HashMap<>(),
@@ -213,41 +213,41 @@ class ApiScenarioExecutionSupportTests {
         }
 
         @Override
-        public ApiExecutionEngineSupport.RunStepComputation executeDefinition(
+        public ApiExecutionRuntimeModels.RunStepComputation executeDefinition(
                 ApiDefinitionEntity definition,
                 String stepName,
                 int stepOrder,
                 Map<String, String> variables,
-                ApiExecutionEngineSupport.ResolvedEnvironment environment
+                ApiExecutionRuntimeModels.ResolvedEnvironment environment
         ) {
             executedDefinitions++;
             return successfulStep(stepOrder, stepName);
         }
 
         @Override
-        public ApiExecutionEngineSupport.RunStepComputation executeCase(
+        public ApiExecutionRuntimeModels.RunStepComputation executeCase(
                 ApiDefinitionCaseEntity apiCase,
                 String stepName,
                 int stepOrder,
                 Map<String, String> variables,
-                ApiExecutionEngineSupport.ResolvedEnvironment environment
+                ApiExecutionRuntimeModels.ResolvedEnvironment environment
         ) {
             return successfulStep(stepOrder, stepName);
         }
 
         @Override
-        public ApiExecutionEngineSupport.RunStepComputation executeCustomRequestStep(
+        public ApiExecutionRuntimeModels.RunStepComputation executeCustomRequestStep(
                 ApiScenarioStepInput step,
                 int stepOrder,
                 Map<String, String> variables,
-                ApiExecutionEngineSupport.ResolvedEnvironment environment,
+                ApiExecutionRuntimeModels.ResolvedEnvironment environment,
                 Long workspaceId
         ) {
             return successfulStep(stepOrder, step.stepName());
         }
 
-        private ApiExecutionEngineSupport.RunStepComputation successfulStep(int stepOrder, String stepName) {
-            return new ApiExecutionEngineSupport.RunStepComputation(true, new ApiRunStepResultResponse(
+        private ApiExecutionRuntimeModels.RunStepComputation successfulStep(int stepOrder, String stepName) {
+            return new ApiExecutionRuntimeModels.RunStepComputation(true, new ApiRunStepResultResponse(
                     null,
                     null,
                     stepOrder,

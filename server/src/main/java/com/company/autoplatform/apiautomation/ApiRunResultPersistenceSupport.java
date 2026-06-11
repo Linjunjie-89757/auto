@@ -44,7 +44,7 @@ public class ApiRunResultPersistenceSupport {
     void persistStep(
             ReportEntity report,
             Long workspaceId,
-            ApiExecutionEngineSupport.RunStepComputation computation
+            ApiExecutionRuntimeModels.RunStepComputation computation
     ) {
         runStepResultMapper.insert(toRunStepResultEntity(report, workspaceId, computation));
         report.setUpdatedAt(LocalDateTime.now());
@@ -54,7 +54,7 @@ public class ApiRunResultPersistenceSupport {
     void persistCaseRunHistory(
             ApiDefinitionCaseEntity apiCase,
             ReportEntity report,
-            ApiExecutionEngineSupport.RunStepComputation step,
+            ApiExecutionRuntimeModels.RunStepComputation step,
             Long environmentId,
             Long variableSetId
     ) {
@@ -64,7 +64,7 @@ public class ApiRunResultPersistenceSupport {
     ApiRunStepResultEntity toRunStepResultEntity(
             ReportEntity report,
             Long workspaceId,
-            ApiExecutionEngineSupport.RunStepComputation computation
+            ApiExecutionRuntimeModels.RunStepComputation computation
     ) {
         ApiAutomationModels.ApiRunStepResultResponse response = computation.response();
         ApiRunStepResultEntity entity = new ApiRunStepResultEntity();
@@ -89,7 +89,7 @@ public class ApiRunResultPersistenceSupport {
     ApiDefinitionCaseRunHistoryEntity toCaseRunHistoryEntity(
             ApiDefinitionCaseEntity apiCase,
             ReportEntity report,
-            ApiExecutionEngineSupport.RunStepComputation step,
+            ApiExecutionRuntimeModels.RunStepComputation step,
             Long environmentId,
             Long variableSetId
     ) {

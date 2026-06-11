@@ -73,10 +73,10 @@ public class ApiProcessorExecutor {
             String stage,
             List<ApiProcessorInput> processors,
             Long workspaceId,
-            ApiExecutionEngineSupport.MutableRequestConfig requestConfig,
+            ApiExecutionRuntimeModels.MutableRequestConfig requestConfig,
             ApiRequestSnapshot requestSnapshot,
             ApiResponseSnapshot response,
-            ApiExecutionEngineSupport.ResolvedEnvironment environment,
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment,
             Map<String, String> variables,
             List<ApiProcessorResult> processorResults,
             List<ApiExtractionResult> extractionResults
@@ -143,7 +143,7 @@ public class ApiProcessorExecutor {
 
     ApiAutomationScriptRunner.ScriptExecutionResult executeScriptProcessor(
             ApiProcessorInput processor,
-            ApiExecutionEngineSupport.MutableRequestConfig requestConfig,
+            ApiExecutionRuntimeModels.MutableRequestConfig requestConfig,
             ApiResponseSnapshot response,
             Map<String, String> variables
     ) {
@@ -166,7 +166,7 @@ public class ApiProcessorExecutor {
         return context;
     }
 
-    private void applyScriptRequestChanges(ApiExecutionEngineSupport.MutableRequestConfig requestConfig, Map<String, Object> requestValues) {
+    private void applyScriptRequestChanges(ApiExecutionRuntimeModels.MutableRequestConfig requestConfig, Map<String, Object> requestValues) {
         if (requestValues == null || requestValues.isEmpty()) {
             return;
         }
@@ -325,7 +325,7 @@ public class ApiProcessorExecutor {
             List<ApiProcessorExtractItemInput> extractors,
             ApiRequestSnapshot request,
             ApiResponseSnapshot response,
-            ApiExecutionEngineSupport.ResolvedEnvironment environment,
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment,
             Map<String, String> variables,
             List<ApiExtractionResult> extractionResults
     ) {
@@ -486,14 +486,14 @@ public class ApiProcessorExecutor {
         return ApiAutomationJsonSupport.toJson(value, "Failed to serialize extracted value");
     }
 
-    private void persistEnvironmentVariable(ApiExecutionEngineSupport.ResolvedEnvironment environment, String name, String value) {
+    private void persistEnvironmentVariable(ApiExecutionRuntimeModels.ResolvedEnvironment environment, String name, String value) {
         if (environment == null || environment.environmentId() == null) {
             throw new BadRequestException("Environment variable extraction requires a selected environment");
         }
         EnvConfigEntity entity = requireEnvironment(environment.environmentId());
-        ApiExecutionEngineSupport.EnvironmentConfigPayload config = ApiAutomationJsonSupport.read(entity.getConfigJson(),
-                ApiExecutionEngineSupport.EnvironmentConfigPayload.class,
-                new ApiExecutionEngineSupport.EnvironmentConfigPayload(List.of(), emptyAuthConfig(), 10000, List.of()));
+        ApiExecutionRuntimeModels.EnvironmentConfigPayload config = ApiAutomationJsonSupport.read(entity.getConfigJson(),
+                ApiExecutionRuntimeModels.EnvironmentConfigPayload.class,
+                new ApiExecutionRuntimeModels.EnvironmentConfigPayload(List.of(), emptyAuthConfig(), 10000, List.of()));
         List<ApiVariableItem> nextVariables = new ArrayList<>();
         boolean updated = false;
         for (ApiVariableItem item : defaultList(config.variables())) {
@@ -507,7 +507,7 @@ public class ApiProcessorExecutor {
         if (!updated) {
             nextVariables.add(new ApiVariableItem(name, value, false));
         }
-        entity.setConfigJson(ApiAutomationJsonSupport.toJson(new ApiExecutionEngineSupport.EnvironmentConfigPayload(
+        entity.setConfigJson(ApiAutomationJsonSupport.toJson(new ApiExecutionRuntimeModels.EnvironmentConfigPayload(
                 defaultList(config.headers()),
                 normalizeAuth(config.authConfig()),
                 config.timeoutMs() == null ? 10000 : config.timeoutMs(),

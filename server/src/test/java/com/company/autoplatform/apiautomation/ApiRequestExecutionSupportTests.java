@@ -88,8 +88,8 @@ class ApiRequestExecutionSupportTests {
                 .hasMessage("Missing variable: missing");
     }
 
-    private ApiExecutionEngineSupport.ResolvedEnvironment environment(String baseUrl, List<ApiKeyValueInput> headers) {
-        return new ApiExecutionEngineSupport.ResolvedEnvironment(null, baseUrl, headers, noneAuth(), 1000, List.of());
+    private ApiExecutionRuntimeModels.ResolvedEnvironment environment(String baseUrl, List<ApiKeyValueInput> headers) {
+        return new ApiExecutionRuntimeModels.ResolvedEnvironment(null, baseUrl, headers, noneAuth(), 1000, List.of());
     }
 
     private ApiAuthConfigInput noneAuth() {

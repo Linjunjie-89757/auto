@@ -44,7 +44,7 @@ public class ApiRequestExecutionSupport {
 
     ResolvedRequest resolveRequest(
             ApiRequestConfigInput config,
-            ApiExecutionEngineSupport.ResolvedEnvironment environment,
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment,
             Map<String, String> variables,
             ApiAuthConfigInput normalizedAuthConfig
     ) {
@@ -90,7 +90,7 @@ public class ApiRequestExecutionSupport {
     SentRequestResult sendRequest(
             ResolvedRequest request,
             ApiRequestConfigInput config,
-            ApiExecutionEngineSupport.ResolvedEnvironment environment,
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment,
             Map<String, String> variables
     ) throws IOException, InterruptedException {
         ApiAuthConfigInput authConfig = request.authConfig();
@@ -112,7 +112,7 @@ public class ApiRequestExecutionSupport {
     HttpRequest buildHttpRequest(
             ResolvedRequest request,
             ApiRequestConfigInput config,
-            ApiExecutionEngineSupport.ResolvedEnvironment environment
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment
     ) {
         return buildHttpRequest(request, config, environment, null);
     }
@@ -120,7 +120,7 @@ public class ApiRequestExecutionSupport {
     HttpRequest buildHttpRequest(
             ResolvedRequest request,
             ApiRequestConfigInput config,
-            ApiExecutionEngineSupport.ResolvedEnvironment environment,
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment,
             String authorizationHeader
     ) {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
@@ -171,7 +171,7 @@ public class ApiRequestExecutionSupport {
     private SentRequestResult sendBasicAuthRequest(
             ResolvedRequest request,
             ApiRequestConfigInput config,
-            ApiExecutionEngineSupport.ResolvedEnvironment environment,
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment,
             Map<String, String> variables,
             ApiAuthConfigInput authConfig
     ) throws IOException, InterruptedException {
@@ -189,7 +189,7 @@ public class ApiRequestExecutionSupport {
     private SentRequestResult sendDigestAuthRequest(
             ResolvedRequest request,
             ApiRequestConfigInput config,
-            ApiExecutionEngineSupport.ResolvedEnvironment environment,
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment,
             Map<String, String> variables,
             ApiAuthConfigInput authConfig
     ) throws IOException, InterruptedException {

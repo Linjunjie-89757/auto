@@ -38,7 +38,7 @@ public class ApiRunFinalizerSupport {
             boolean success,
             TaskEntity task,
             ReportEntity report,
-            ApiExecutionEngineSupport.RunStepComputation step
+            ApiExecutionRuntimeModels.RunStepComputation step
     ) {
         String result = result(success);
         definition.setLastRunResult(result);
@@ -53,7 +53,7 @@ public class ApiRunFinalizerSupport {
             boolean success,
             TaskEntity task,
             ReportEntity report,
-            ApiExecutionEngineSupport.RunStepComputation step
+            ApiExecutionRuntimeModels.RunStepComputation step
     ) {
         String result = result(success);
         apiCase.setLastRunResult(result);

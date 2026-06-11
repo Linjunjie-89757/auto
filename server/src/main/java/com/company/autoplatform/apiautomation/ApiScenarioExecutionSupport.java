@@ -52,11 +52,11 @@ public class ApiScenarioExecutionSupport {
         this.assertionSupport = assertionSupport;
     }
 
-    List<ApiExecutionEngineSupport.RunStepComputation> executeScenarioSteps(
+    List<ApiExecutionRuntimeModels.RunStepComputation> executeScenarioSteps(
             List<ApiScenarioStepInput> steps,
             int[] stepOrder,
             Map<String, String> variables,
-            ApiExecutionEngineSupport.ResolvedEnvironment environment,
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment,
             String workspaceCode,
             Long workspaceId,
             Long rootScenarioId,
@@ -65,7 +65,7 @@ public class ApiScenarioExecutionSupport {
             boolean continueOnFailure,
             ScenarioExecutionDelegate delegate
     ) {
-        List<ApiExecutionEngineSupport.RunStepComputation> results = new ArrayList<>();
+        List<ApiExecutionRuntimeModels.RunStepComputation> results = new ArrayList<>();
         for (ApiScenarioStepInput step : defaultList(steps)) {
             if (step == null || Boolean.FALSE.equals(step.enabled())) {
                 continue;
@@ -112,11 +112,11 @@ public class ApiScenarioExecutionSupport {
         return results;
     }
 
-    private ApiExecutionEngineSupport.RunStepComputation executeScenarioStep(
+    private ApiExecutionRuntimeModels.RunStepComputation executeScenarioStep(
             ApiScenarioStepInput step,
             int stepOrder,
             Map<String, String> variables,
-            ApiExecutionEngineSupport.ResolvedEnvironment environment,
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment,
             String workspaceCode,
             Long workspaceId,
             ScenarioExecutionDelegate delegate
@@ -149,11 +149,11 @@ public class ApiScenarioExecutionSupport {
         );
     }
 
-    private List<ApiExecutionEngineSupport.RunStepComputation> executeReferencedScenarioStep(
+    private List<ApiExecutionRuntimeModels.RunStepComputation> executeReferencedScenarioStep(
             ApiScenarioStepInput step,
             int[] stepOrder,
             Map<String, String> variables,
-            ApiExecutionEngineSupport.ResolvedEnvironment environment,
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment,
             String workspaceCode,
             Long workspaceId,
             Long rootScenarioId,
@@ -178,18 +178,18 @@ public class ApiScenarioExecutionSupport {
                     false, 0L, "Referenced scenario must belong to the same workspace", List.of()));
         }
         List<ApiScenarioStepInput> childSteps = delegate.readScenarioSteps(scenario.getStepsJson());
-        List<ApiExecutionEngineSupport.RunStepComputation> results = new ArrayList<>();
+        List<ApiExecutionRuntimeModels.RunStepComputation> results = new ArrayList<>();
         results.add(syntheticScenarioStep(stepOrder[0]++, blankToFallback(step.stepName(), scenario.getScenarioName()), true, 0L, null, List.of()));
         results.addAll(executeScenarioSteps(childSteps, stepOrder, variables, environment, workspaceCode, workspaceId,
                 rootScenarioId, nestingDepth + 1, onceOnlyKeys, continueOnFailure, delegate));
         return results;
     }
 
-    private List<ApiExecutionEngineSupport.RunStepComputation> executeIfControllerStep(
+    private List<ApiExecutionRuntimeModels.RunStepComputation> executeIfControllerStep(
             ApiScenarioStepInput step,
             int[] stepOrder,
             Map<String, String> variables,
-            ApiExecutionEngineSupport.ResolvedEnvironment environment,
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment,
             String workspaceCode,
             Long workspaceId,
             Long rootScenarioId,
@@ -199,7 +199,7 @@ public class ApiScenarioExecutionSupport {
             ScenarioExecutionDelegate delegate
     ) {
         boolean matched = evaluateScenarioCondition(step, variables);
-        List<ApiExecutionEngineSupport.RunStepComputation> results = new ArrayList<>();
+        List<ApiExecutionRuntimeModels.RunStepComputation> results = new ArrayList<>();
         results.add(syntheticScenarioStep(stepOrder[0]++, blankToFallback(step.stepName(), "IF Controller"), true, 0L,
                 matched ? "Condition matched" : "Condition not matched", List.of()));
         if (matched) {
@@ -209,11 +209,11 @@ public class ApiScenarioExecutionSupport {
         return results;
     }
 
-    private List<ApiExecutionEngineSupport.RunStepComputation> executeLoopControllerStep(
+    private List<ApiExecutionRuntimeModels.RunStepComputation> executeLoopControllerStep(
             ApiScenarioStepInput step,
             int[] stepOrder,
             Map<String, String> variables,
-            ApiExecutionEngineSupport.ResolvedEnvironment environment,
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment,
             String workspaceCode,
             Long workspaceId,
             Long rootScenarioId,
@@ -222,7 +222,7 @@ public class ApiScenarioExecutionSupport {
             boolean continueOnFailure,
             ScenarioExecutionDelegate delegate
     ) {
-        List<ApiExecutionEngineSupport.RunStepComputation> results = new ArrayList<>();
+        List<ApiExecutionRuntimeModels.RunStepComputation> results = new ArrayList<>();
         int loopCount = resolveScenarioLoopCount(step, variables);
         List<String> foreachItems = scenarioForeachItems(step, variables);
         results.add(syntheticScenarioStep(stepOrder[0]++, blankToFallback(step.stepName(), "Loop Controller"), true, 0L,
@@ -244,11 +244,11 @@ public class ApiScenarioExecutionSupport {
         return results;
     }
 
-    private List<ApiExecutionEngineSupport.RunStepComputation> executeOnceOnlyControllerStep(
+    private List<ApiExecutionRuntimeModels.RunStepComputation> executeOnceOnlyControllerStep(
             ApiScenarioStepInput step,
             int[] stepOrder,
             Map<String, String> variables,
-            ApiExecutionEngineSupport.ResolvedEnvironment environment,
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment,
             String workspaceCode,
             Long workspaceId,
             Long rootScenarioId,
@@ -259,7 +259,7 @@ public class ApiScenarioExecutionSupport {
     ) {
         String key = blankToFallback(step.id(), blankToFallback(step.stepName(), "once-only-" + stepOrder[0]));
         boolean firstRun = onceOnlyKeys.add(key);
-        List<ApiExecutionEngineSupport.RunStepComputation> results = new ArrayList<>();
+        List<ApiExecutionRuntimeModels.RunStepComputation> results = new ArrayList<>();
         results.add(syntheticScenarioStep(stepOrder[0]++, blankToFallback(step.stepName(), "Once Only Controller"), true, 0L,
                 firstRun ? "Executed" : "Skipped", List.of()));
         if (firstRun) {
@@ -269,7 +269,7 @@ public class ApiScenarioExecutionSupport {
         return results;
     }
 
-    private ApiExecutionEngineSupport.RunStepComputation executeConstantTimerStep(ApiScenarioStepInput step, int stepOrder) {
+    private ApiExecutionRuntimeModels.RunStepComputation executeConstantTimerStep(ApiScenarioStepInput step, int stepOrder) {
         int delayMs = Math.max(1, Math.min(MAX_SCENARIO_WAIT_MS, Optional.ofNullable(step.delayMs()).orElse(1000)));
         long started = System.currentTimeMillis();
         sleep(delayMs);
@@ -277,7 +277,7 @@ public class ApiScenarioExecutionSupport {
                 System.currentTimeMillis() - started, "Waited " + delayMs + " ms", List.of());
     }
 
-    private ApiExecutionEngineSupport.RunStepComputation executeScriptScenarioStep(
+    private ApiExecutionRuntimeModels.RunStepComputation executeScriptScenarioStep(
             ApiScenarioStepInput step,
             int stepOrder,
             Map<String, String> variables
@@ -309,7 +309,7 @@ public class ApiScenarioExecutionSupport {
         boolean success = scriptResult.success() && assertionsPassed;
         String errorMessage = !scriptResult.success() ? scriptResult.message()
                 : assertionsPassed ? null : assertionSupport.firstFailedMessage(assertionResults);
-        return new ApiExecutionEngineSupport.RunStepComputation(success, new ApiRunStepResultResponse(
+        return new ApiExecutionRuntimeModels.RunStepComputation(success, new ApiRunStepResultResponse(
                 null,
                 null,
                 stepOrder,
@@ -411,7 +411,7 @@ public class ApiScenarioExecutionSupport {
         };
     }
 
-    private ApiExecutionEngineSupport.RunStepComputation syntheticScenarioStep(
+    private ApiExecutionRuntimeModels.RunStepComputation syntheticScenarioStep(
             int stepOrder,
             String stepName,
             boolean success,
@@ -419,7 +419,7 @@ public class ApiScenarioExecutionSupport {
             String message,
             List<ApiProcessorResult> processorResults
     ) {
-        return new ApiExecutionEngineSupport.RunStepComputation(success, new ApiRunStepResultResponse(
+        return new ApiExecutionRuntimeModels.RunStepComputation(success, new ApiRunStepResultResponse(
                 null,
                 null,
                 stepOrder,
@@ -465,27 +465,27 @@ public class ApiScenarioExecutionSupport {
 
         List<ApiScenarioStepInput> readScenarioSteps(String json);
 
-        ApiExecutionEngineSupport.RunStepComputation executeDefinition(
+        ApiExecutionRuntimeModels.RunStepComputation executeDefinition(
                 ApiDefinitionEntity definition,
                 String stepName,
                 int stepOrder,
                 Map<String, String> variables,
-                ApiExecutionEngineSupport.ResolvedEnvironment environment
+                ApiExecutionRuntimeModels.ResolvedEnvironment environment
         );
 
-        ApiExecutionEngineSupport.RunStepComputation executeCase(
+        ApiExecutionRuntimeModels.RunStepComputation executeCase(
                 ApiDefinitionCaseEntity apiCase,
                 String stepName,
                 int stepOrder,
                 Map<String, String> variables,
-                ApiExecutionEngineSupport.ResolvedEnvironment environment
+                ApiExecutionRuntimeModels.ResolvedEnvironment environment
         );
 
-        ApiExecutionEngineSupport.RunStepComputation executeCustomRequestStep(
+        ApiExecutionRuntimeModels.RunStepComputation executeCustomRequestStep(
                 ApiScenarioStepInput step,
                 int stepOrder,
                 Map<String, String> variables,
-                ApiExecutionEngineSupport.ResolvedEnvironment environment,
+                ApiExecutionRuntimeModels.ResolvedEnvironment environment,
                 Long workspaceId
         );
     }

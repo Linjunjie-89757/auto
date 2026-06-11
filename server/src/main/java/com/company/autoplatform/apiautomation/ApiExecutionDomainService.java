@@ -39,9 +39,9 @@ public class ApiExecutionDomainService {
         workspaceScopeSupport.validateReadable(definition.getWorkspaceId(), workspaceCode, "Current workspace cannot run the definition");
         workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(definition.getWorkspaceId()).getWorkspaceCode());
 
-        ApiExecutionEngineSupport.ExecutionContext context = executionEngine.buildExecutionContext(definition.getWorkspaceId(), request.environmentId(), request.variableSetId());
-        ApiExecutionEngineSupport.RunEnvelope envelope = executionEngine.createRunEnvelope(definition.getWorkspaceId(), "API", "接口调试", definition.getDefinitionName());
-        ApiExecutionEngineSupport.RunStepComputation step = executionEngine.executeDefinition(definition, definition.getDefinitionName(), 1, context.variables(), context.environment());
+        ApiExecutionRuntimeModels.ExecutionContext context = executionEngine.buildExecutionContext(definition.getWorkspaceId(), request.environmentId(), request.variableSetId());
+        ApiExecutionRuntimeModels.RunEnvelope envelope = executionEngine.createRunEnvelope(definition.getWorkspaceId(), "API", "接口调试", definition.getDefinitionName());
+        ApiExecutionRuntimeModels.RunStepComputation step = executionEngine.executeDefinition(definition, definition.getDefinitionName(), 1, context.variables(), context.environment());
         executionEngine.persistStep(envelope.report(), definition.getWorkspaceId(), step);
         executionEngine.finalizeRunDefinition(definition, step.success(), envelope.task(), envelope.report(), step);
         return new ApiRunResponse(
@@ -60,9 +60,9 @@ public class ApiExecutionDomainService {
         workspaceScopeSupport.validateReadable(apiCase.getWorkspaceId(), workspaceCode, "Current workspace cannot run the case");
         workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(apiCase.getWorkspaceId()).getWorkspaceCode());
 
-        ApiExecutionEngineSupport.ExecutionContext context = executionEngine.buildExecutionContext(apiCase.getWorkspaceId(), request.environmentId(), request.variableSetId());
-        ApiExecutionEngineSupport.RunEnvelope envelope = executionEngine.createRunEnvelope(apiCase.getWorkspaceId(), "API", "接口用例调试", apiCase.getCaseName());
-        ApiExecutionEngineSupport.RunStepComputation step = executionEngine.executeCase(apiCase, apiCase.getCaseName(), 1, context.variables(), context.environment());
+        ApiExecutionRuntimeModels.ExecutionContext context = executionEngine.buildExecutionContext(apiCase.getWorkspaceId(), request.environmentId(), request.variableSetId());
+        ApiExecutionRuntimeModels.RunEnvelope envelope = executionEngine.createRunEnvelope(apiCase.getWorkspaceId(), "API", "接口用例调试", apiCase.getCaseName());
+        ApiExecutionRuntimeModels.RunStepComputation step = executionEngine.executeCase(apiCase, apiCase.getCaseName(), 1, context.variables(), context.environment());
         executionEngine.persistStep(envelope.report(), apiCase.getWorkspaceId(), step);
         executionEngine.finalizeRunCase(apiCase, step.success(), envelope.task(), envelope.report(), step);
         executionEngine.persistCaseRunHistory(
@@ -121,9 +121,9 @@ public class ApiExecutionDomainService {
         draftDefinition.setPostprocessorsJson(ApiAutomationJsonSupport.toJson(normalizePostProcessors(request.postProcessors(), request.extractors()),
                 "Failed to serialize post-processors"));
 
-        ApiExecutionEngineSupport.ExecutionContext context = executionEngine.buildExecutionContext(workspace.getId(), request.environmentId(), request.variableSetId());
-        ApiExecutionEngineSupport.RunEnvelope envelope = executionEngine.createRunEnvelope(workspace.getId(), "API", "接口调试", draftDefinition.getDefinitionName());
-        ApiExecutionEngineSupport.RunStepComputation step = executionEngine.executeDefinition(draftDefinition, draftDefinition.getDefinitionName(), 1, context.variables(), context.environment());
+        ApiExecutionRuntimeModels.ExecutionContext context = executionEngine.buildExecutionContext(workspace.getId(), request.environmentId(), request.variableSetId());
+        ApiExecutionRuntimeModels.RunEnvelope envelope = executionEngine.createRunEnvelope(workspace.getId(), "API", "接口调试", draftDefinition.getDefinitionName());
+        ApiExecutionRuntimeModels.RunStepComputation step = executionEngine.executeDefinition(draftDefinition, draftDefinition.getDefinitionName(), 1, context.variables(), context.environment());
         executionEngine.persistStep(envelope.report(), workspace.getId(), step);
         executionEngine.finalizeRunTaskAndReport(
                 envelope.task(),
@@ -182,9 +182,9 @@ public class ApiExecutionDomainService {
         draftCase.setPostprocessorsJson(ApiAutomationJsonSupport.toJson(normalizeProcessors(request.postProcessors(), "POST"),
                 "Failed to serialize case postprocessors"));
 
-        ApiExecutionEngineSupport.ExecutionContext context = executionEngine.buildExecutionContext(workspace.getId(), request.environmentId(), request.variableSetId());
-        ApiExecutionEngineSupport.RunEnvelope envelope = executionEngine.createRunEnvelope(workspace.getId(), "API", "接口用例调试", draftCase.getCaseName());
-        ApiExecutionEngineSupport.RunStepComputation step = executionEngine.executeCase(draftCase, draftCase.getCaseName(), 1, context.variables(), context.environment());
+        ApiExecutionRuntimeModels.ExecutionContext context = executionEngine.buildExecutionContext(workspace.getId(), request.environmentId(), request.variableSetId());
+        ApiExecutionRuntimeModels.RunEnvelope envelope = executionEngine.createRunEnvelope(workspace.getId(), "API", "接口用例调试", draftCase.getCaseName());
+        ApiExecutionRuntimeModels.RunStepComputation step = executionEngine.executeCase(draftCase, draftCase.getCaseName(), 1, context.variables(), context.environment());
         executionEngine.persistStep(envelope.report(), workspace.getId(), step);
         executionEngine.finalizeRunTaskAndReport(
                 envelope.task(),
@@ -223,20 +223,20 @@ public class ApiExecutionDomainService {
 
         Long environmentId = request.environmentId() != null ? request.environmentId() : scenario.getDefaultEnvId();
         Long variableSetId = request.variableSetId() != null ? request.variableSetId() : scenario.getVariableSetId();
-        ApiExecutionEngineSupport.ExecutionContext context = executionEngine.buildExecutionContext(scenario.getWorkspaceId(), environmentId, variableSetId);
+        ApiExecutionRuntimeModels.ExecutionContext context = executionEngine.buildExecutionContext(scenario.getWorkspaceId(), environmentId, variableSetId);
         for (ApiVariableItem variable : readVariables(scenario.getScenarioVariablesJson())) {
             if (variable.name() != null && !variable.name().isBlank()) {
                 context.variables().put(variable.name().trim(), Optional.ofNullable(variable.value()).orElse(""));
             }
         }
-        ApiExecutionEngineSupport.RunEnvelope envelope = executionEngine.createRunEnvelope(scenario.getWorkspaceId(), "API", "接口场景", scenario.getScenarioName());
+        ApiExecutionRuntimeModels.RunEnvelope envelope = executionEngine.createRunEnvelope(scenario.getWorkspaceId(), "API", "接口场景", scenario.getScenarioName());
         List<ApiScenarioStepInput> steps = readScenarioSteps(scenario.getStepsJson());
         List<ApiRunStepResultResponse> responses = new ArrayList<>();
         boolean success = true;
         String failureSummary = null;
         int[] stepOrder = {1};
         Set<String> onceOnlyKeys = new java.util.HashSet<>();
-        for (ApiExecutionEngineSupport.RunStepComputation computation : executionEngine.executeScenarioSteps(
+        for (ApiExecutionRuntimeModels.RunStepComputation computation : executionEngine.executeScenarioSteps(
                 steps,
                 stepOrder,
                 context.variables(),
@@ -266,7 +266,7 @@ public class ApiExecutionDomainService {
         List<ApiAssertionResult> scenarioAssertionResults = executionEngine.evaluateScenarioAssertions(readScenarioAssertions(scenario.getScenarioAssertionsJson()), responses);
         if (!scenarioAssertionResults.isEmpty()) {
             boolean assertionSuccess = scenarioAssertionResults.stream().allMatch(ApiAssertionResult::success);
-            ApiExecutionEngineSupport.RunStepComputation assertionComputation = new ApiExecutionEngineSupport.RunStepComputation(assertionSuccess, new ApiRunStepResultResponse(
+            ApiExecutionRuntimeModels.RunStepComputation assertionComputation = new ApiExecutionRuntimeModels.RunStepComputation(assertionSuccess, new ApiRunStepResultResponse(
                     null,
                     null,
                     stepOrder[0],

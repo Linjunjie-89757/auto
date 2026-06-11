@@ -47,7 +47,7 @@ class ApiRunResultPersistenceSupportTests {
     @Test
     void convertsStepResponseToEntityWithSnapshotsAndResultJson() {
         ReportEntity report = report(20L, "SUCCESS", null);
-        ApiExecutionEngineSupport.RunStepComputation computation = stepComputation(
+        ApiExecutionRuntimeModels.RunStepComputation computation = stepComputation(
                 true,
                 responseSnapshot(200, "{\"ok\":true}"),
                 List.of(new ApiAssertionResult("a1", "RESPONSE_CODE", "Status", "statusCode", "EQUALS", "200", "200", true, "Assertion passed")),
@@ -155,14 +155,14 @@ class ApiRunResultPersistenceSupportTests {
         return report;
     }
 
-    private ApiExecutionEngineSupport.RunStepComputation stepComputation(
+    private ApiExecutionRuntimeModels.RunStepComputation stepComputation(
             boolean success,
             ApiResponseSnapshot response,
             List<ApiAssertionResult> assertionResults,
             List<ApiExtractionResult> extractionResults,
             List<ApiProcessorResult> processorResults
     ) {
-        return new ApiExecutionEngineSupport.RunStepComputation(success, new ApiRunStepResultResponse(
+        return new ApiExecutionRuntimeModels.RunStepComputation(success, new ApiRunStepResultResponse(
                 null,
                 null,
                 1,

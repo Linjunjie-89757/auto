@@ -34,16 +34,28 @@ public class ApiAutomationService {
         this.executionDomainServiceProvider = executionDomainServiceProvider;
     }
 
-    public PageResponse<ApiDefinitionItem> listDefinitions(String workspaceCode) {
-        return definitionDomainService.listDefinitions(workspaceCode);
+    public PageResponse<ApiDefinitionItem> listDefinitions(
+            String workspaceCode,
+            String keyword,
+            Long moduleId,
+            Integer pageNo,
+            Integer pageSize
+    ) {
+        return definitionDomainService.listDefinitions(workspaceCode, keyword, moduleId, pageNo, pageSize);
     }
 
     public ApiDefinitionDetail getDefinition(Long id, String workspaceCode) {
         return definitionDomainService.getDefinition(id, workspaceCode);
     }
 
-    public PageResponse<ApiDefinitionCaseItem> listCases(String workspaceCode, Long definitionId, String keyword) {
-        return caseDomainService.listCases(workspaceCode, definitionId, keyword);
+    public PageResponse<ApiDefinitionCaseItem> listCases(
+            String workspaceCode,
+            Long definitionId,
+            String keyword,
+            Integer pageNo,
+            Integer pageSize
+    ) {
+        return caseDomainService.listCases(workspaceCode, definitionId, keyword, pageNo, pageSize);
     }
 
     public ApiDefinitionCaseDetail getCase(Long id, String workspaceCode) {

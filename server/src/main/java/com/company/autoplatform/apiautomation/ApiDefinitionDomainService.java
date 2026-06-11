@@ -47,14 +47,37 @@ public class ApiDefinitionDomainService {
         this.workspaceScopeSupport = workspaceScopeSupport;
     }
 
-    public PageResponse<ApiDefinitionItem> listDefinitions(String workspaceCode) {
+    public PageResponse<ApiDefinitionItem> listDefinitions(
+            String workspaceCode,
+            String keyword,
+            Long moduleId,
+            Integer pageNo,
+            Integer pageSize
+    ) {
         LambdaQueryWrapper<ApiDefinitionEntity> query = new LambdaQueryWrapper<>();
         workspaceScopeSupport.applyWorkspaceScope(query, ApiDefinitionEntity::getWorkspaceId, workspaceCode);
+        String trimmedKeyword = blankToNull(keyword);
+        if (trimmedKeyword != null) {
+            query.and(wrapper -> wrapper
+                    .like(ApiDefinitionEntity::getDefinitionName, trimmedKeyword)
+                    .or()
+                    .like(ApiDefinitionEntity::getPath, trimmedKeyword)
+                    .or()
+                    .like(ApiDefinitionEntity::getHttpMethod, trimmedKeyword)
+                    .or()
+                    .like(ApiDefinitionEntity::getDirectoryName, trimmedKeyword)
+                    .or()
+                    .like(ApiDefinitionEntity::getTagsJson, trimmedKeyword));
+        }
+        String modulePath = resolveDefinitionModulePath(moduleId, workspaceCode);
         List<ApiDefinitionItem> items = definitionMapper.selectList(query.orderByDesc(ApiDefinitionEntity::getUpdatedAt))
                 .stream()
+                .filter(definition -> matchesDefinitionModule(definition, modulePath))
                 .map(this::toDefinitionItem)
                 .toList();
-        return new PageResponse<>(items, items.size());
+        int safePageNo = safePageNo(pageNo);
+        int safePageSize = safePageSize(pageSize, items.size());
+        return PageResponse.of(paginate(items, safePageNo, safePageSize), items.size(), safePageNo, safePageSize);
     }
 
     public ApiDefinitionDetail getDefinition(Long id, String workspaceCode) {
@@ -544,6 +567,40 @@ public class ApiDefinitionDomainService {
                 collectDefinitionModuleDescendantIds(modules, module.getId(), ids);
             }
         }
+    }
+
+    private String resolveDefinitionModulePath(Long moduleId, String workspaceCode) {
+        if (moduleId == null) {
+            return null;
+        }
+        ApiDefinitionModuleEntity module = requireDefinitionModule(moduleId);
+        workspaceScopeSupport.validateReadable(module.getWorkspaceId(), workspaceCode, "Current workspace cannot access the definition module");
+        return getDefinitionModulePath(module);
+    }
+
+    private boolean matchesDefinitionModule(ApiDefinitionEntity definition, String modulePath) {
+        if (modulePath == null || modulePath.isBlank()) {
+            return true;
+        }
+        String directory = definition.getDirectoryName();
+        return modulePath.equals(directory) || (directory != null && directory.startsWith(modulePath + "/"));
+    }
+
+    private int safePageNo(Integer pageNo) {
+        return pageNo == null || pageNo < 1 ? 1 : pageNo;
+    }
+
+    private int safePageSize(Integer pageSize, int total) {
+        if (pageSize == null || pageSize < 1) {
+            return total > 0 ? total : 10;
+        }
+        return pageSize;
+    }
+
+    private <T> List<T> paginate(List<T> items, int pageNo, int pageSize) {
+        int fromIndex = Math.min((pageNo - 1) * pageSize, items.size());
+        int toIndex = Math.min(fromIndex + pageSize, items.size());
+        return items.subList(fromIndex, toIndex);
     }
 }
 

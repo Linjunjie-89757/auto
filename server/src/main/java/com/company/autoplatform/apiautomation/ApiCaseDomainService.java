@@ -57,7 +57,13 @@ public class ApiCaseDomainService {
         this.workspaceScopeSupport = workspaceScopeSupport;
     }
 
-    public PageResponse<ApiDefinitionCaseItem> listCases(String workspaceCode, Long definitionId, String keyword) {
+    public PageResponse<ApiDefinitionCaseItem> listCases(
+            String workspaceCode,
+            Long definitionId,
+            String keyword,
+            Integer pageNo,
+            Integer pageSize
+    ) {
         LambdaQueryWrapper<ApiDefinitionCaseEntity> query = new LambdaQueryWrapper<>();
         workspaceScopeSupport.applyWorkspaceScope(query, ApiDefinitionCaseEntity::getWorkspaceId, workspaceCode);
         if (definitionId != null) {
@@ -74,7 +80,9 @@ public class ApiCaseDomainService {
                 .stream()
                 .map(this::toCaseItem)
                 .toList();
-        return new PageResponse<>(items, items.size());
+        int safePageNo = safePageNo(pageNo);
+        int safePageSize = safePageSize(pageSize, items.size());
+        return PageResponse.of(paginate(items, safePageNo, safePageSize), items.size(), safePageNo, safePageSize);
     }
 
     public ApiDefinitionCaseDetail getCase(Long id, String workspaceCode) {
@@ -278,6 +286,23 @@ public class ApiCaseDomainService {
         return ApiAutomationJsonSupport.read(json, ApiRequestConfigInput.class,
                 new ApiRequestConfigInput(methodFallback, pathFallback, 10000, List.of(), List.of(), List.of(),
                         new ApiRequestBodyInput("NONE", null, List.of(), null, null, null), emptyAuthConfig()));
+    }
+
+    private int safePageNo(Integer pageNo) {
+        return pageNo == null || pageNo < 1 ? 1 : pageNo;
+    }
+
+    private int safePageSize(Integer pageSize, int total) {
+        if (pageSize == null || pageSize < 1) {
+            return total > 0 ? total : 10;
+        }
+        return pageSize;
+    }
+
+    private <T> List<T> paginate(List<T> items, int pageNo, int pageSize) {
+        int fromIndex = Math.min((pageNo - 1) * pageSize, items.size());
+        int toIndex = Math.min(fromIndex + pageSize, items.size());
+        return items.subList(fromIndex, toIndex);
     }
 }
 

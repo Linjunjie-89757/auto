@@ -38,9 +38,13 @@ public class ApiAutomationController {
 
     @GetMapping("/definitions")
     public ApiResponse<PageResponse<ApiDefinitionItem>> listDefinitions(
-            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Long moduleId,
+            @RequestParam(required = false) Integer pageNo,
+            @RequestParam(required = false) Integer pageSize
     ) {
-        return ApiResponse.ok(apiAutomationService.listDefinitions(workspaceCode));
+        return ApiResponse.ok(apiAutomationService.listDefinitions(workspaceCode, keyword, moduleId, pageNo, pageSize));
     }
 
     @GetMapping("/definitions/{id}")
@@ -99,9 +103,11 @@ public class ApiAutomationController {
     public ApiResponse<PageResponse<ApiDefinitionCaseItem>> listCases(
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
             @RequestParam(required = false) Long definitionId,
-            @RequestParam(required = false) String keyword
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Integer pageNo,
+            @RequestParam(required = false) Integer pageSize
     ) {
-        return ApiResponse.ok(apiAutomationService.listCases(workspaceCode, definitionId, keyword));
+        return ApiResponse.ok(apiAutomationService.listCases(workspaceCode, definitionId, keyword, pageNo, pageSize));
     }
 
     @GetMapping("/cases/{id}")

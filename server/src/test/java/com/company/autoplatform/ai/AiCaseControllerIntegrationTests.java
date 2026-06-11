@@ -1,6 +1,7 @@
 package com.company.autoplatform.ai;
 
 import com.company.autoplatform.IntegrationTestSupport;
+import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.workspace.WorkspaceScope;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -12,7 +13,12 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.when;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -196,6 +202,136 @@ class AiCaseControllerIntegrationTests extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.success").value(true));
     }
 
+    @Test
+    void providerTestFetchModelsListModelsAndProbeKeepResponseShape() throws Exception {
+        reset(aiProviderClient);
+        String unique = uniquePrefix("provider-models");
+        Long providerId = createProvider(unique + "-provider", "gpt-5-mini", unique + "-secret");
+        AiModelCapabilities fetchedCapabilities = capabilities(true, true, false);
+        AiModelCapabilities probedCapabilities = capabilities(true, true, true);
+        when(aiProviderClient.fetchModels(any(), any())).thenReturn(new AiModelFetchResult(List.of(
+                new AiProviderModelItem(
+                        null,
+                        null,
+                        unique + "-model-a",
+                        unique + " Model A",
+                        fetchedCapabilities,
+                        true,
+                        "{\"source\":\"mock\"}",
+                        null
+                ),
+                new AiProviderModelItem(
+                        null,
+                        null,
+                        unique + "-model-b",
+                        unique + " Model B",
+                        fetchedCapabilities,
+                        false,
+                        null,
+                        null
+                )
+        ), "mock models fetched"));
+        when(aiProviderClient.probeCapabilities(any(), any())).thenReturn(probedCapabilities);
+
+        mockMvc.perform(post("/api/cases/ai/providers/{id}/test", providerId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.success").value(true))
+                .andExpect(jsonPath("$.data.connectionId").value(providerId.intValue()))
+                .andExpect(jsonPath("$.data.connectionName").value(unique + "-provider"))
+                .andExpect(jsonPath("$.data.protocolType").value(AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_CHAT))
+                .andExpect(jsonPath("$.data.message").isString())
+                .andExpect(jsonPath("$.data.verifiedAt", notNullValue()));
+
+        mockMvc.perform(get("/api/cases/ai/providers")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data[?(@.id == %d)].status".formatted(providerId), hasItem(1)))
+                .andExpect(jsonPath("$.data[?(@.id == %d)].lastVerifiedAt".formatted(providerId), hasItem(notNullValue())));
+
+        mockMvc.perform(post("/api/cases/ai/providers/{id}/fetch-models", providerId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.connectionId").value(providerId.intValue()))
+                .andExpect(jsonPath("$.data.connectionName").value(unique + "-provider"))
+                .andExpect(jsonPath("$.data.models.length()").value(2))
+                .andExpect(jsonPath("$.data.models[*].modelName", hasItem(unique + "-model-a")))
+                .andExpect(jsonPath("$.data.models[*].modelName", hasItem(unique + "-model-b")))
+                .andExpect(jsonPath("$.data.models[?(@.modelName == '%s')].displayName".formatted(unique + "-model-a"),
+                        hasItem(unique + " Model A")))
+                .andExpect(jsonPath("$.data.models[?(@.modelName == '%s')].selectable".formatted(unique + "-model-a"),
+                        hasItem(true)))
+                .andExpect(jsonPath("$.data.models[?(@.modelName == '%s')].detectedCapabilities.imageInput.supported".formatted(unique + "-model-a"),
+                        hasItem(false)))
+                .andExpect(jsonPath("$.data.fetchedAt", notNullValue()))
+                .andExpect(jsonPath("$.data.message").value("mock models fetched"));
+
+        mockMvc.perform(get("/api/cases/ai/providers/{id}/models", providerId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.length()").value(2))
+                .andExpect(jsonPath("$.data[*].connectionId", hasItem(providerId.intValue())))
+                .andExpect(jsonPath("$.data[*].modelName", hasItem(unique + "-model-a")))
+                .andExpect(jsonPath("$.data[*].modelName", hasItem(unique + "-model-b")));
+
+        mockMvc.perform(post("/api/cases/ai/providers/{id}/models/probe", providerId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "modelName": "%s"
+                                }
+                                """.formatted(unique + "-model-a")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.connectionId").value(providerId.intValue()))
+                .andExpect(jsonPath("$.data.modelName").value(unique + "-model-a"))
+                .andExpect(jsonPath("$.data.displayName").value(unique + " Model A"))
+                .andExpect(jsonPath("$.data.detectedCapabilities.imageInput.supported").value(true))
+                .andExpect(jsonPath("$.data.detectedCapabilities.imageInput.source").value(AiModelCapabilities.SOURCE_PROBED))
+                .andExpect(jsonPath("$.data.selectable").value(true))
+                .andExpect(jsonPath("$.data.lastProbedAt", notNullValue()));
+    }
+
+    @Test
+    void providerTestFailureMarksConnectionDisabledAndConfigTestUsesBoundProvider() throws Exception {
+        reset(aiProviderClient);
+        String unique = uniquePrefix("provider-test");
+        Long failingProviderId = createProvider(unique + "-failing-provider", "gpt-5-mini", unique + "-failing-secret");
+        doThrow(new BadRequestException("mock connection failed"))
+                .when(aiProviderClient)
+                .testConnection(any(), any());
+
+        mockMvc.perform(post("/api/cases/ai/providers/{id}/test", failingProviderId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message").value("mock connection failed"));
+
+        mockMvc.perform(get("/api/cases/ai/providers")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data[?(@.id == %d)].status".formatted(failingProviderId), hasItem(0)));
+
+        reset(aiProviderClient);
+        Long providerId = createProvider(unique + "-config-provider", "gpt-5.1", unique + "-config-secret");
+        mockMvc.perform(post("/api/cases/ai/config/test")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType("application/json")
+                        .content(configRequest(providerId, "CASE_REVIEWER", "gpt-5.1", unique + " reviewer prompt", 1)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.success").value(true))
+                .andExpect(jsonPath("$.data.provider").value("OPENAI_COMPATIBLE_CHAT"))
+                .andExpect(jsonPath("$.data.model").value("gpt-5.1"))
+                .andExpect(jsonPath("$.data.message").value("AI connection is available"));
+    }
+
     private Long createProvider(String connectionName, String modelName, String apiKey) throws Exception {
         String response = mockMvc.perform(post("/api/cases/ai/providers")
                         .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
@@ -254,6 +390,17 @@ class AiCaseControllerIntegrationTests extends IntegrationTestSupport {
                   "status": %d
                 }
                 """.formatted(WORKSPACE_CODE, roleType, providerId, model, promptTemplate, status);
+    }
+
+    private AiModelCapabilities capabilities(boolean stableAvailable, boolean streamOutput, boolean imageInput) {
+        return new AiModelCapabilities(
+                AiModelCapabilities.value(true, AiModelCapabilities.SOURCE_PROBED, "text chat supported"),
+                AiModelCapabilities.value(streamOutput, AiModelCapabilities.SOURCE_PROBED, "stream capability"),
+                AiModelCapabilities.value(true, AiModelCapabilities.SOURCE_PROBED, "structured output supported"),
+                AiModelCapabilities.value(imageInput, AiModelCapabilities.SOURCE_PROBED, "image input capability"),
+                AiModelCapabilities.value(false, AiModelCapabilities.SOURCE_PROBED, "long context unsupported"),
+                AiModelCapabilities.value(stableAvailable, AiModelCapabilities.SOURCE_PROBED, "stable availability")
+        );
     }
 
     private byte[] tinyPng() {

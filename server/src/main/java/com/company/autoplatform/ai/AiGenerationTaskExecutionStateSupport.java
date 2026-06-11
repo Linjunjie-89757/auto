@@ -1,0 +1,121 @@
+package com.company.autoplatform.ai;
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.company.autoplatform.common.BadRequestException;
+import org.springframework.stereotype.Component;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Component
+public class AiGenerationTaskExecutionStateSupport {
+
+    private static final int RAW_OUTPUT_LIMIT = 12000;
+
+    private final AiGenerationTaskMapper aiGenerationTaskMapper;
+    private final AiGenerationTaskResponseSupport responseSupport;
+    private final AiGenerationTaskEventService eventService;
+
+    public AiGenerationTaskExecutionStateSupport(
+            AiGenerationTaskMapper aiGenerationTaskMapper,
+            AiGenerationTaskResponseSupport responseSupport,
+            AiGenerationTaskEventService eventService
+    ) {
+        this.aiGenerationTaskMapper = aiGenerationTaskMapper;
+        this.responseSupport = responseSupport;
+        this.eventService = eventService;
+    }
+
+    void transitionToGenerating(AiGenerationTaskEntity entity) {
+        entity.setStatus("GENERATING");
+        entity.setCurrentStep(2);
+        entity.setStepMessage("正在根据需求生成测试用例。");
+        entity.setErrorMessage(null);
+        entity.setUpdatedAt(LocalDateTime.now());
+        aiGenerationTaskMapper.updateById(entity);
+    }
+
+    void markCanceled(AiGenerationTaskEntity entity, String stepMessage) {
+        entity.setCancelRequested(1);
+        entity.setStatus("CANCELED");
+        entity.setStepMessage(stepMessage);
+        entity.setFinishedAt(entity.getFinishedAt() == null ? LocalDateTime.now() : entity.getFinishedAt());
+        entity.setUpdatedAt(LocalDateTime.now());
+        aiGenerationTaskMapper.updateById(entity);
+        appendEvent(entity.getTaskId(), "TASK_CANCELED", "DONE", "WARN", stepMessage, null, null, entity.getProvider(), entity.getModel(), null);
+    }
+
+    void markFailed(String taskId, Exception exception) {
+        AiGenerationTaskEntity latest = requireTask(taskId);
+        if (isCanceled(latest)) {
+            markCanceled(latest, "任务已取消，错误结果已忽略。");
+            return;
+        }
+        latest.setStatus("FAILED");
+        latest.setCurrentStep(Math.min(latest.getCurrentStep() == null ? 2 : latest.getCurrentStep(), 3));
+        latest.setStepMessage("任务执行失败，请检查 AI 配置或稍后重试。");
+        latest.setErrorMessage(exception.getMessage());
+        latest.setFinishedAt(LocalDateTime.now());
+        latest.setUpdatedAt(LocalDateTime.now());
+        aiGenerationTaskMapper.updateById(latest);
+        appendEvent(taskId, "TASK_FAILED", latest.getCurrentStep() != null && latest.getCurrentStep() >= 3 ? "REVIEWING" : "GENERATING", "ERROR", exception.getMessage(), null, null, latest.getProvider(), latest.getModel(), null);
+    }
+
+    void persistGeneratedCasesSnapshot(AiGenerationTaskEntity entity, List<GeneratedAiCaseItem> generatedCases, String rawOutput) {
+        entity.setGeneratedCasesJson(responseSupport.writeValue(generatedCases));
+        entity.setGeneratedCount(generatedCases.size());
+        entity.setGenerationRawOutput(limitRawOutput(rawOutput));
+        entity.setUpdatedAt(LocalDateTime.now());
+        aiGenerationTaskMapper.updateById(entity);
+    }
+
+    String limitRawOutput(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        if (value.length() <= RAW_OUTPUT_LIMIT) {
+            return value;
+        }
+        return value.substring(value.length() - RAW_OUTPUT_LIMIT);
+    }
+
+    boolean isCanceled(AiGenerationTaskEntity entity) {
+        return entity.getCancelRequested() != null && entity.getCancelRequested() == 1;
+    }
+
+    private AiGenerationTaskEntity requireTask(String taskId) {
+        AiGenerationTaskEntity entity = aiGenerationTaskMapper.selectOne(new LambdaQueryWrapper<AiGenerationTaskEntity>()
+                .eq(AiGenerationTaskEntity::getTaskId, taskId)
+                .last("limit 1"));
+        if (entity == null) {
+            throw new BadRequestException("AI generation task does not exist");
+        }
+        return entity;
+    }
+
+    private AiGenerationTaskEventResponse appendEvent(
+            String taskId,
+            String eventType,
+            String phase,
+            String level,
+            String message,
+            Integer itemIndex,
+            String itemTitle,
+            String provider,
+            String model,
+            String payloadJson
+    ) {
+        return eventService.append(
+                taskId,
+                eventType,
+                phase,
+                level,
+                message == null || message.isBlank() ? "-" : message,
+                itemIndex,
+                itemTitle,
+                provider,
+                model,
+                payloadJson
+        );
+    }
+}

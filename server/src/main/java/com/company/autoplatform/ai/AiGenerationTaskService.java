@@ -15,7 +15,6 @@ import java.util.Map;
 @Service
 public class AiGenerationTaskService {
 
-    private static final int RAW_OUTPUT_LIMIT = 12000;
     private final AiGenerationTaskMapper aiGenerationTaskMapper;
     private final AiGenerationTaskDomainService taskDomainService;
     private final AiCaseService aiCaseService;
@@ -24,6 +23,7 @@ public class AiGenerationTaskService {
     private final AiGenerationTaskResultMergeSupport resultMergeSupport;
     private final AiGenerationTaskEventMessageSupport eventMessageSupport;
     private final AiGenerationTaskSseSupport sseSupport;
+    private final AiGenerationTaskExecutionStateSupport stateSupport;
 
     public AiGenerationTaskService(
             AiGenerationTaskMapper aiGenerationTaskMapper,
@@ -33,7 +33,8 @@ public class AiGenerationTaskService {
             AiGenerationTaskResponseSupport responseSupport,
             AiGenerationTaskResultMergeSupport resultMergeSupport,
             AiGenerationTaskEventMessageSupport eventMessageSupport,
-            AiGenerationTaskSseSupport sseSupport
+            AiGenerationTaskSseSupport sseSupport,
+            AiGenerationTaskExecutionStateSupport stateSupport
     ) {
         this.aiGenerationTaskMapper = aiGenerationTaskMapper;
         this.taskDomainService = taskDomainService;
@@ -43,6 +44,7 @@ public class AiGenerationTaskService {
         this.resultMergeSupport = resultMergeSupport;
         this.eventMessageSupport = eventMessageSupport;
         this.sseSupport = sseSupport;
+        this.stateSupport = stateSupport;
     }
 
     public AiGenerationTaskResponse createTask(String headerWorkspaceCode, CreateAiGenerationTaskRequest request) {
@@ -75,8 +77,8 @@ public class AiGenerationTaskService {
 
     public void executeTask(String taskId, String workspaceCode) {
         AiGenerationTaskEntity entity = requireTask(taskId);
-        if (isCanceled(entity)) {
-            markCanceled(entity, "任务已取消，未进入执行阶段。");
+        if (stateSupport.isCanceled(entity)) {
+            stateSupport.markCanceled(entity, "任务已取消，未进入执行阶段。");
             return;
         }
 
@@ -87,15 +89,15 @@ public class AiGenerationTaskService {
                 executeStreamTask(entity, workspaceCode);
             }
         } catch (TaskCanceledException exception) {
-            markCanceled(requireTask(taskId), exception.getMessage());
+            stateSupport.markCanceled(requireTask(taskId), exception.getMessage());
         } catch (Exception exception) {
-            markFailed(taskId, exception);
+            stateSupport.markFailed(taskId, exception);
         }
     }
 
     private void executeCompleteTask(AiGenerationTaskEntity entity, String workspaceCode) {
         appendEvent(entity.getTaskId(), "TASK_STARTED", "SETUP", "INFO", "任务开始执行完整输出链路", null, null, null, null, null);
-        transitionToGenerating(entity);
+        stateSupport.transitionToGenerating(entity);
         GenerateAiCasesResponse generation = aiCaseService.generateCases(workspaceCode, new GenerateAiCasesRequest(
                 workspaceCode,
                 entity.getRequirementTitle(),
@@ -109,7 +111,7 @@ public class AiGenerationTaskService {
         ));
 
         entity = requireTask(entity.getTaskId());
-        if (isCanceled(entity)) {
+        if (stateSupport.isCanceled(entity)) {
             throw new TaskCanceledException("任务已取消，生成结果未继续写入。");
         }
 
@@ -119,7 +121,7 @@ public class AiGenerationTaskService {
         entity.setWarningsJson(responseSupport.writeValue(generation.warnings()));
         entity.setInvalidCasesJson(responseSupport.writeValue(generation.invalidCases()));
         entity.setGeneratedCasesJson(responseSupport.writeValue(generation.generatedCases()));
-        entity.setGenerationRawOutput(limitRawOutput(generation.rawContent()));
+        entity.setGenerationRawOutput(stateSupport.limitRawOutput(generation.rawContent()));
         entity.setStatus("REVIEWING");
         entity.setCurrentStep(3);
         entity.setStepMessage("已完成用例生成，正在进行 AI 自动评审。");
@@ -142,7 +144,7 @@ public class AiGenerationTaskService {
         ));
 
         entity = requireTask(entity.getTaskId());
-        if (isCanceled(entity)) {
+        if (stateSupport.isCanceled(entity)) {
             throw new TaskCanceledException("任务已取消，评审结果未继续写入。");
         }
 
@@ -153,7 +155,7 @@ public class AiGenerationTaskService {
         entity.setGeneratedCasesJson(responseSupport.writeValue(finalCases));
         entity.setGeneratedCount(finalCases.size());
         entity.setReviewResultJson(responseSupport.writeValue(review));
-        entity.setReviewRawOutput(limitRawOutput(review.rawContent()));
+        entity.setReviewRawOutput(stateSupport.limitRawOutput(review.rawContent()));
         entity.setFinishedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
         aiGenerationTaskMapper.updateById(entity);
@@ -164,7 +166,7 @@ public class AiGenerationTaskService {
     private void executeStreamTask(AiGenerationTaskEntity entity, String workspaceCode) {
         String taskId = entity.getTaskId();
         appendEvent(taskId, "TASK_STARTED", "SETUP", "INFO", "任务开始执行实时流式输出链路", null, null, null, null, null);
-        transitionToGenerating(entity);
+        stateSupport.transitionToGenerating(entity);
         List<GeneratedAiCaseItem> generatedCases = new ArrayList<>();
         AiCaseService.StreamedGenerateCasesResult generation = aiCaseService.streamGenerateCases(
                 workspaceCode,
@@ -189,17 +191,17 @@ public class AiGenerationTaskService {
                 },
                 update -> {
                     AiGenerationTaskEntity latest = requireTask(taskId);
-                    if (isCanceled(latest)) {
+                    if (stateSupport.isCanceled(latest)) {
                         throw new TaskCanceledException("任务已取消，停止接收生成流。");
                     }
                     generatedCases.add(update.item());
-                    persistGeneratedCasesSnapshot(latest, generatedCases, update.rawOutput());
+                    stateSupport.persistGeneratedCasesSnapshot(latest, generatedCases, update.rawOutput());
                     appendEvent(taskId, "CASE_GENERATED", "GENERATING", "INFO", eventMessageSupport.buildGeneratedCaseEventMessage(update.itemIndex(), update.item()), update.itemIndex(), update.item().title(), latest.getProvider(), latest.getModel(), responseSupport.writeValue(update.item()));
                 }
         );
 
         entity = requireTask(taskId);
-        if (isCanceled(entity)) {
+        if (stateSupport.isCanceled(entity)) {
             throw new TaskCanceledException("任务已取消，生成结果未继续写入。");
         }
         generatedCases.clear();
@@ -210,7 +212,7 @@ public class AiGenerationTaskService {
         entity.setWarningsJson(responseSupport.writeValue(generation.warnings()));
         entity.setInvalidCasesJson(responseSupport.writeValue(generation.invalidCases()));
         entity.setGeneratedCasesJson(responseSupport.writeValue(generatedCases));
-        entity.setGenerationRawOutput(limitRawOutput(generation.rawContent()));
+        entity.setGenerationRawOutput(stateSupport.limitRawOutput(generation.rawContent()));
         entity.setStatus("REVIEWING");
         entity.setCurrentStep(3);
         entity.setStepMessage("已完成用例生成，正在进行 AI 自动评审。");
@@ -253,7 +255,7 @@ public class AiGenerationTaskService {
                 },
                 update -> {
                     AiGenerationTaskEntity latest = requireTask(taskId);
-                    if (isCanceled(latest)) {
+                    if (stateSupport.isCanceled(latest)) {
                         throw new TaskCanceledException("任务已取消，停止接收评审流。");
                     }
                     if ("SUPPLEMENTED".equals(update.status()) && update.supplementCase() != null) {
@@ -264,7 +266,7 @@ public class AiGenerationTaskService {
                         generatedCases.add(supplemented);
                         latest.setGeneratedCasesJson(responseSupport.writeValue(generatedCases));
                         latest.setGeneratedCount(generatedCases.size());
-                        latest.setReviewRawOutput(limitRawOutput(update.rawOutput()));
+                        latest.setReviewRawOutput(stateSupport.limitRawOutput(update.rawOutput()));
                         latest.setUpdatedAt(LocalDateTime.now());
                         aiGenerationTaskMapper.updateById(latest);
                         int itemIndex = generatedCases.size() - 1;
@@ -282,7 +284,7 @@ public class AiGenerationTaskService {
                     GeneratedAiCaseItem reviewed = resultMergeSupport.applyReviewUpdate(generatedCases.get(update.itemIndex()), update);
                     generatedCases.set(update.itemIndex(), reviewed);
                     latest.setGeneratedCasesJson(responseSupport.writeValue(generatedCases));
-                    latest.setReviewRawOutput(limitRawOutput(update.rawOutput()));
+                    latest.setReviewRawOutput(stateSupport.limitRawOutput(update.rawOutput()));
                     latest.setUpdatedAt(LocalDateTime.now());
                     aiGenerationTaskMapper.updateById(latest);
                     appendEvent(taskId, "CASE_REVIEWED", "REVIEWING", "INFO", eventMessageSupport.buildReviewedCaseEventMessage(update.itemIndex(), reviewed.title(), update.status(), update.summary(), update.coverageComment(), update.evidenceComment()), update.itemIndex(), reviewed.title(), reviewProvider[0], reviewModel[0], responseSupport.writeValue(Map.of(
@@ -298,7 +300,7 @@ public class AiGenerationTaskService {
         );
 
         entity = requireTask(taskId);
-        if (isCanceled(entity)) {
+        if (stateSupport.isCanceled(entity)) {
             throw new TaskCanceledException("任务已取消，评审结果未继续写入。");
         }
         entity.setStatus("COMPLETED");
@@ -311,7 +313,7 @@ public class AiGenerationTaskService {
         entity.setGeneratedCasesJson(responseSupport.writeValue(generatedCases));
         entity.setGeneratedCount(generatedCases.size());
         entity.setReviewResultJson(responseSupport.writeValue(review.reviewResult()));
-        entity.setReviewRawOutput(limitRawOutput(review.rawContent()));
+        entity.setReviewRawOutput(stateSupport.limitRawOutput(review.rawContent()));
         entity.setFinishedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
         aiGenerationTaskMapper.updateById(entity);
@@ -333,35 +335,8 @@ public class AiGenerationTaskService {
         appendEvent(taskId, "TASK_COMPLETED", "DONE", "INFO", "实时流式任务已完成", null, null, review.provider(), review.model(), null);
     }
 
-    private void transitionToGenerating(AiGenerationTaskEntity entity) {
-        entity.setStatus("GENERATING");
-        entity.setCurrentStep(2);
-        entity.setStepMessage("正在根据需求生成测试用例。");
-        entity.setErrorMessage(null);
-        entity.setUpdatedAt(LocalDateTime.now());
-        aiGenerationTaskMapper.updateById(entity);
-    }
-
-    private void markCanceled(AiGenerationTaskEntity entity, String stepMessage) {
-        entity.setCancelRequested(1);
-        entity.setStatus("CANCELED");
-        entity.setStepMessage(stepMessage);
-        entity.setFinishedAt(entity.getFinishedAt() == null ? LocalDateTime.now() : entity.getFinishedAt());
-        entity.setUpdatedAt(LocalDateTime.now());
-        aiGenerationTaskMapper.updateById(entity);
-        appendEvent(entity.getTaskId(), "TASK_CANCELED", "DONE", "WARN", stepMessage, null, null, entity.getProvider(), entity.getModel(), null);
-    }
-
     public StreamingResponseBody streamTaskEvents(String taskId, String workspaceCode) {
         return sseSupport.streamTaskEvents(taskId, workspaceCode);
-    }
-
-    private void persistGeneratedCasesSnapshot(AiGenerationTaskEntity entity, List<GeneratedAiCaseItem> generatedCases, String rawOutput) {
-        entity.setGeneratedCasesJson(responseSupport.writeValue(generatedCases));
-        entity.setGeneratedCount(generatedCases.size());
-        entity.setGenerationRawOutput(limitRawOutput(rawOutput));
-        entity.setUpdatedAt(LocalDateTime.now());
-        aiGenerationTaskMapper.updateById(entity);
     }
 
     private void appendCompleteReviewEvents(String taskId, List<GeneratedAiCaseItem> finalCases, AiReviewResult review, String provider, String model) {
@@ -375,22 +350,6 @@ public class AiGenerationTaskService {
                 "unresolvedCoverageGaps", review == null || review.unresolvedCoverageGaps() == null ? List.of() : review.unresolvedCoverageGaps()
         )));
         appendEvent(taskId, "FINAL_CASES_READY", "DONE", "INFO", "Final usable case list contains " + finalCases.size() + " cases.", null, null, provider, model, null);
-    }
-
-    private void markFailed(String taskId, Exception exception) {
-        AiGenerationTaskEntity latest = requireTask(taskId);
-        if (isCanceled(latest)) {
-            markCanceled(latest, "任务已取消，错误结果已忽略。");
-            return;
-        }
-        latest.setStatus("FAILED");
-        latest.setCurrentStep(Math.min(latest.getCurrentStep() == null ? 2 : latest.getCurrentStep(), 3));
-        latest.setStepMessage("任务执行失败，请检查 AI 配置或稍后重试。");
-        latest.setErrorMessage(exception.getMessage());
-        latest.setFinishedAt(LocalDateTime.now());
-        latest.setUpdatedAt(LocalDateTime.now());
-        aiGenerationTaskMapper.updateById(latest);
-        appendEvent(taskId, "TASK_FAILED", latest.getCurrentStep() != null && latest.getCurrentStep() >= 3 ? "REVIEWING" : "GENERATING", "ERROR", exception.getMessage(), null, null, latest.getProvider(), latest.getModel(), null);
     }
 
     private AiGenerationTaskEventResponse appendEvent(
@@ -417,20 +376,6 @@ public class AiGenerationTaskService {
                 model,
                 payloadJson
         );
-    }
-
-    private String limitRawOutput(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        if (value.length() <= RAW_OUTPUT_LIMIT) {
-            return value;
-        }
-        return value.substring(value.length() - RAW_OUTPUT_LIMIT);
-    }
-
-    private boolean isCanceled(AiGenerationTaskEntity entity) {
-        return entity.getCancelRequested() != null && entity.getCancelRequested() == 1;
     }
 
     private AiGenerationTaskEntity requireTask(String taskId) {

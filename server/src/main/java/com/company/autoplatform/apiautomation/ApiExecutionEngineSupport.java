@@ -32,7 +32,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -61,7 +60,6 @@ public class ApiExecutionEngineSupport {
     private static final String SCENARIO_STEP_ONCE_ONLY_CONTROLLER = "ONCE_ONLY_CONTROLLER";
     private static final String SCENARIO_STEP_CONSTANT_TIMER = "CONSTANT_TIMER";
     private static final String SCENARIO_STEP_SCRIPT = "SCRIPT";
-    private static final int MAX_SCENARIO_NESTING_DEPTH = 3;
     private static final int MAX_SCENARIO_LOOP_COUNT = 50;
     private static final int MAX_SCENARIO_WAIT_MS = 60000;
     private static final Set<String> SUCCESS_RESULTS = Set.of("SUCCESS", "FAILED");
@@ -81,10 +79,9 @@ public class ApiExecutionEngineSupport {
     private final WorkspaceService workspaceService;
     private final ApiWorkspaceScopeSupport workspaceScopeSupport;
     private final ApiAssertionEvaluator assertionEvaluator;
-    private final ApiAutomationScriptRunner scriptRunner;
-    private final ApiVariableResolver variableResolver;
     private final ApiRequestExecutionSupport requestExecutionSupport;
     private final ApiProcessorExecutor processorExecutor;
+    private final ApiScenarioExecutionSupport scenarioExecutionSupport;
 
     public ApiExecutionEngineSupport(
             ApiDefinitionMapper definitionMapper,
@@ -101,10 +98,9 @@ public class ApiExecutionEngineSupport {
             WorkspaceService workspaceService,
             ApiWorkspaceScopeSupport workspaceScopeSupport,
             ApiAssertionEvaluator assertionEvaluator,
-            ApiAutomationScriptRunner scriptRunner,
-            ApiVariableResolver variableResolver,
             ApiRequestExecutionSupport requestExecutionSupport,
-            ApiProcessorExecutor processorExecutor
+            ApiProcessorExecutor processorExecutor,
+            ApiScenarioExecutionSupport scenarioExecutionSupport
     ) {
         this.definitionMapper = definitionMapper;
         this.caseMapper = caseMapper;
@@ -120,10 +116,9 @@ public class ApiExecutionEngineSupport {
         this.workspaceService = workspaceService;
         this.workspaceScopeSupport = workspaceScopeSupport;
         this.assertionEvaluator = assertionEvaluator;
-        this.scriptRunner = scriptRunner;
-        this.variableResolver = variableResolver;
         this.requestExecutionSupport = requestExecutionSupport;
         this.processorExecutor = processorExecutor;
+        this.scenarioExecutionSupport = scenarioExecutionSupport;
     }
     ExecutionContext buildExecutionContext(Long workspaceId, Long environmentId, Long variableSetId) {
         ResolvedEnvironment environment = resolveEnvironment(workspaceId, environmentId);
@@ -329,42 +324,6 @@ public class ApiExecutionEngineSupport {
         return executeDefinition(runtimeDefinition, stepName, stepOrder, variables, environment);
     }
 
-    private RunStepComputation executeScenarioStep(
-            ApiScenarioStepInput step,
-            int stepOrder,
-            Map<String, String> variables,
-            ResolvedEnvironment environment,
-            String workspaceCode,
-            Long workspaceId
-    ) {
-        String stepType = normalizeScenarioStepType(step);
-        if (SCENARIO_STEP_API_CASE.equals(stepType)) {
-            Long resourceId = normalizeScenarioResourceId(step);
-            ApiDefinitionCaseEntity apiCase = requireCase(resourceId);
-            validateReadable(apiCase.getWorkspaceId(), workspaceCode, "Scenario contains an inaccessible case");
-            return executeCase(
-                    apiCase,
-                    blankToFallback(step.stepName(), apiCase.getCaseName()),
-                    stepOrder,
-                    variables,
-                    environment
-            );
-        }
-        if (SCENARIO_STEP_CUSTOM_REQUEST.equals(stepType)) {
-            return executeCustomRequestStep(step, stepOrder, variables, environment, workspaceId);
-        }
-        Long resourceId = normalizeScenarioResourceId(step);
-        ApiDefinitionEntity definition = requireDefinition(resourceId);
-        validateReadable(definition.getWorkspaceId(), workspaceCode, "Scenario contains an inaccessible definition");
-        return executeDefinition(
-                definition,
-                blankToFallback(step.stepName(), definition.getDefinitionName()),
-                stepOrder,
-                variables,
-                environment
-        );
-    }
-
     List<RunStepComputation> executeScenarioSteps(
             List<ApiScenarioStepInput> steps,
             int[] stepOrder,
@@ -377,51 +336,87 @@ public class ApiExecutionEngineSupport {
             Set<String> onceOnlyKeys,
             boolean continueOnFailure
     ) {
-        List<RunStepComputation> results = new ArrayList<>();
-        for (ApiScenarioStepInput step : defaultList(steps)) {
-            if (step == null || Boolean.FALSE.equals(step.enabled())) {
-                continue;
-            }
-            String stepType = normalizeScenarioStepType(step);
-            int resultStart = results.size();
-            try {
-                switch (stepType) {
-                    case SCENARIO_STEP_API, SCENARIO_STEP_API_CASE, SCENARIO_STEP_CUSTOM_REQUEST ->
-                            results.add(executeScenarioStep(step, stepOrder[0]++, variables, environment, workspaceCode, workspaceId));
-                    case SCENARIO_STEP_API_SCENARIO -> results.addAll(executeReferencedScenarioStep(
-                            step, stepOrder, variables, environment, workspaceCode, workspaceId, rootScenarioId, nestingDepth, onceOnlyKeys, continueOnFailure));
-                    case SCENARIO_STEP_IF_CONTROLLER -> results.addAll(executeIfControllerStep(
-                            step, stepOrder, variables, environment, workspaceCode, workspaceId, rootScenarioId, nestingDepth, onceOnlyKeys, continueOnFailure));
-                    case SCENARIO_STEP_LOOP_CONTROLLER -> results.addAll(executeLoopControllerStep(
-                            step, stepOrder, variables, environment, workspaceCode, workspaceId, rootScenarioId, nestingDepth, onceOnlyKeys, continueOnFailure));
-                    case SCENARIO_STEP_ONCE_ONLY_CONTROLLER -> results.addAll(executeOnceOnlyControllerStep(
-                            step, stepOrder, variables, environment, workspaceCode, workspaceId, rootScenarioId, nestingDepth, onceOnlyKeys, continueOnFailure));
-                    case SCENARIO_STEP_CONSTANT_TIMER -> results.add(executeConstantTimerStep(step, stepOrder[0]++));
-                    case SCENARIO_STEP_SCRIPT -> results.add(executeScriptScenarioStep(step, stepOrder[0]++, variables));
-                    default -> results.add(syntheticScenarioStep(
-                            stepOrder[0]++,
-                            blankToFallback(step.stepName(), stepType),
-                            false,
-                            0L,
-                            "Unsupported scenario step type: " + stepType,
-                            List.of()
-                    ));
+        return scenarioExecutionSupport.executeScenarioSteps(
+                steps,
+                stepOrder,
+                variables,
+                environment,
+                workspaceCode,
+                workspaceId,
+                rootScenarioId,
+                nestingDepth,
+                onceOnlyKeys,
+                continueOnFailure,
+                new ApiScenarioExecutionSupport.ScenarioExecutionDelegate() {
+                    @Override
+                    public String normalizeScenarioStepType(ApiScenarioStepInput step) {
+                        return ApiExecutionEngineSupport.this.normalizeScenarioStepType(step);
+                    }
+
+                    @Override
+                    public Long normalizeScenarioResourceId(ApiScenarioStepInput step) {
+                        return ApiExecutionEngineSupport.this.normalizeScenarioResourceId(step);
+                    }
+
+                    @Override
+                    public ApiDefinitionEntity requireDefinition(Long id) {
+                        return ApiExecutionEngineSupport.this.requireDefinition(id);
+                    }
+
+                    @Override
+                    public ApiDefinitionCaseEntity requireCase(Long id) {
+                        return ApiExecutionEngineSupport.this.requireCase(id);
+                    }
+
+                    @Override
+                    public ApiScenarioEntity requireScenario(Long id) {
+                        return ApiExecutionEngineSupport.this.requireScenario(id);
+                    }
+
+                    @Override
+                    public void validateReadable(Long workspaceId, String workspaceCode, String message) {
+                        ApiExecutionEngineSupport.this.validateReadable(workspaceId, workspaceCode, message);
+                    }
+
+                    @Override
+                    public List<ApiScenarioStepInput> readScenarioSteps(String json) {
+                        return ApiAutomationFormatSupport.readScenarioSteps(json);
+                    }
+
+                    @Override
+                    public RunStepComputation executeDefinition(
+                            ApiDefinitionEntity definition,
+                            String stepName,
+                            int stepOrder,
+                            Map<String, String> variables,
+                            ResolvedEnvironment environment
+                    ) {
+                        return ApiExecutionEngineSupport.this.executeDefinition(definition, stepName, stepOrder, variables, environment);
+                    }
+
+                    @Override
+                    public RunStepComputation executeCase(
+                            ApiDefinitionCaseEntity apiCase,
+                            String stepName,
+                            int stepOrder,
+                            Map<String, String> variables,
+                            ResolvedEnvironment environment
+                    ) {
+                        return ApiExecutionEngineSupport.this.executeCase(apiCase, stepName, stepOrder, variables, environment);
+                    }
+
+                    @Override
+                    public RunStepComputation executeCustomRequestStep(
+                            ApiScenarioStepInput step,
+                            int stepOrder,
+                            Map<String, String> variables,
+                            ResolvedEnvironment environment,
+                            Long workspaceId
+                    ) {
+                        return ApiExecutionEngineSupport.this.executeCustomRequestStep(step, stepOrder, variables, environment, workspaceId);
+                    }
                 }
-            } catch (RuntimeException exception) {
-                results.add(syntheticScenarioStep(
-                        stepOrder[0]++,
-                        blankToFallback(step.stepName(), stepType),
-                        false,
-                        0L,
-                        blankToFallback(exception.getMessage(), "Scenario step failed"),
-                        List.of()
-                ));
-            }
-            if (!continueOnFailure && results.subList(resultStart, results.size()).stream().anyMatch(result -> !result.success())) {
-                break;
-            }
-        }
-        return results;
+        );
     }
 
     private RunStepComputation executeCustomRequestStep(
@@ -449,200 +444,6 @@ public class ApiExecutionEngineSupport {
                 "Failed to serialize custom request postprocessors"));
         runtimeDefinition.setExtractorsJson("[]");
         return executeDefinition(runtimeDefinition, runtimeDefinition.getDefinitionName(), stepOrder, variables, environment);
-    }
-
-    private List<RunStepComputation> executeReferencedScenarioStep(
-            ApiScenarioStepInput step,
-            int[] stepOrder,
-            Map<String, String> variables,
-            ResolvedEnvironment environment,
-            String workspaceCode,
-            Long workspaceId,
-            Long rootScenarioId,
-            int nestingDepth,
-            Set<String> onceOnlyKeys,
-            boolean continueOnFailure
-    ) {
-        if (nestingDepth >= MAX_SCENARIO_NESTING_DEPTH) {
-            return List.of(syntheticScenarioStep(stepOrder[0]++, blankToFallback(step.stepName(), "Referenced Scenario"),
-                    false, 0L, "Scenario nesting depth exceeds " + MAX_SCENARIO_NESTING_DEPTH, List.of()));
-        }
-        Long scenarioId = normalizeScenarioResourceId(step);
-        if (scenarioId.equals(rootScenarioId)) {
-            return List.of(syntheticScenarioStep(stepOrder[0]++, blankToFallback(step.stepName(), "Referenced Scenario"),
-                    false, 0L, "Scenario circular reference is not allowed", List.of()));
-        }
-        ApiScenarioEntity scenario = requireScenario(scenarioId);
-        validateReadable(scenario.getWorkspaceId(), workspaceCode, "Scenario contains an inaccessible referenced scenario");
-        if (!scenario.getWorkspaceId().equals(workspaceId)) {
-            return List.of(syntheticScenarioStep(stepOrder[0]++, blankToFallback(step.stepName(), scenario.getScenarioName()),
-                    false, 0L, "Referenced scenario must belong to the same workspace", List.of()));
-        }
-        List<ApiScenarioStepInput> childSteps = readScenarioSteps(scenario.getStepsJson());
-        List<RunStepComputation> results = new ArrayList<>();
-        results.add(syntheticScenarioStep(stepOrder[0]++, blankToFallback(step.stepName(), scenario.getScenarioName()), true, 0L, null, List.of()));
-        results.addAll(executeScenarioSteps(childSteps, stepOrder, variables, environment, workspaceCode, workspaceId,
-                rootScenarioId, nestingDepth + 1, onceOnlyKeys, continueOnFailure));
-        return results;
-    }
-
-    private List<RunStepComputation> executeIfControllerStep(
-            ApiScenarioStepInput step,
-            int[] stepOrder,
-            Map<String, String> variables,
-            ResolvedEnvironment environment,
-            String workspaceCode,
-            Long workspaceId,
-            Long rootScenarioId,
-            int nestingDepth,
-            Set<String> onceOnlyKeys,
-            boolean continueOnFailure
-    ) {
-        boolean matched = evaluateScenarioCondition(step, variables);
-        List<RunStepComputation> results = new ArrayList<>();
-        results.add(syntheticScenarioStep(stepOrder[0]++, blankToFallback(step.stepName(), "IF Controller"), true, 0L,
-                matched ? "Condition matched" : "Condition not matched", List.of()));
-        if (matched) {
-            results.addAll(executeScenarioSteps(step.children(), stepOrder, variables, environment, workspaceCode, workspaceId,
-                    rootScenarioId, nestingDepth, onceOnlyKeys, continueOnFailure));
-        }
-        return results;
-    }
-
-    private List<RunStepComputation> executeLoopControllerStep(
-            ApiScenarioStepInput step,
-            int[] stepOrder,
-            Map<String, String> variables,
-            ResolvedEnvironment environment,
-            String workspaceCode,
-            Long workspaceId,
-            Long rootScenarioId,
-            int nestingDepth,
-            Set<String> onceOnlyKeys,
-            boolean continueOnFailure
-    ) {
-        List<RunStepComputation> results = new ArrayList<>();
-        int loopCount = resolveScenarioLoopCount(step, variables);
-        List<String> foreachItems = scenarioForeachItems(step, variables);
-        results.add(syntheticScenarioStep(stepOrder[0]++, blankToFallback(step.stepName(), "Loop Controller"), true, 0L,
-                "Loop count: " + loopCount, List.of()));
-        for (int index = 0; index < loopCount; index++) {
-            variables.put("loopIndex", String.valueOf(index));
-            if (!foreachItems.isEmpty() && index < foreachItems.size()) {
-                variables.put("item", foreachItems.get(index));
-            }
-            if ("WHILE".equals(normalizeLoopType(step.loopType())) && index > 0 && !evaluateScenarioCondition(step, variables)) {
-                break;
-            }
-            results.addAll(executeScenarioSteps(step.children(), stepOrder, variables, environment, workspaceCode, workspaceId,
-                    rootScenarioId, nestingDepth, onceOnlyKeys, continueOnFailure));
-            if (!continueOnFailure && results.stream().anyMatch(result -> !result.success())) {
-                break;
-            }
-        }
-        return results;
-    }
-
-    private List<RunStepComputation> executeOnceOnlyControllerStep(
-            ApiScenarioStepInput step,
-            int[] stepOrder,
-            Map<String, String> variables,
-            ResolvedEnvironment environment,
-            String workspaceCode,
-            Long workspaceId,
-            Long rootScenarioId,
-            int nestingDepth,
-            Set<String> onceOnlyKeys,
-            boolean continueOnFailure
-    ) {
-        String key = blankToFallback(step.id(), blankToFallback(step.stepName(), "once-only-" + stepOrder[0]));
-        boolean firstRun = onceOnlyKeys.add(key);
-        List<RunStepComputation> results = new ArrayList<>();
-        results.add(syntheticScenarioStep(stepOrder[0]++, blankToFallback(step.stepName(), "Once Only Controller"), true, 0L,
-                firstRun ? "Executed" : "Skipped", List.of()));
-        if (firstRun) {
-            results.addAll(executeScenarioSteps(step.children(), stepOrder, variables, environment, workspaceCode, workspaceId,
-                    rootScenarioId, nestingDepth, onceOnlyKeys, continueOnFailure));
-        }
-        return results;
-    }
-
-    private RunStepComputation executeConstantTimerStep(ApiScenarioStepInput step, int stepOrder) {
-        int delayMs = Math.max(1, Math.min(MAX_SCENARIO_WAIT_MS, Optional.ofNullable(step.delayMs()).orElse(1000)));
-        long started = System.currentTimeMillis();
-        sleep(delayMs);
-        return syntheticScenarioStep(stepOrder, blankToFallback(step.stepName(), "Constant Timer"), true,
-                System.currentTimeMillis() - started, "Waited " + delayMs + " ms", List.of());
-    }
-
-    private RunStepComputation executeScriptScenarioStep(ApiScenarioStepInput step, int stepOrder, Map<String, String> variables) {
-        long started = System.currentTimeMillis();
-        String script = Optional.ofNullable(step.script()).orElse("");
-        if (script.isBlank()) {
-            return syntheticScenarioStep(stepOrder, blankToFallback(step.stepName(), "Script"), false, 0L,
-                    "Script content cannot be blank", List.of());
-        }
-        ApiAutomationScriptRunner.ScriptExecutionResult scriptResult = scriptRunner.execute(script, new LinkedHashMap<>(variables), Map.of(), Map.of());
-        variables.clear();
-        variables.putAll(scriptResult.variables());
-        ApiProcessorResult processorResult = new ApiProcessorResult(
-                "SCENARIO",
-                "SCRIPT",
-                blankToFallback(step.stepName(), "Script"),
-                scriptResult.success(),
-                System.currentTimeMillis() - started,
-                scriptResult.message(),
-                scriptResult.logs(),
-                scriptResult.variables()
-        );
-        long durationMs = System.currentTimeMillis() - started;
-        List<ApiAssertionResult> assertionResults = scriptResult.success()
-                ? evaluateScriptStepAssertions(step.assertions(), durationMs, variables)
-                : List.of();
-        boolean assertionsPassed = assertionResults.stream().allMatch(ApiAssertionResult::success);
-        boolean success = scriptResult.success() && assertionsPassed;
-        String errorMessage = !scriptResult.success() ? scriptResult.message()
-                : assertionsPassed ? null : firstFailedMessage(assertionResults);
-        return new RunStepComputation(success, new ApiRunStepResultResponse(
-                null,
-                null,
-                stepOrder,
-                blankToFallback(step.stepName(), "Script"),
-                null,
-                success,
-                durationMs,
-                null,
-                null,
-                assertionResults,
-                List.of(),
-                List.of(processorResult),
-                errorMessage,
-                LocalDateTime.now()
-        ));
-    }
-
-    private List<ApiAssertionResult> evaluateScriptStepAssertions(
-            List<ApiAssertionInput> assertions,
-            long durationMs,
-            Map<String, String> variables
-    ) {
-        List<ApiAssertionInput> scriptAssertions = defaultList(assertions).stream()
-                .filter(Objects::nonNull)
-                .filter(assertion -> {
-                    String type = normalizeAssertionType(assertion);
-                    return "VARIABLE".equals(type) || "SCRIPT".equals(type);
-                })
-                .toList();
-        return evaluateAssertions(scriptAssertions, null, null, durationMs, variables);
-    }
-
-    private void sleep(int delayMs) {
-        try {
-            Thread.sleep(delayMs);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new BadRequestException("Wait processor was interrupted");
-        }
     }
 
     private List<ApiAssertionResult> evaluateAssertions(
@@ -1015,93 +816,6 @@ public class ApiExecutionEngineSupport {
     private List<ApiProcessorResult> readProcessorResults(String json) {
         return ApiAutomationJsonSupport.readList(json, new TypeReference<>() {
         }, List.of());
-    }
-
-    private RunStepComputation syntheticScenarioStep(
-            int stepOrder,
-            String stepName,
-            boolean success,
-            long durationMs,
-            String message,
-            List<ApiProcessorResult> processorResults
-    ) {
-        return new RunStepComputation(success, new ApiRunStepResultResponse(
-                null,
-                null,
-                stepOrder,
-                stepName,
-                null,
-                success,
-                durationMs,
-                null,
-                null,
-                List.of(),
-                List.of(),
-                defaultList(processorResults),
-                success ? null : message,
-                LocalDateTime.now()
-        ));
-    }
-
-    private boolean evaluateScenarioCondition(ApiScenarioStepInput step, Map<String, String> variables) {
-        String conditionType = blankToFallback(step.conditionType(), "EXPRESSION").toUpperCase(Locale.ROOT);
-        String expression = Optional.ofNullable(step.conditionExpression()).orElse("");
-        if ("SCRIPT".equals(conditionType)) {
-            if (expression.isBlank()) {
-                return false;
-            }
-            ApiAutomationScriptRunner.ScriptExecutionResult scriptResult = scriptRunner.execute(
-                    expression,
-                    new LinkedHashMap<>(variables),
-                    Map.of(),
-                    Map.of()
-            );
-            variables.clear();
-            variables.putAll(scriptResult.variables());
-            return scriptResult.success();
-        }
-        String resolved = Optional.ofNullable(variableResolver.replaceVariables(expression, variables)).orElse("").trim();
-        if (resolved.isBlank()) {
-            return false;
-        }
-        if ("true".equalsIgnoreCase(resolved)) {
-            return true;
-        }
-        if ("false".equalsIgnoreCase(resolved)) {
-            return false;
-        }
-        Matcher matcher = Pattern.compile("^(.+?)\\s*(==|=|!=|<>|>=|<=|>|<|contains)\\s*(.*)$", Pattern.CASE_INSENSITIVE).matcher(resolved);
-        if (!matcher.matches()) {
-            return false;
-        }
-        String actual = matcher.group(1).trim();
-        String operator = matcher.group(2).trim();
-        String expected = matcher.group(3).trim();
-        return compareValue(actual, normalizeAssertionCondition(operator, "EQUALS"), expected).success();
-    }
-
-    private int resolveScenarioLoopCount(ApiScenarioStepInput step, Map<String, String> variables) {
-        String loopType = normalizeLoopType(step.loopType());
-        if ("FOREACH".equals(loopType)) {
-            return scenarioForeachItems(step, variables).size();
-        }
-        if ("WHILE".equals(loopType)) {
-            return evaluateScenarioCondition(step, variables) ? MAX_SCENARIO_LOOP_COUNT : 0;
-        }
-        int count = Optional.ofNullable(step.loopCount()).orElse(1);
-        return Math.max(0, Math.min(MAX_SCENARIO_LOOP_COUNT, count));
-    }
-
-    private List<String> scenarioForeachItems(ApiScenarioStepInput step, Map<String, String> variables) {
-        if (!"FOREACH".equals(normalizeLoopType(step.loopType()))) {
-            return List.of();
-        }
-        String expression = Optional.ofNullable(variableResolver.replaceVariables(step.foreachExpression(), variables)).orElse("");
-        return java.util.Arrays.stream(expression.split("[,\\n]"))
-                .map(String::trim)
-                .filter(value -> !value.isBlank())
-                .limit(MAX_SCENARIO_LOOP_COUNT)
-                .toList();
     }
 
     private String normalizeLoopType(String loopType) {

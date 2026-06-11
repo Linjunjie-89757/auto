@@ -27,6 +27,24 @@ class ApiAutomationListControllerIntegrationTests extends IntegrationTestSupport
     private ApiAutomationService apiAutomationService;
 
     @Test
+    void listDefinitionsWithoutParamsKeepsCompatibleLoading() throws Exception {
+        String unique = uniquePrefix("defs-compatible");
+        ApiDefinitionDetail definition = createDefinition(
+                unique + "-definition",
+                unique + "-module",
+                "GET",
+                "/api/" + unique + "/resource",
+                "compatible"
+        );
+
+        mockMvc.perform(get("/api/automation/api/definitions")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.items[*].id", hasItem(definition.id().intValue())));
+    }
+
+    @Test
     void listDefinitionsSupportsKeywordModuleAndPaginationFilters() throws Exception {
         String unique = uniquePrefix("defs");
         ApiDefinitionModuleItem parentModule = apiAutomationService.createDefinitionModule(

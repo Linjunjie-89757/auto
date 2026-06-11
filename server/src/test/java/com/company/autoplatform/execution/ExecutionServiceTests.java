@@ -26,8 +26,13 @@ class ExecutionServiceTests {
     private final ReportAttachmentMapper reportAttachmentMapper = mock(ReportAttachmentMapper.class);
     private final WorkspaceService workspaceService = mock(WorkspaceService.class);
     private final ReportAttachmentStorageService reportAttachmentStorageService = mock(ReportAttachmentStorageService.class);
-    private final ExecutionService executionService = new ExecutionService(
+    private final ExecutionTaskDomainService taskDomainService = new ExecutionTaskDomainService(
             taskMapper,
+            reportMapper,
+            workspaceService
+    );
+    private final ExecutionService executionService = new ExecutionService(
+            taskDomainService,
             reportMapper,
             reportAttachmentMapper,
             workspaceService,

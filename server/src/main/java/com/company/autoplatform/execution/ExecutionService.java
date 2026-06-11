@@ -1,6 +1,7 @@
 package com.company.autoplatform.execution;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.common.JsonUtils;
 import com.company.autoplatform.common.NotFoundException;
@@ -24,6 +25,7 @@ public class ExecutionService {
     private static final Set<String> REPORT_RESULTS = Set.of("SUCCESS", "FAILED");
     private static final Set<String> REPORT_LOG_SOURCES = Set.of("MANUAL", "API", "WEB", "APP", "SYSTEM");
     private static final String DEFAULT_LOG_SOURCE = "MANUAL";
+    private static final long DEFAULT_TASK_PAGE_SIZE = 20;
 
     private final TaskMapper taskMapper;
     private final ReportMapper reportMapper;
@@ -45,7 +47,14 @@ public class ExecutionService {
         this.reportAttachmentStorageService = reportAttachmentStorageService;
     }
 
-    public PageResponse<TaskSummaryResponse> listTasks(String workspaceCode) {
+    public PageResponse<TaskSummaryResponse> listTasks(
+            String workspaceCode,
+            String keyword,
+            String status,
+            String engineType,
+            Long pageNo,
+            Long pageSize
+    ) {
         String normalized = WorkspaceScope.normalize(workspaceCode);
         LambdaQueryWrapper<TaskEntity> query = new LambdaQueryWrapper<>();
         if (!WorkspaceScope.isAll(normalized)) {
@@ -58,10 +67,39 @@ public class ExecutionService {
             }
             query.in(TaskEntity::getWorkspaceId, workspaceIds);
         }
-        var items = taskMapper.selectList(query.orderByAsc(TaskEntity::getId)).stream()
+        String trimmedKeyword = blankToNull(keyword);
+        if (trimmedKeyword != null) {
+            query.and(wrapper -> wrapper
+                    .like(TaskEntity::getTaskName, trimmedKeyword)
+                    .or()
+                    .like(TaskEntity::getSummary, trimmedKeyword));
+        }
+        String normalizedStatus = blankToNull(status);
+        if (normalizedStatus != null) {
+            query.eq(TaskEntity::getTaskStatus, normalizeTaskStatus(normalizedStatus));
+        }
+        String normalizedEngineType = blankToNull(engineType);
+        if (normalizedEngineType != null) {
+            query.eq(TaskEntity::getEngineType, normalizeEngineType(normalizedEngineType));
+        }
+
+        if (pageNo == null && pageSize == null) {
+            var allItems = taskMapper.selectList(query.orderByAsc(TaskEntity::getId)).stream()
+                    .map(this::toTaskSummary)
+                    .toList();
+            return new PageResponse<>(allItems, allItems.size());
+        }
+
+        long safePageNo = pageNo == null || pageNo <= 0 ? 1 : pageNo;
+        long safePageSize = pageSize == null || pageSize <= 0 ? DEFAULT_TASK_PAGE_SIZE : pageSize;
+        Page<TaskEntity> page = taskMapper.selectPage(
+                new Page<>(safePageNo, safePageSize),
+                query.orderByAsc(TaskEntity::getId)
+        );
+        var items = page.getRecords().stream()
                 .map(this::toTaskSummary)
                 .toList();
-        return new PageResponse<>(items, items.size());
+        return PageResponse.of(items, page.getTotal(), page.getCurrent(), page.getSize());
     }
 
     public TaskDetailResponse getTask(Long id, String workspaceCode) {

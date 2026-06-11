@@ -2637,7 +2637,6 @@ watch(
 )
 
 watch(() => caseListSettings.pageSize.value, () => {
-  void refreshCurrentCaseList(1, caseListSettings.pageSize.value)
   scheduleCaseListTableLayout()
 })
 
@@ -7218,6 +7217,7 @@ function caseStatusLabel(item: ApiDefinitionCaseItem) {
 
 function updateCaseListPageSize(size: number) {
   caseListSettings.updatePageSize(size)
+  void refreshCurrentCaseList(1, size)
 }
 
 function updateCaseListCurrentPage(pageNo: number) {

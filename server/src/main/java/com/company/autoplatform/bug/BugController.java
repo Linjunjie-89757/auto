@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -36,9 +37,15 @@ public class BugController {
 
     @GetMapping("/bugs")
     public ApiResponse<PageResponse<BugSummaryResponse>> listBugs(
-            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "status", required = false) String status,
+            @RequestParam(value = "severity", required = false) String severity,
+            @RequestParam(value = "priority", required = false) String priority,
+            @RequestParam(value = "pageNo", required = false) Integer pageNo,
+            @RequestParam(value = "pageSize", required = false) Integer pageSize
     ) {
-        return ApiResponse.ok(bugService.listBugs(workspaceCode));
+        return ApiResponse.ok(bugService.listBugs(workspaceCode, keyword, status, severity, priority, pageNo, pageSize));
     }
 
     @PostMapping("/bugs")

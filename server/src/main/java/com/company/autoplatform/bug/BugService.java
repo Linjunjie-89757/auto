@@ -29,6 +29,8 @@ import java.util.List;
 
 @Service
 public class BugService {
+    private static final int DEFAULT_PAGE_NO = 1;
+    private static final int DEFAULT_PAGE_SIZE = 10;
 
     private final BugMapper bugMapper;
     private final BugFlowMapper bugFlowMapper;
@@ -55,22 +57,67 @@ public class BugService {
         this.executionService = executionService;
     }
 
-    public PageResponse<BugSummaryResponse> listBugs(String workspaceCode) {
+    public PageResponse<BugSummaryResponse> listBugs(
+            String workspaceCode,
+            String keyword,
+            String status,
+            String severity,
+            String priority,
+            Integer pageNo,
+            Integer pageSize
+    ) {
         WorkspaceEntity workspace = resolveScopedWorkspace(workspaceCode);
+        int safePageNo = pageNo == null || pageNo < 1 ? DEFAULT_PAGE_NO : pageNo;
+        int safePageSize = pageSize == null || pageSize < 1 ? DEFAULT_PAGE_SIZE : pageSize;
+
         LambdaQueryWrapper<BugEntity> query = new LambdaQueryWrapper<>();
         if (workspace != null) {
             query.eq(BugEntity::getWorkspaceId, workspace.getId());
         } else if (!workspaceService.isPlatformAdmin()) {
             List<Long> workspaceIds = workspaceService.listReadableWorkspaceIds();
             if (workspaceIds.isEmpty()) {
-                return new PageResponse<>(List.of(), 0);
+                return PageResponse.of(List.of(), 0, safePageNo, safePageSize);
             }
             query.in(BugEntity::getWorkspaceId, workspaceIds);
         }
-        var items = bugMapper.selectList(query.orderByDesc(BugEntity::getId)).stream()
+
+        String normalizedKeyword = blankToNull(keyword);
+        if (normalizedKeyword != null) {
+            query.and(wrapper -> wrapper
+                    .like(BugEntity::getBugNo, normalizedKeyword)
+                    .or()
+                    .like(BugEntity::getTitle, normalizedKeyword));
+        }
+
+        String normalizedStatus = blankToNull(status);
+        if (normalizedStatus != null) {
+            query.eq(BugEntity::getStatus, normalizeBugStatus(normalizedStatus));
+        }
+
+        String normalizedSeverity = blankToNull(severity);
+        if (normalizedSeverity != null) {
+            query.eq(BugEntity::getSeverity, normalizeBugSeverity(normalizedSeverity));
+        }
+
+        String normalizedPriority = blankToNull(priority);
+        if (normalizedPriority != null) {
+            query.eq(BugEntity::getPriority, normalizeBugPriority(normalizedPriority));
+        }
+
+        long total = bugMapper.selectCount(query);
+        if (total == 0) {
+            return PageResponse.of(List.of(), 0, safePageNo, safePageSize);
+        }
+
+        int offset = (safePageNo - 1) * safePageSize;
+        var items = bugMapper.selectList(query
+                        .orderByDesc(BugEntity::getUpdatedAt)
+                        .orderByDesc(BugEntity::getId)
+                        .last("limit " + safePageSize + " offset " + offset))
+                .stream()
                 .map(this::toSummary)
                 .toList();
-        return new PageResponse<>(items, items.size());
+        return PageResponse.of(items, total, safePageNo, safePageSize);
     }
 
     public BugDetailResponse getBug(Long id, String workspaceCode) {
@@ -368,6 +415,37 @@ public class BugService {
         flow.setCreatedAt(LocalDateTime.now());
         flow.setUpdatedAt(LocalDateTime.now());
         bugFlowMapper.insert(flow);
+    }
+
+    private String blankToNull(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private String normalizeBugStatus(String status) {
+        try {
+            return BugStatus.valueOf(status.trim().toUpperCase()).name();
+        } catch (IllegalArgumentException exception) {
+            throw new BadRequestException("缺陷状态不合法");
+        }
+    }
+
+    private String normalizeBugSeverity(String severity) {
+        try {
+            return BugSeverity.valueOf(severity.trim().toUpperCase()).name();
+        } catch (IllegalArgumentException exception) {
+            throw new BadRequestException("严重级别不合法");
+        }
+    }
+
+    private String normalizeBugPriority(String priority) {
+        try {
+            return BugPriority.valueOf(priority.trim().toUpperCase()).name();
+        } catch (IllegalArgumentException exception) {
+            throw new BadRequestException("优先级不合法");
+        }
     }
 
     private List<BugFlowEntity> listFlowEntities(Long bugId) {

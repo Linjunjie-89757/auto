@@ -521,6 +521,7 @@ public class AiGenerationTaskService {
                     writeValue(Map.of("reason", blankToNull(review.fallbackReason()) == null ? "" : review.fallbackReason()))
             );
         }
+        appendEvent(taskId, "REVIEW_COMPLETED", "REVIEWING", "INFO", "AI stream review completed", null, null, review.provider(), review.model(), null);
         appendEvent(taskId, "TASK_COMPLETED", "DONE", "INFO", "实时流式任务已完成", null, null, review.provider(), review.model(), null);
     }
 

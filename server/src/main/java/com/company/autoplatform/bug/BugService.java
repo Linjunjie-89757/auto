@@ -1,7 +1,6 @@
 package com.company.autoplatform.bug;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.company.autoplatform.auth.CurrentUserContext;
 import com.company.autoplatform.casecenter.CaseDetailResponse;
 import com.company.autoplatform.casecenter.CaseEntity;
@@ -17,7 +16,6 @@ import com.company.autoplatform.execution.TaskDetailResponse;
 import com.company.autoplatform.user.UserEntity;
 import com.company.autoplatform.user.UserService;
 import com.company.autoplatform.workspace.WorkspaceEntity;
-import com.company.autoplatform.workspace.WorkspaceScope;
 import com.company.autoplatform.workspace.WorkspaceService;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -29,9 +27,7 @@ import java.util.List;
 
 @Service
 public class BugService {
-    private static final int DEFAULT_PAGE_NO = 1;
-    private static final int DEFAULT_PAGE_SIZE = 10;
-
+    private final BugDomainService bugDomainService;
     private final BugMapper bugMapper;
     private final BugFlowMapper bugFlowMapper;
     private final BugCommentMapper bugCommentMapper;
@@ -42,10 +38,11 @@ public class BugService {
     private final CaseService caseService;
     private final ExecutionService executionService;
 
-    public BugService(BugMapper bugMapper, BugFlowMapper bugFlowMapper, BugCommentMapper bugCommentMapper,
+    public BugService(BugDomainService bugDomainService, BugMapper bugMapper, BugFlowMapper bugFlowMapper, BugCommentMapper bugCommentMapper,
                       BugAttachmentMapper bugAttachmentMapper, BugAttachmentStorageService bugAttachmentStorageService,
                       UserService userService, WorkspaceService workspaceService, CaseService caseService,
                       ExecutionService executionService) {
+        this.bugDomainService = bugDomainService;
         this.bugMapper = bugMapper;
         this.bugFlowMapper = bugFlowMapper;
         this.bugCommentMapper = bugCommentMapper;
@@ -66,143 +63,31 @@ public class BugService {
             Integer pageNo,
             Integer pageSize
     ) {
-        WorkspaceEntity workspace = resolveScopedWorkspace(workspaceCode);
-        int safePageNo = pageNo == null || pageNo < 1 ? DEFAULT_PAGE_NO : pageNo;
-        int safePageSize = pageSize == null || pageSize < 1 ? DEFAULT_PAGE_SIZE : pageSize;
-
-        LambdaQueryWrapper<BugEntity> query = new LambdaQueryWrapper<>();
-        if (workspace != null) {
-            query.eq(BugEntity::getWorkspaceId, workspace.getId());
-        } else if (!workspaceService.isPlatformAdmin()) {
-            List<Long> workspaceIds = workspaceService.listReadableWorkspaceIds();
-            if (workspaceIds.isEmpty()) {
-                return PageResponse.of(List.of(), 0, safePageNo, safePageSize);
-            }
-            query.in(BugEntity::getWorkspaceId, workspaceIds);
-        }
-
-        String normalizedKeyword = blankToNull(keyword);
-        if (normalizedKeyword != null) {
-            query.and(wrapper -> wrapper
-                    .like(BugEntity::getBugNo, normalizedKeyword)
-                    .or()
-                    .like(BugEntity::getTitle, normalizedKeyword));
-        }
-
-        String normalizedStatus = blankToNull(status);
-        if (normalizedStatus != null) {
-            query.eq(BugEntity::getStatus, normalizeBugStatus(normalizedStatus));
-        }
-
-        String normalizedSeverity = blankToNull(severity);
-        if (normalizedSeverity != null) {
-            query.eq(BugEntity::getSeverity, normalizeBugSeverity(normalizedSeverity));
-        }
-
-        String normalizedPriority = blankToNull(priority);
-        if (normalizedPriority != null) {
-            query.eq(BugEntity::getPriority, normalizeBugPriority(normalizedPriority));
-        }
-
-        long total = bugMapper.selectCount(query);
-        if (total == 0) {
-            return PageResponse.of(List.of(), 0, safePageNo, safePageSize);
-        }
-
-        int offset = (safePageNo - 1) * safePageSize;
-        var items = bugMapper.selectList(query
-                        .orderByDesc(BugEntity::getUpdatedAt)
-                        .orderByDesc(BugEntity::getId)
-                        .last("limit " + safePageSize + " offset " + offset))
-                .stream()
-                .map(this::toSummary)
-                .toList();
-        return PageResponse.of(items, total, safePageNo, safePageSize);
+        PageResponse<BugEntity> page = bugDomainService.listBugs(workspaceCode, keyword, status, severity, priority, pageNo, pageSize);
+        return new PageResponse<>(
+                page.items().stream().map(this::toSummary).toList(),
+                page.total(),
+                page.pageNo(),
+                page.pageSize(),
+                page.totalPages()
+        );
     }
 
     public BugDetailResponse getBug(Long id, String workspaceCode) {
-        BugEntity entity = requireBug(id);
-        validateReadable(entity, workspaceCode);
-        return toDetail(entity);
+        return toDetail(bugDomainService.getBug(id, workspaceCode));
     }
 
     public BugDetailResponse createBug(String headerWorkspaceCode, CreateBugRequest request, BugSourceType sourceType) {
-        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
-                workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode()));
-        userService.requireUser(request.assigneeId());
-        if (request.relatedCaseId() != null) {
-            caseService.requireCase(request.relatedCaseId());
-        }
-        if (request.relatedReportId() != null) {
-            executionService.requireReport(request.relatedReportId());
-        }
-
-        BugEntity entity = new BugEntity();
-        entity.setWorkspaceId(workspace.getId());
-        entity.setBugNo(generateBugNo());
-        entity.setTitle(request.title());
-        entity.setDescription(request.description());
-        entity.setPriority(request.priority().name());
-        entity.setSeverity(request.severity().name());
-        entity.setStatus(BugStatus.ASSIGNED.name());
-        entity.setSourceType(sourceType.name());
-        entity.setAssigneeId(request.assigneeId());
-        entity.setReporterId(CurrentUserContext.get());
-        entity.setRelatedCaseId(request.relatedCaseId());
-        entity.setRelatedReportId(request.relatedReportId());
-        entity.setRelatedTaskId(request.relatedTaskId());
-        entity.setTagsJson(JsonUtils.toJson(request.tags()));
-        entity.setCreatedAt(LocalDateTime.now());
-        entity.setUpdatedAt(LocalDateTime.now());
-        bugMapper.insert(entity);
-
-        if (request.assigneeId() != null) {
-            appendFlow(entity.getId(), BugStatus.TODO, BugStatus.ASSIGNED, "创建缺陷并分配处理人");
-        }
-        return toDetail(requireBug(entity.getId()));
+        return toDetail(bugDomainService.createBug(headerWorkspaceCode, request, sourceType));
     }
 
     public BugDetailResponse updateBug(Long id, String headerWorkspaceCode, UpdateBugRequest request) {
-        BugEntity entity = requireBug(id);
-        validateReadable(entity, headerWorkspaceCode);
-        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
-                workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode()));
-        if (!entity.getWorkspaceId().equals(workspace.getId())) {
-            throw new BadRequestException("不允许修改缺陷所属空间");
-        }
-        if (request.assigneeId() != null) {
-            userService.requireUser(request.assigneeId());
-        }
-        if (request.relatedCaseId() != null) {
-            caseService.requireCase(request.relatedCaseId());
-        }
-        entity.setTitle(request.title());
-        entity.setDescription(request.description());
-        entity.setPriority(request.priority().name());
-        entity.setSeverity(request.severity().name());
-        entity.setAssigneeId(request.assigneeId());
-        entity.setRelatedCaseId(request.relatedCaseId());
-        entity.setTagsJson(JsonUtils.toJson(request.tags()));
-        entity.setUpdatedAt(LocalDateTime.now());
-        bugMapper.update(
-                null,
-                new LambdaUpdateWrapper<BugEntity>()
-                        .eq(BugEntity::getId, entity.getId())
-                        .set(BugEntity::getTitle, entity.getTitle())
-                        .set(BugEntity::getDescription, entity.getDescription())
-                        .set(BugEntity::getPriority, entity.getPriority())
-                        .set(BugEntity::getSeverity, entity.getSeverity())
-                        .set(BugEntity::getAssigneeId, entity.getAssigneeId())
-                        .set(BugEntity::getRelatedCaseId, entity.getRelatedCaseId())
-                        .set(BugEntity::getTagsJson, entity.getTagsJson())
-                        .set(BugEntity::getUpdatedAt, entity.getUpdatedAt())
-        );
-        return toDetail(entity);
+        return toDetail(bugDomainService.updateBug(id, headerWorkspaceCode, request));
     }
 
     public BugDetailResponse assignBug(Long id, String headerWorkspaceCode, AssignBugRequest request) {
         BugEntity entity = requireBug(id);
-        validateReadable(entity, headerWorkspaceCode);
+        bugDomainService.validateReadable(entity, headerWorkspaceCode);
         workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
         UserEntity assignee = userService.requireUser(request.assigneeId());
         BugStatus fromStatus = BugStatus.valueOf(entity.getStatus());
@@ -216,7 +101,7 @@ public class BugService {
 
     public BugDetailResponse transitionBug(Long id, String headerWorkspaceCode, TransitionBugRequest request) {
         BugEntity entity = requireBug(id);
-        validateReadable(entity, headerWorkspaceCode);
+        bugDomainService.validateReadable(entity, headerWorkspaceCode);
         workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
         BugStatus fromStatus = BugStatus.valueOf(entity.getStatus());
         if (fromStatus == request.toStatus()) {
@@ -231,13 +116,13 @@ public class BugService {
 
     public List<BugCommentResponse> listComments(Long id, String workspaceCode) {
         BugEntity entity = requireBug(id);
-        validateReadable(entity, workspaceCode);
+        bugDomainService.validateReadable(entity, workspaceCode);
         return listCommentEntities(id).stream().map(this::toComment).toList();
     }
 
     public BugCommentResponse addComment(Long id, String workspaceCode, CreateBugCommentRequest request) {
         BugEntity entity = requireBug(id);
-        validateReadable(entity, workspaceCode);
+        bugDomainService.validateReadable(entity, workspaceCode);
         workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
         BugCommentEntity comment = new BugCommentEntity();
         comment.setBugId(id);
@@ -251,7 +136,7 @@ public class BugService {
 
     public List<BugAttachmentResponse> uploadBugAttachments(Long bugId, String workspaceCode, List<MultipartFile> files) {
         BugEntity bug = requireBug(bugId);
-        validateReadable(bug, workspaceCode);
+        bugDomainService.validateReadable(bug, workspaceCode);
         workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(bug.getWorkspaceId()).getWorkspaceCode());
 
         List<StoredBugFile> storedFiles = bugAttachmentStorageService.storeAll(bug.getWorkspaceId(), bugId, files);
@@ -293,7 +178,7 @@ public class BugService {
 
     public void deleteBugAttachment(Long bugId, Long attachmentId, String workspaceCode) {
         BugEntity bug = requireBug(bugId);
-        validateReadable(bug, workspaceCode);
+        bugDomainService.validateReadable(bug, workspaceCode);
         workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(bug.getWorkspaceId()).getWorkspaceCode());
         BugAttachmentEntity attachment = requireAttachment(attachmentId);
         if (!attachment.getBugId().equals(bugId)) {
@@ -307,7 +192,7 @@ public class BugService {
 
     public BugFileDownload downloadBugAttachment(Long bugId, Long attachmentId, String workspaceCode) {
         BugEntity bug = requireBug(bugId);
-        validateReadable(bug, workspaceCode);
+        bugDomainService.validateReadable(bug, workspaceCode);
         BugAttachmentEntity attachment = requireAttachment(attachmentId);
         if (!attachment.getBugId().equals(bugId)) {
             throw new BadRequestException("附件不属于当前缺陷");
@@ -316,27 +201,7 @@ public class BugService {
     }
 
     public BugStatisticsResponse statistics(String workspaceCode) {
-        WorkspaceEntity workspace = resolveScopedWorkspace(workspaceCode);
-        LambdaQueryWrapper<BugEntity> query = new LambdaQueryWrapper<>();
-        if (workspace != null) {
-            query.eq(BugEntity::getWorkspaceId, workspace.getId());
-        } else if (!workspaceService.isPlatformAdmin()) {
-            List<Long> workspaceIds = workspaceService.listReadableWorkspaceIds();
-            if (workspaceIds.isEmpty()) {
-                return new BugStatisticsResponse(0, 0, 0, 0, 0, 0, 0);
-            }
-            query.in(BugEntity::getWorkspaceId, workspaceIds);
-        }
-        var scoped = bugMapper.selectList(query);
-        return new BugStatisticsResponse(
-                scoped.size(),
-                scoped.stream().filter(item -> BugStatus.valueOf(item.getStatus()) == BugStatus.TODO).count(),
-                scoped.stream().filter(item -> BugStatus.valueOf(item.getStatus()) == BugStatus.ASSIGNED).count(),
-                scoped.stream().filter(item -> BugStatus.valueOf(item.getStatus()) == BugStatus.IN_PROGRESS).count(),
-                scoped.stream().filter(item -> BugStatus.valueOf(item.getStatus()) == BugStatus.PENDING_VERIFY).count(),
-                scoped.stream().filter(item -> BugStatus.valueOf(item.getStatus()) == BugStatus.CLOSED).count(),
-                scoped.stream().filter(item -> BugStatus.valueOf(item.getStatus()) == BugStatus.REJECTED).count()
-        );
+        return bugDomainService.statistics(workspaceCode);
     }
 
     public BugDetailResponse createBugFromCase(Long caseId, String workspaceCode, CreateBugRequest request) {
@@ -374,11 +239,7 @@ public class BugService {
     }
 
     public BugEntity requireBug(Long id) {
-        BugEntity entity = bugMapper.selectById(id);
-        if (entity == null) {
-            throw new NotFoundException("缺陷不存在");
-        }
-        return entity;
+        return bugDomainService.requireBug(id);
     }
 
     private BugAttachmentEntity requireAttachment(Long attachmentId) {
@@ -387,22 +248,6 @@ public class BugService {
             throw new NotFoundException("附件不存在");
         }
         return attachment;
-    }
-
-    private WorkspaceEntity resolveScopedWorkspace(String workspaceCode) {
-        String normalized = WorkspaceScope.normalize(workspaceCode);
-        return WorkspaceScope.isAll(normalized) ? null : workspaceService.requireReadableWorkspace(normalized);
-    }
-
-    private void validateReadable(BugEntity entity, String workspaceCode) {
-        WorkspaceEntity workspace = resolveScopedWorkspace(workspaceCode);
-        if (workspace != null && !workspace.getId().equals(entity.getWorkspaceId())) {
-            throw new BadRequestException("当前空间上下文不可访问该缺陷");
-        }
-        if (workspace == null && !workspaceService.isPlatformAdmin()
-                && !workspaceService.listReadableWorkspaceIds().contains(entity.getWorkspaceId())) {
-            throw new BadRequestException("当前空间上下文不可访问该缺陷");
-        }
     }
 
     private void appendFlow(Long bugId, BugStatus fromStatus, BugStatus toStatus, String comment) {
@@ -415,37 +260,6 @@ public class BugService {
         flow.setCreatedAt(LocalDateTime.now());
         flow.setUpdatedAt(LocalDateTime.now());
         bugFlowMapper.insert(flow);
-    }
-
-    private String blankToNull(String value) {
-        if (value == null || value.trim().isEmpty()) {
-            return null;
-        }
-        return value.trim();
-    }
-
-    private String normalizeBugStatus(String status) {
-        try {
-            return BugStatus.valueOf(status.trim().toUpperCase()).name();
-        } catch (IllegalArgumentException exception) {
-            throw new BadRequestException("缺陷状态不合法");
-        }
-    }
-
-    private String normalizeBugSeverity(String severity) {
-        try {
-            return BugSeverity.valueOf(severity.trim().toUpperCase()).name();
-        } catch (IllegalArgumentException exception) {
-            throw new BadRequestException("严重级别不合法");
-        }
-    }
-
-    private String normalizeBugPriority(String priority) {
-        try {
-            return BugPriority.valueOf(priority.trim().toUpperCase()).name();
-        } catch (IllegalArgumentException exception) {
-            throw new BadRequestException("优先级不合法");
-        }
     }
 
     private List<BugFlowEntity> listFlowEntities(Long bugId) {
@@ -788,29 +602,4 @@ public class BugService {
         );
     }
 
-    private String generateBugNo() {
-        int nextNumber = bugMapper.selectList(new LambdaQueryWrapper<BugEntity>()).stream()
-                .map(BugEntity::getBugNo)
-                .map(this::parseBugSequence)
-                .max(Integer::compareTo)
-                .orElse(0) + 1;
-        return "BUG-" + String.format("%03d", nextNumber);
-    }
-
-    private int parseBugSequence(String bugNo) {
-        if (bugNo == null || !bugNo.startsWith("BUG-")) {
-            return 0;
-        }
-        String suffix = bugNo.substring(4);
-        for (int i = 0; i < suffix.length(); i++) {
-            if (!Character.isDigit(suffix.charAt(i))) {
-                return 0;
-            }
-        }
-        try {
-            return Integer.parseInt(suffix);
-        } catch (NumberFormatException exception) {
-            return 0;
-        }
-    }
 }

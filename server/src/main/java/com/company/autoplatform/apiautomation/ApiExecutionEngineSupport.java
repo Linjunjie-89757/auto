@@ -79,6 +79,7 @@ public class ApiExecutionEngineSupport {
     private final ApiProcessorExecutor processorExecutor;
     private final ApiScenarioExecutionSupport scenarioExecutionSupport;
     private final ApiRunResultPersistenceSupport runResultPersistenceSupport;
+    private final ApiRunFinalizerSupport runFinalizerSupport;
 
     public ApiExecutionEngineSupport(
             ApiDefinitionMapper definitionMapper,
@@ -97,7 +98,8 @@ public class ApiExecutionEngineSupport {
             ApiRequestExecutionSupport requestExecutionSupport,
             ApiProcessorExecutor processorExecutor,
             ApiScenarioExecutionSupport scenarioExecutionSupport,
-            ApiRunResultPersistenceSupport runResultPersistenceSupport
+            ApiRunResultPersistenceSupport runResultPersistenceSupport,
+            ApiRunFinalizerSupport runFinalizerSupport
     ) {
         this.definitionMapper = definitionMapper;
         this.caseMapper = caseMapper;
@@ -116,6 +118,7 @@ public class ApiExecutionEngineSupport {
         this.processorExecutor = processorExecutor;
         this.scenarioExecutionSupport = scenarioExecutionSupport;
         this.runResultPersistenceSupport = runResultPersistenceSupport;
+        this.runFinalizerSupport = runFinalizerSupport;
     }
     ExecutionContext buildExecutionContext(Long workspaceId, Long environmentId, Long variableSetId) {
         ResolvedEnvironment environment = resolveEnvironment(workspaceId, environmentId);
@@ -458,41 +461,19 @@ public class ApiExecutionEngineSupport {
     }
 
     void finalizeRunDefinition(ApiDefinitionEntity definition, boolean success, TaskEntity task, ReportEntity report, RunStepComputation step) {
-        String result = success ? "SUCCESS" : "FAILED";
-        definition.setLastRunResult(result);
-        definition.setLastRunAt(LocalDateTime.now());
-        definition.setUpdatedAt(LocalDateTime.now());
-        definitionMapper.updateById(definition);
-        finalizeRunTaskAndReport(task, report, result, step.response().errorMessage());
+        runFinalizerSupport.finalizeRunDefinition(definition, success, task, report, step);
     }
 
     void finalizeRunCase(ApiDefinitionCaseEntity apiCase, boolean success, TaskEntity task, ReportEntity report, RunStepComputation step) {
-        String result = success ? "SUCCESS" : "FAILED";
-        apiCase.setLastRunResult(result);
-        apiCase.setLastRunAt(LocalDateTime.now());
-        apiCase.setUpdatedAt(LocalDateTime.now());
-        caseMapper.updateById(apiCase);
-        finalizeRunTaskAndReport(task, report, result, step.response().errorMessage());
+        runFinalizerSupport.finalizeRunCase(apiCase, success, task, report, step);
     }
 
     void finalizeRunScenario(ApiScenarioEntity scenario, boolean success, String failureSummary, TaskEntity task, ReportEntity report) {
-        String result = success ? "SUCCESS" : "FAILED";
-        scenario.setLastRunResult(result);
-        scenario.setLastRunAt(LocalDateTime.now());
-        scenario.setUpdatedAt(LocalDateTime.now());
-        scenarioMapper.updateById(scenario);
-        finalizeRunTaskAndReport(task, report, result, failureSummary);
+        runFinalizerSupport.finalizeRunScenario(scenario, success, failureSummary, task, report);
     }
 
     void finalizeRunTaskAndReport(TaskEntity task, ReportEntity report, String result, String failureSummary) {
-        task.setTaskStatus(result);
-        task.setUpdatedAt(LocalDateTime.now());
-        taskMapper.updateById(task);
-
-        report.setResult(result);
-        report.setFailureSummary(blankToNull(failureSummary));
-        report.setUpdatedAt(LocalDateTime.now());
-        reportMapper.updateById(report);
+        runFinalizerSupport.finalizeRunTaskAndReport(task, report, result, failureSummary);
     }
 
     void persistCaseRunHistory(

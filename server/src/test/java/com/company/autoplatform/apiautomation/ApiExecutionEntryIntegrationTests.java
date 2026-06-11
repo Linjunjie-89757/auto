@@ -62,18 +62,7 @@ class ApiExecutionEntryIntegrationTests extends IntegrationTestSupport {
 
     @Test
     void debugRunSavedDefinitionReturnsSuccessfulRunAndUpdatesLastRunResult() {
-        ApiDefinitionDetail definition = apiAutomationService.createDefinition(WORKSPACE_CODE, new SaveApiDefinitionRequest(
-                WORKSPACE_CODE,
-                "saved definition entry smoke " + System.nanoTime(),
-                null,
-                "entry smoke",
-                List.of("entry-smoke"),
-                requestConfig(),
-                List.of(statusCodeAssertion()),
-                List.of(),
-                List.of(),
-                List.of()
-        ));
+        ApiDefinitionDetail definition = createDefinition("saved definition entry smoke " + System.nanoTime());
 
         ApiRunResponse run = apiAutomationService.debugRunDefinition(
                 definition.id(),

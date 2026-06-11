@@ -1,7 +1,6 @@
 package com.company.autoplatform.bug;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.company.autoplatform.auth.CurrentUserContext;
 import com.company.autoplatform.casecenter.CaseDetailResponse;
 import com.company.autoplatform.casecenter.CaseEntity;
 import com.company.autoplatform.casecenter.CaseService;
@@ -29,6 +28,7 @@ public class BugService {
     private final BugDomainService bugDomainService;
     private final BugAttachmentSupport bugAttachmentSupport;
     private final BugWorkflowDomainService bugWorkflowDomainService;
+    private final BugCommentDomainService bugCommentDomainService;
     private final BugFlowMapper bugFlowMapper;
     private final BugCommentMapper bugCommentMapper;
     private final BugAttachmentMapper bugAttachmentMapper;
@@ -39,6 +39,7 @@ public class BugService {
 
     public BugService(BugDomainService bugDomainService, BugAttachmentSupport bugAttachmentSupport,
                       BugWorkflowDomainService bugWorkflowDomainService,
+                      BugCommentDomainService bugCommentDomainService,
                       BugFlowMapper bugFlowMapper, BugCommentMapper bugCommentMapper,
                       BugAttachmentMapper bugAttachmentMapper,
                       UserService userService, WorkspaceService workspaceService, CaseService caseService,
@@ -46,6 +47,7 @@ public class BugService {
         this.bugDomainService = bugDomainService;
         this.bugAttachmentSupport = bugAttachmentSupport;
         this.bugWorkflowDomainService = bugWorkflowDomainService;
+        this.bugCommentDomainService = bugCommentDomainService;
         this.bugFlowMapper = bugFlowMapper;
         this.bugCommentMapper = bugCommentMapper;
         this.bugAttachmentMapper = bugAttachmentMapper;
@@ -95,23 +97,11 @@ public class BugService {
     }
 
     public List<BugCommentResponse> listComments(Long id, String workspaceCode) {
-        BugEntity entity = requireBug(id);
-        bugDomainService.validateReadable(entity, workspaceCode);
-        return listCommentEntities(id).stream().map(this::toComment).toList();
+        return bugCommentDomainService.listComments(id, workspaceCode).stream().map(this::toComment).toList();
     }
 
     public BugCommentResponse addComment(Long id, String workspaceCode, CreateBugCommentRequest request) {
-        BugEntity entity = requireBug(id);
-        bugDomainService.validateReadable(entity, workspaceCode);
-        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
-        BugCommentEntity comment = new BugCommentEntity();
-        comment.setBugId(id);
-        comment.setContent(request.content());
-        comment.setCommenterId(CurrentUserContext.get());
-        comment.setCreatedAt(LocalDateTime.now());
-        comment.setUpdatedAt(LocalDateTime.now());
-        bugCommentMapper.insert(comment);
-        return toComment(comment);
+        return toComment(bugCommentDomainService.addComment(id, workspaceCode, request));
     }
 
     public List<BugAttachmentResponse> uploadBugAttachments(Long bugId, String workspaceCode, List<MultipartFile> files) {

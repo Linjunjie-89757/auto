@@ -34,6 +34,7 @@ public class CaseService {
     private static final Pattern CASE_NO_PATTERN = Pattern.compile("^CASE-(\\d+)$", Pattern.CASE_INSENSITIVE);
 
     private final CaseDomainService caseDomainService;
+    private final CaseDirectoryDomainService caseDirectoryDomainService;
     private final CaseMapper caseMapper;
     private final CaseDirectoryMapper caseDirectoryMapper;
     private final CaseExecutionAttachmentMapper caseExecutionAttachmentMapper;
@@ -43,6 +44,7 @@ public class CaseService {
 
     public CaseService(
             CaseDomainService caseDomainService,
+            CaseDirectoryDomainService caseDirectoryDomainService,
             CaseMapper caseMapper,
             CaseDirectoryMapper caseDirectoryMapper,
             CaseExecutionAttachmentMapper caseExecutionAttachmentMapper,
@@ -51,6 +53,7 @@ public class CaseService {
             WorkspaceService workspaceService
     ) {
         this.caseDomainService = caseDomainService;
+        this.caseDirectoryDomainService = caseDirectoryDomainService;
         this.caseMapper = caseMapper;
         this.caseDirectoryMapper = caseDirectoryMapper;
         this.caseExecutionAttachmentMapper = caseExecutionAttachmentMapper;
@@ -249,100 +252,23 @@ public class CaseService {
     }
 
     public List<CaseDirectoryWorkspaceResponse> listDirectories(String workspaceCode) {
-        String normalized = WorkspaceScope.normalize(workspaceCode);
-        List<WorkspaceEntity> readableWorkspaces;
-        if (!WorkspaceScope.isAll(normalized)) {
-            readableWorkspaces = List.of(workspaceService.requireReadableWorkspace(normalized));
-        } else {
-            readableWorkspaces = workspaceService.listReadableWorkspaceEntities();
-        }
-        if (readableWorkspaces.isEmpty()) {
-            return List.of();
-        }
-
-        List<Long> workspaceIds = readableWorkspaces.stream().map(WorkspaceEntity::getId).toList();
-        List<CaseDirectoryEntity> directories = caseDirectoryMapper.selectList(new LambdaQueryWrapper<CaseDirectoryEntity>()
-                .in(CaseDirectoryEntity::getWorkspaceId, workspaceIds)
-                .orderByAsc(CaseDirectoryEntity::getWorkspaceId)
-                .orderByAsc(CaseDirectoryEntity::getId));
-        Map<Long, List<CaseDirectoryEntity>> grouped = directories.stream()
-                .collect(Collectors.groupingBy(CaseDirectoryEntity::getWorkspaceId, LinkedHashMap::new, Collectors.toList()));
-
-        return readableWorkspaces.stream()
-                .map(workspace -> new CaseDirectoryWorkspaceResponse(
-                        workspace.getWorkspaceCode(),
-                        workspace.getWorkspaceName(),
-                        buildDirectoryTree(workspace, grouped.getOrDefault(workspace.getId(), List.of()))
-                ))
-                .toList();
+        return caseDirectoryDomainService.listDirectories(workspaceCode);
     }
 
     public CaseDirectoryNodeResponse createDirectory(String headerWorkspaceCode, CreateCaseDirectoryRequest request) {
-        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(
-                workspaceService.resolveTargetWorkspace(headerWorkspaceCode, request.workspaceCode()));
-        CaseDirectoryEntity parent = requireParentDirectory(workspace, request.parentId());
-
-        CaseDirectoryEntity entity = new CaseDirectoryEntity();
-        entity.setWorkspaceId(workspace.getId());
-        entity.setParentId(parent == null ? null : parent.getId());
-        entity.setDirectoryName(request.name().trim());
-        entity.setCreatedAt(LocalDateTime.now());
-        entity.setUpdatedAt(LocalDateTime.now());
-        caseDirectoryMapper.insert(entity);
-        return toDirectoryNode(entity, workspace, List.of());
+        return caseDirectoryDomainService.createDirectory(headerWorkspaceCode, request);
     }
 
     public CaseDirectoryNodeResponse renameDirectory(Long id, String workspaceCode, RenameCaseDirectoryRequest request) {
-        CaseDirectoryEntity entity = requireDirectory(id);
-        validateDirectoryReadable(entity, workspaceCode);
-        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
-
-        entity.setDirectoryName(request.name().trim());
-        entity.setUpdatedAt(LocalDateTime.now());
-        caseDirectoryMapper.updateById(entity);
-        return toDirectoryNode(entity, workspace, List.of());
+        return caseDirectoryDomainService.renameDirectory(id, workspaceCode, request);
     }
 
     public CaseDirectoryNodeResponse moveDirectory(Long id, String workspaceCode, MoveCaseDirectoryRequest request) {
-        CaseDirectoryEntity entity = requireDirectory(id);
-        validateDirectoryReadable(entity, workspaceCode);
-        WorkspaceEntity workspace = workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
-
-        CaseDirectoryEntity targetParent = requireParentDirectory(workspace, request.targetParentId());
-        if (targetParent != null && targetParent.getId().equals(entity.getId())) {
-            throw new BadRequestException("目录不能移动到自己下面");
-        }
-        if (targetParent != null) {
-            Set<Long> descendantIds = collectDescendantIds(entity.getWorkspaceId(), entity.getId());
-            if (descendantIds.contains(targetParent.getId())) {
-                throw new BadRequestException("目录不能移动到自己的子节点下面");
-            }
-        }
-
-        entity.setParentId(targetParent == null ? null : targetParent.getId());
-        entity.setUpdatedAt(LocalDateTime.now());
-        caseDirectoryMapper.updateById(entity);
-        return toDirectoryNode(entity, workspace, List.of());
+        return caseDirectoryDomainService.moveDirectory(id, workspaceCode, request);
     }
 
     public void deleteDirectory(Long id, String workspaceCode) {
-        CaseDirectoryEntity entity = requireDirectory(id);
-        validateDirectoryReadable(entity, workspaceCode);
-        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
-
-        long childCount = caseDirectoryMapper.selectCount(new LambdaQueryWrapper<CaseDirectoryEntity>()
-                .eq(CaseDirectoryEntity::getParentId, entity.getId()));
-        if (childCount > 0) {
-            throw new BadRequestException("当前目录下还有子模块，暂不允许删除");
-        }
-
-        long boundCaseCount = caseMapper.selectCount(new LambdaQueryWrapper<CaseEntity>()
-                .eq(CaseEntity::getCaseDirectoryId, entity.getId()));
-        if (boundCaseCount > 0) {
-            throw new BadRequestException("当前目录下还有用例，暂不允许删除");
-        }
-
-        caseDirectoryMapper.deleteById(id);
+        caseDirectoryDomainService.deleteDirectory(id, workspaceCode);
     }
 
     public CaseEntity requireCase(Long id) {
@@ -358,11 +284,7 @@ public class CaseService {
     }
 
     public CaseDirectoryEntity requireDirectory(Long id) {
-        CaseDirectoryEntity entity = caseDirectoryMapper.selectById(id);
-        if (entity == null) {
-            throw new NotFoundException("目录不存在");
-        }
-        return entity;
+        return caseDirectoryDomainService.requireDirectory(id);
     }
 
     private void validateReadable(CaseEntity entity, String workspaceCode) {

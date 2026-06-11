@@ -28,26 +28,27 @@ import java.util.List;
 @Service
 public class BugService {
     private final BugDomainService bugDomainService;
+    private final BugAttachmentSupport bugAttachmentSupport;
     private final BugMapper bugMapper;
     private final BugFlowMapper bugFlowMapper;
     private final BugCommentMapper bugCommentMapper;
     private final BugAttachmentMapper bugAttachmentMapper;
-    private final BugAttachmentStorageService bugAttachmentStorageService;
     private final UserService userService;
     private final WorkspaceService workspaceService;
     private final CaseService caseService;
     private final ExecutionService executionService;
 
-    public BugService(BugDomainService bugDomainService, BugMapper bugMapper, BugFlowMapper bugFlowMapper, BugCommentMapper bugCommentMapper,
-                      BugAttachmentMapper bugAttachmentMapper, BugAttachmentStorageService bugAttachmentStorageService,
+    public BugService(BugDomainService bugDomainService, BugAttachmentSupport bugAttachmentSupport,
+                      BugMapper bugMapper, BugFlowMapper bugFlowMapper, BugCommentMapper bugCommentMapper,
+                      BugAttachmentMapper bugAttachmentMapper,
                       UserService userService, WorkspaceService workspaceService, CaseService caseService,
                       ExecutionService executionService) {
         this.bugDomainService = bugDomainService;
+        this.bugAttachmentSupport = bugAttachmentSupport;
         this.bugMapper = bugMapper;
         this.bugFlowMapper = bugFlowMapper;
         this.bugCommentMapper = bugCommentMapper;
         this.bugAttachmentMapper = bugAttachmentMapper;
-        this.bugAttachmentStorageService = bugAttachmentStorageService;
         this.userService = userService;
         this.workspaceService = workspaceService;
         this.caseService = caseService;
@@ -135,69 +136,15 @@ public class BugService {
     }
 
     public List<BugAttachmentResponse> uploadBugAttachments(Long bugId, String workspaceCode, List<MultipartFile> files) {
-        BugEntity bug = requireBug(bugId);
-        bugDomainService.validateReadable(bug, workspaceCode);
-        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(bug.getWorkspaceId()).getWorkspaceCode());
-
-        List<StoredBugFile> storedFiles = bugAttachmentStorageService.storeAll(bug.getWorkspaceId(), bugId, files);
-        List<BugAttachmentEntity> createdAttachments = new ArrayList<>();
-        try {
-            for (int i = 0; i < storedFiles.size(); i++) {
-                MultipartFile file = files.get(i);
-                StoredBugFile storedFile = storedFiles.get(i);
-                BugAttachmentEntity attachment = new BugAttachmentEntity();
-                attachment.setBugId(bugId);
-                attachment.setCreatedBy(CurrentUserContext.get());
-                attachment.setWorkspaceId(bug.getWorkspaceId());
-                attachment.setFileName(file.getOriginalFilename());
-                attachment.setStoredPath(storedFile.storedPath());
-                attachment.setContentType(storedFile.contentType());
-                attachment.setFileSize(storedFile.fileSize());
-                attachment.setCreatedAt(LocalDateTime.now());
-                attachment.setUpdatedAt(LocalDateTime.now());
-                bugAttachmentMapper.insert(attachment);
-                createdAttachments.add(attachment);
-            }
-        } catch (RuntimeException exception) {
-            for (BugAttachmentEntity attachment : createdAttachments) {
-                if (attachment.getId() != null) {
-                    bugAttachmentMapper.deleteById(attachment.getId());
-                }
-                bugAttachmentStorageService.delete(attachment.getStoredPath());
-            }
-            for (StoredBugFile storedFile : storedFiles) {
-                bugAttachmentStorageService.delete(storedFile.storedPath());
-            }
-            throw exception;
-        }
-
-        bug.setUpdatedAt(LocalDateTime.now());
-        bugMapper.updateById(bug);
-        return createdAttachments.stream().map(attachment -> toAttachmentResponse(bug, attachment)).toList();
+        return bugAttachmentSupport.uploadBugAttachments(bugId, workspaceCode, files);
     }
 
     public void deleteBugAttachment(Long bugId, Long attachmentId, String workspaceCode) {
-        BugEntity bug = requireBug(bugId);
-        bugDomainService.validateReadable(bug, workspaceCode);
-        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(bug.getWorkspaceId()).getWorkspaceCode());
-        BugAttachmentEntity attachment = requireAttachment(attachmentId);
-        if (!attachment.getBugId().equals(bugId)) {
-            throw new BadRequestException("附件不属于当前缺陷");
-        }
-        bugAttachmentMapper.deleteById(attachmentId);
-        bugAttachmentStorageService.delete(attachment.getStoredPath());
-        bug.setUpdatedAt(LocalDateTime.now());
-        bugMapper.updateById(bug);
+        bugAttachmentSupport.deleteBugAttachment(bugId, attachmentId, workspaceCode);
     }
 
     public BugFileDownload downloadBugAttachment(Long bugId, Long attachmentId, String workspaceCode) {
-        BugEntity bug = requireBug(bugId);
-        bugDomainService.validateReadable(bug, workspaceCode);
-        BugAttachmentEntity attachment = requireAttachment(attachmentId);
-        if (!attachment.getBugId().equals(bugId)) {
-            throw new BadRequestException("附件不属于当前缺陷");
-        }
-        return bugAttachmentStorageService.load(attachment);
+        return bugAttachmentSupport.downloadBugAttachment(bugId, attachmentId, workspaceCode);
     }
 
     public BugStatisticsResponse statistics(String workspaceCode) {
@@ -243,11 +190,7 @@ public class BugService {
     }
 
     private BugAttachmentEntity requireAttachment(Long attachmentId) {
-        BugAttachmentEntity attachment = bugAttachmentMapper.selectById(attachmentId);
-        if (attachment == null) {
-            throw new NotFoundException("附件不存在");
-        }
-        return attachment;
+        return bugAttachmentSupport.requireAttachment(attachmentId);
     }
 
     private void appendFlow(Long bugId, BugStatus fromStatus, BugStatus toStatus, String comment) {
@@ -361,7 +304,7 @@ public class BugService {
                 entity.getCreatedAt(),
                 entity.getUpdatedAt(),
                 updatedByName,
-                attachmentEntities.stream().map(item -> toAttachmentResponse(entity, item)).toList(),
+                attachmentEntities.stream().map(item -> bugAttachmentSupport.toAttachmentResponse(entity, item)).toList(),
                 buildSourceContext(entity, workspace),
                 buildActivities(entity, reporter, flowEntities, commentEntities, attachmentEntities),
                 flowEntities.stream().map(this::toFlow).toList(),
@@ -586,19 +529,6 @@ public class BugService {
                 entity.getCommenterId(),
                 commenter.getDisplayName(),
                 entity.getCreatedAt()
-        );
-    }
-
-    private BugAttachmentResponse toAttachmentResponse(BugEntity bug, BugAttachmentEntity attachment) {
-        UserEntity uploader = attachment.getCreatedBy() == null ? null : userService.findActiveUser(attachment.getCreatedBy());
-        return new BugAttachmentResponse(
-                attachment.getId(),
-                attachment.getFileName(),
-                attachment.getContentType(),
-                attachment.getFileSize(),
-                "/api/bugs/" + bug.getId() + "/attachments/" + attachment.getId() + "/download",
-                uploader == null ? null : uploader.getDisplayName(),
-                attachment.getCreatedAt()
         );
     }
 

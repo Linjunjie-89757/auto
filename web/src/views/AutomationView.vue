@@ -48,6 +48,7 @@ const tasks = ref<TaskItem[]>([])
 const reports = ref<ReportItem[]>([])
 const users = ref<UserItem[]>([])
 const workspaces = ref<WorkspaceItem[]>([])
+const taskIndex = ref<TaskItem[]>([])
 
 const taskDialogVisible = ref(false)
 const taskDialogMode = ref<'create' | 'edit'>('create')
@@ -136,28 +137,10 @@ const reportFilterDefaults = {
   workspaceCode: '',
 }
 
-const filteredTasks = computed(() => tasks.value.filter((item) => {
-  if (item.engineType.toLowerCase() !== props.engine) {
-    return false
-  }
-  const keyword = taskFilters.keyword.trim().toLowerCase()
-  if (keyword) {
-    const matched = item.taskName.toLowerCase().includes(keyword) || item.summary.toLowerCase().includes(keyword)
-    if (!matched) {
-      return false
-    }
-  }
-  if (taskFilters.status && item.status !== taskFilters.status) {
-    return false
-  }
-  if (isAllScope.value && taskFilters.workspaceCode && item.workspaceCode !== taskFilters.workspaceCode) {
-    return false
-  }
-  return true
-}))
+const filteredTasks = computed(() => tasks.value)
 
 const filteredReports = computed(() => reports.value.filter((item) => {
-  const matchedTask = tasks.value.find(task => task.id === item.taskId)
+  const matchedTask = taskIndex.value.find(task => task.id === item.taskId)
   if (matchedTask?.engineType.toLowerCase() !== props.engine) {
     return false
   }
@@ -217,22 +200,62 @@ function resetReportFilters() {
   reportListToolbar.filterMemory.reset()
 }
 
+function resolveTaskRequestWorkspace() {
+  if (isAllScope.value && taskFilters.workspaceCode) {
+    return taskFilters.workspaceCode
+  }
+  return workspaceCode.value
+}
+
+function buildTaskListParams() {
+  return {
+    keyword: taskFilters.keyword,
+    status: taskFilters.status,
+    engineType: engineCode.value,
+  }
+}
+
+async function loadTasks() {
+  const taskPage = await platformApi.getTasks(resolveTaskRequestWorkspace(), buildTaskListParams())
+  tasks.value = taskPage.items
+}
+
+async function loadTaskIndex() {
+  const taskPage = await platformApi.getTasks(workspaceCode.value, { engineType: engineCode.value })
+  taskIndex.value = taskPage.items
+}
+
+async function refreshTasks() {
+  loading.value = true
+  try {
+    await loadTasks()
+  }
+  catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+  finally {
+    loading.value = false
+  }
+}
+
 async function loadExecution() {
   if (props.engine === 'api') {
     return
   }
   loading.value = true
   try {
-    const [taskPage, reportPage, userList, workspaceList] = await Promise.all([
-      platformApi.getTasks(workspaceCode.value),
+    const [reportPage, userList, workspaceList] = await Promise.all([
       platformApi.getReports(workspaceCode.value),
       platformApi.getUsers(),
       platformApi.getSwitchableWorkspaces(),
     ])
-    tasks.value = taskPage.items
     reports.value = reportPage.items
     users.value = userList
     workspaces.value = workspaceList.filter(item => !item.allScope)
+    await Promise.all([
+      loadTasks(),
+      loadTaskIndex(),
+    ])
   }
   catch (error) {
     ElMessage.error((error as Error).message)
@@ -782,6 +805,7 @@ const reportListToolbar = useListToolbarState({
 watch([workspaceCode, () => props.engine], () => {
   resetTaskForm()
   resetReportForm()
+  taskIndex.value = []
   taskListToolbar.filterMemory.load()
   reportListToolbar.filterMemory.load()
   taskDrawerVisible.value = false
@@ -791,6 +815,16 @@ watch([workspaceCode, () => props.engine], () => {
   syncReportContentForm(null)
   loadExecution()
 })
+
+watch(
+  () => [taskFilters.keyword, taskFilters.status, taskFilters.workspaceCode],
+  () => {
+    if (props.engine === 'api') {
+      return
+    }
+    void refreshTasks()
+  },
+)
 
 onMounted(() => {
   if (props.engine === 'api') {

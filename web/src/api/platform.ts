@@ -82,6 +82,7 @@ import type {
   SaveAiProviderConnectionPayload,
   TaskDetail,
   TaskItem,
+  TaskListParams,
   TaskTransitionPayload,
   TestAiCaseConfigResponse,
   TestAiProviderConnectionResponse,
@@ -680,8 +681,25 @@ export const platformApi = {
       workspaceCode,
     })
   },
-  getTasks(workspaceCode: string) {
-    return request<PageResponse<TaskItem>>('/tasks', { workspaceCode })
+  getTasks(workspaceCode: string, params?: TaskListParams) {
+    const search = new URLSearchParams()
+    if (params?.keyword?.trim()) {
+      search.set('keyword', params.keyword.trim())
+    }
+    if (params?.status?.trim()) {
+      search.set('status', params.status.trim())
+    }
+    if (params?.engineType?.trim()) {
+      search.set('engineType', params.engineType.trim())
+    }
+    if (params?.pageNo) {
+      search.set('pageNo', String(params.pageNo))
+    }
+    if (params?.pageSize) {
+      search.set('pageSize', String(params.pageSize))
+    }
+    const query = search.size ? `?${search.toString()}` : ''
+    return request<PageResponse<TaskItem>>(`/tasks${query}`, { workspaceCode })
   },
   getTaskDetail(workspaceCode: string, id: number) {
     return request<TaskDetail>(`/tasks/${id}`, { workspaceCode })

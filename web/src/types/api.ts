@@ -551,6 +551,14 @@ export interface TaskItem {
   workspaceName: string
 }
 
+export interface TaskListParams {
+  keyword?: string
+  status?: string
+  engineType?: string
+  pageNo?: number
+  pageSize?: number
+}
+
 export interface TaskDetail extends TaskItem {
   createdAt: string
   updatedAt: string

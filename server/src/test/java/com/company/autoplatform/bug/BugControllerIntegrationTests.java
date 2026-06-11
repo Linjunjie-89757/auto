@@ -14,13 +14,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
+
+import java.nio.charset.StandardCharsets;
 
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.nullValue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -147,6 +153,132 @@ class BugControllerIntegrationTests extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.data.flows.length()").value(1))
                 .andExpect(jsonPath("$.data.comments.length()").value(0))
                 .andExpect(jsonPath("$.data.activities[*].type", hasItem("CREATED")));
+    }
+
+    @Test
+    void commentAssignAndTransitionKeepDetailTimelineShape() throws Exception {
+        String unique = uniquePrefix("workflow");
+        Integer bugId = createBug(unique + "-workflow", "P2", "MEDIUM", null, null, null);
+        String commentContent = unique + " comment";
+
+        mockMvc.perform(post("/api/bugs/{id}/comments", bugId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "workspaceCode": "%s",
+                                  "content": "%s"
+                                }
+                                """.formatted(WORKSPACE_CODE, commentContent)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.content").value(commentContent))
+                .andExpect(jsonPath("$.data.commenterId").value(11))
+                .andExpect(jsonPath("$.data.commenterName").value("Zhang Li"));
+
+        mockMvc.perform(post("/api/bugs/{id}/assign", bugId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "workspaceCode": "%s",
+                                  "assigneeId": 12
+                                }
+                                """.formatted(WORKSPACE_CODE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.assigneeId").value(12))
+                .andExpect(jsonPath("$.data.assigneeName").value("Chen Nan"))
+                .andExpect(jsonPath("$.data.status").value("ASSIGNED"))
+                .andExpect(jsonPath("$.data.flows.length()").value(2))
+                .andExpect(jsonPath("$.data.flows[*].toStatus", hasItem("ASSIGNED")))
+                .andExpect(jsonPath("$.data.activities[*].type", hasItem("ASSIGNED")));
+
+        mockMvc.perform(post("/api/bugs/{id}/transition", bugId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "workspaceCode": "%s",
+                                  "toStatus": "IN_PROGRESS",
+                                  "actionComment": "start fixing"
+                                }
+                                """.formatted(WORKSPACE_CODE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.status").value("IN_PROGRESS"))
+                .andExpect(jsonPath("$.data.flows.length()").value(3))
+                .andExpect(jsonPath("$.data.flows[*].toStatus", hasItem("IN_PROGRESS")))
+                .andExpect(jsonPath("$.data.flows[*].actionComment", hasItem("start fixing")))
+                .andExpect(jsonPath("$.data.activities[*].type", hasItem("STATUS_CHANGED")));
+
+        mockMvc.perform(get("/api/bugs/{id}", bugId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.status").value("IN_PROGRESS"))
+                .andExpect(jsonPath("$.data.assigneeId").value(12))
+                .andExpect(jsonPath("$.data.comments.length()").value(1))
+                .andExpect(jsonPath("$.data.comments[0].content").value(commentContent))
+                .andExpect(jsonPath("$.data.flows.length()").value(3))
+                .andExpect(jsonPath("$.data.activities[*].type", hasItem("CREATED")))
+                .andExpect(jsonPath("$.data.activities[*].type", hasItem("COMMENT_ADDED")))
+                .andExpect(jsonPath("$.data.activities[*].type", hasItem("ASSIGNED")))
+                .andExpect(jsonPath("$.data.activities[*].type", hasItem("STATUS_CHANGED")));
+    }
+
+    @Test
+    void attachmentUploadDetailDownloadAndDeleteKeepMainFlow() throws Exception {
+        String unique = uniquePrefix("attachment");
+        Integer bugId = createBug(unique + "-attachment", "P3", "LOW", null, null, null);
+        byte[] content = "bug attachment evidence".getBytes(StandardCharsets.UTF_8);
+        MockMultipartFile file = new MockMultipartFile(
+                "files",
+                "bug-evidence.txt",
+                "text/plain",
+                content
+        );
+
+        String uploadResponse = mockMvc.perform(multipart("/api/bugs/{id}/attachments", bugId)
+                        .file(file)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data[0].fileName").value("bug-evidence.txt"))
+                .andExpect(jsonPath("$.data[0].contentType").value("text/plain"))
+                .andExpect(jsonPath("$.data[0].fileSize").value(content.length))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        Integer attachmentId = objectMapper.readTree(uploadResponse).path("data").get(0).path("id").asInt();
+
+        mockMvc.perform(get("/api/bugs/{id}", bugId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.attachments.length()").value(1))
+                .andExpect(jsonPath("$.data.attachments[0].id").value(attachmentId))
+                .andExpect(jsonPath("$.data.attachments[0].fileName").value("bug-evidence.txt"))
+                .andExpect(jsonPath("$.data.attachments[0].downloadUrl")
+                        .value("/api/bugs/" + bugId + "/attachments/" + attachmentId + "/download"))
+                .andExpect(jsonPath("$.data.activities[*].type", hasItem("ATTACHMENT_ADDED")))
+                .andExpect(jsonPath("$.data.activities[*].attachmentId", hasItem(attachmentId)));
+
+        mockMvc.perform(get("/api/bugs/{id}/attachments/{attachmentId}/download", bugId, attachmentId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(content().string("bug attachment evidence"));
+
+        mockMvc.perform(delete("/api/bugs/{id}/attachments/{attachmentId}", bugId, attachmentId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        mockMvc.perform(get("/api/bugs/{id}", bugId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.attachments.length()").value(0));
     }
 
     private Integer createBug(String title, String priority, String severity, Long caseId, Long reportId, Long taskId) throws Exception {

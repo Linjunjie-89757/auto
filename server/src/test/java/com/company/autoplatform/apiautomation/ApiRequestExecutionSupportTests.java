@@ -8,6 +8,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
+import static com.company.autoplatform.apiautomation.ApiExecutionRuntimeModelFixtures.resolvedEnvironment;
 import static com.company.autoplatform.apiautomation.ApiAutomationModels.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -89,7 +90,7 @@ class ApiRequestExecutionSupportTests {
     }
 
     private ApiExecutionRuntimeModels.ResolvedEnvironment environment(String baseUrl, List<ApiKeyValueInput> headers) {
-        return new ApiExecutionRuntimeModels.ResolvedEnvironment(null, baseUrl, headers, noneAuth(), 1000, List.of());
+        return resolvedEnvironment(baseUrl, headers, noneAuth());
     }
 
     private ApiAuthConfigInput noneAuth() {

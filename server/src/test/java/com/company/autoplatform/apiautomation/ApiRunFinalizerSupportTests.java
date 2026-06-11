@@ -10,6 +10,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static com.company.autoplatform.apiautomation.ApiAutomationModels.*;
+import static com.company.autoplatform.apiautomation.ApiExecutionRuntimeModelFixtures.runStepComputation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -128,7 +129,7 @@ class ApiRunFinalizerSupportTests {
     }
 
     private ApiExecutionRuntimeModels.RunStepComputation step(boolean success, String errorMessage) {
-        return new ApiExecutionRuntimeModels.RunStepComputation(success, new ApiRunStepResultResponse(
+        return runStepComputation(success, new ApiRunStepResultResponse(
                 null,
                 null,
                 1,

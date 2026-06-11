@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 
 import static com.company.autoplatform.apiautomation.ApiAutomationModels.*;
+import static com.company.autoplatform.apiautomation.ApiExecutionRuntimeModelFixtures.mutableRequestConfig;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -140,13 +141,7 @@ class ApiProcessorExecutorTests {
     }
 
     private ApiExecutionRuntimeModels.MutableRequestConfig requestConfig() {
-        return new ApiExecutionRuntimeModels.MutableRequestConfig(
-                "GET",
-                "/api",
-                1000,
-                new ArrayList<>(),
-                new ArrayList<>(),
-                new ArrayList<>(),
+        return mutableRequestConfig(
                 new ApiRequestBodyInput("NONE", null, List.of(), null, null, null),
                 new ApiAuthConfigInput("NONE", null, null)
         );

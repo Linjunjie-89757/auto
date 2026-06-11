@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 
 import static com.company.autoplatform.apiautomation.ApiAutomationModels.*;
+import static com.company.autoplatform.apiautomation.ApiExecutionRuntimeModelFixtures.runStepComputation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -162,7 +163,7 @@ class ApiRunResultPersistenceSupportTests {
             List<ApiExtractionResult> extractionResults,
             List<ApiProcessorResult> processorResults
     ) {
-        return new ApiExecutionRuntimeModels.RunStepComputation(success, new ApiRunStepResultResponse(
+        return runStepComputation(success, new ApiRunStepResultResponse(
                 null,
                 null,
                 1,

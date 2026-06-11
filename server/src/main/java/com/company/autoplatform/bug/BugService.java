@@ -5,7 +5,6 @@ import com.company.autoplatform.auth.CurrentUserContext;
 import com.company.autoplatform.casecenter.CaseDetailResponse;
 import com.company.autoplatform.casecenter.CaseEntity;
 import com.company.autoplatform.casecenter.CaseService;
-import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.common.JsonUtils;
 import com.company.autoplatform.common.NotFoundException;
 import com.company.autoplatform.common.PageResponse;
@@ -29,7 +28,7 @@ import java.util.List;
 public class BugService {
     private final BugDomainService bugDomainService;
     private final BugAttachmentSupport bugAttachmentSupport;
-    private final BugMapper bugMapper;
+    private final BugWorkflowDomainService bugWorkflowDomainService;
     private final BugFlowMapper bugFlowMapper;
     private final BugCommentMapper bugCommentMapper;
     private final BugAttachmentMapper bugAttachmentMapper;
@@ -39,13 +38,14 @@ public class BugService {
     private final ExecutionService executionService;
 
     public BugService(BugDomainService bugDomainService, BugAttachmentSupport bugAttachmentSupport,
-                      BugMapper bugMapper, BugFlowMapper bugFlowMapper, BugCommentMapper bugCommentMapper,
+                      BugWorkflowDomainService bugWorkflowDomainService,
+                      BugFlowMapper bugFlowMapper, BugCommentMapper bugCommentMapper,
                       BugAttachmentMapper bugAttachmentMapper,
                       UserService userService, WorkspaceService workspaceService, CaseService caseService,
                       ExecutionService executionService) {
         this.bugDomainService = bugDomainService;
         this.bugAttachmentSupport = bugAttachmentSupport;
-        this.bugMapper = bugMapper;
+        this.bugWorkflowDomainService = bugWorkflowDomainService;
         this.bugFlowMapper = bugFlowMapper;
         this.bugCommentMapper = bugCommentMapper;
         this.bugAttachmentMapper = bugAttachmentMapper;
@@ -87,32 +87,11 @@ public class BugService {
     }
 
     public BugDetailResponse assignBug(Long id, String headerWorkspaceCode, AssignBugRequest request) {
-        BugEntity entity = requireBug(id);
-        bugDomainService.validateReadable(entity, headerWorkspaceCode);
-        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
-        UserEntity assignee = userService.requireUser(request.assigneeId());
-        BugStatus fromStatus = BugStatus.valueOf(entity.getStatus());
-        entity.setAssigneeId(assignee.getId());
-        entity.setStatus(BugStatus.ASSIGNED.name());
-        entity.setUpdatedAt(LocalDateTime.now());
-        bugMapper.updateById(entity);
-        appendFlow(id, fromStatus, BugStatus.ASSIGNED, "分配处理人: " + assignee.getDisplayName());
-        return toDetail(entity);
+        return toDetail(bugWorkflowDomainService.assignBug(id, headerWorkspaceCode, request));
     }
 
     public BugDetailResponse transitionBug(Long id, String headerWorkspaceCode, TransitionBugRequest request) {
-        BugEntity entity = requireBug(id);
-        bugDomainService.validateReadable(entity, headerWorkspaceCode);
-        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
-        BugStatus fromStatus = BugStatus.valueOf(entity.getStatus());
-        if (fromStatus == request.toStatus()) {
-            throw new BadRequestException("目标状态与当前状态一致，无需流转");
-        }
-        entity.setStatus(request.toStatus().name());
-        entity.setUpdatedAt(LocalDateTime.now());
-        bugMapper.updateById(entity);
-        appendFlow(id, fromStatus, request.toStatus(), request.actionComment());
-        return toDetail(entity);
+        return toDetail(bugWorkflowDomainService.transitionBug(id, headerWorkspaceCode, request));
     }
 
     public List<BugCommentResponse> listComments(Long id, String workspaceCode) {
@@ -187,22 +166,6 @@ public class BugService {
 
     public BugEntity requireBug(Long id) {
         return bugDomainService.requireBug(id);
-    }
-
-    private BugAttachmentEntity requireAttachment(Long attachmentId) {
-        return bugAttachmentSupport.requireAttachment(attachmentId);
-    }
-
-    private void appendFlow(Long bugId, BugStatus fromStatus, BugStatus toStatus, String comment) {
-        BugFlowEntity flow = new BugFlowEntity();
-        flow.setBugId(bugId);
-        flow.setFromStatus(fromStatus.name());
-        flow.setToStatus(toStatus.name());
-        flow.setOperatorId(CurrentUserContext.get());
-        flow.setActionComment(comment == null || comment.isBlank() ? "状态变更" : comment);
-        flow.setCreatedAt(LocalDateTime.now());
-        flow.setUpdatedAt(LocalDateTime.now());
-        bugFlowMapper.insert(flow);
     }
 
     private List<BugFlowEntity> listFlowEntities(Long bugId) {

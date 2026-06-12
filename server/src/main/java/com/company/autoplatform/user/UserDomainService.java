@@ -26,17 +26,20 @@ public class UserDomainService {
     private final WorkspaceMemberMapper workspaceMemberMapper;
     private final WorkspaceMapper workspaceMapper;
     private final UserCredentialSupport userCredentialSupport;
+    private final UserRoleSupport userRoleSupport;
 
     public UserDomainService(
             UserMapper userMapper,
             WorkspaceMemberMapper workspaceMemberMapper,
             WorkspaceMapper workspaceMapper,
-            UserCredentialSupport userCredentialSupport
+            UserCredentialSupport userCredentialSupport,
+            UserRoleSupport userRoleSupport
     ) {
         this.userMapper = userMapper;
         this.workspaceMemberMapper = workspaceMemberMapper;
         this.workspaceMapper = workspaceMapper;
         this.userCredentialSupport = userCredentialSupport;
+        this.userRoleSupport = userRoleSupport;
     }
 
     public List<UserItem> listUsers() {
@@ -44,13 +47,13 @@ public class UserDomainService {
         List<UserEntity> users = userMapper.selectList(new LambdaQueryWrapper<UserEntity>().orderByAsc(UserEntity::getId));
         Map<Long, List<WorkspaceEntity>> workspaceMap = buildUserWorkspaceMap();
         return users.stream()
-                .filter(user -> !isSuperAdminRole(user.getRoleCode()))
+                .filter(user -> !userRoleSupport.isSuperAdminRole(user.getRoleCode()))
                 .map(user -> toItem(user, workspaceMap.getOrDefault(user.getId(), List.of())))
                 .toList();
     }
 
     public UserItem createUser(CreateUserRequest request) {
-        requirePlatformAdmin();
+        userRoleSupport.requirePlatformAdmin();
         String username = request.username().trim();
         String email = request.email().trim();
         if (userMapper.selectOne(new LambdaQueryWrapper<UserEntity>()
@@ -60,8 +63,8 @@ public class UserDomainService {
         }
         validateEmailAvailable(email, null);
 
-        String storedRole = normalizeStoredRole(request.roleCode());
-        requireAssignableRole(storedRole);
+        String storedRole = userRoleSupport.normalizeStoredRole(request.roleCode());
+        userRoleSupport.requireAssignableRole(storedRole);
 
         UserEntity entity = new UserEntity();
         entity.setUsername(username);
@@ -79,16 +82,16 @@ public class UserDomainService {
     }
 
     public UserItem updateUser(Long userId, UpdateUserRequest request) {
-        requirePlatformAdmin();
+        userRoleSupport.requirePlatformAdmin();
         UserEntity entity = requireAnyUser(userId);
-        ensureVisibleTarget(entity);
+        userRoleSupport.ensureVisibleTarget(entity);
 
         String email = request.email().trim();
         validateEmailAvailable(email, userId);
 
-        String storedRole = normalizeStoredRole(request.roleCode());
-        requireAssignableRole(storedRole);
-        ensureAdminMutationAllowed(entity);
+        String storedRole = userRoleSupport.normalizeStoredRole(request.roleCode());
+        userRoleSupport.requireAssignableRole(storedRole);
+        userRoleSupport.ensureAdminMutationAllowed(entity);
 
         entity.setEmail(email);
         entity.setDisplayName(request.displayName().trim());
@@ -126,7 +129,7 @@ public class UserDomainService {
     }
 
     void replaceWorkspaceCodes(UserEntity user, List<String> requestedWorkspaceCodes) {
-        if (isStoredAdminRole(user.getRoleCode())) {
+        if (userRoleSupport.isStoredAdminRole(user.getRoleCode())) {
             clearUserWorkspaces(user.getId());
             return;
         }
@@ -173,7 +176,7 @@ public class UserDomainService {
     }
 
     List<WorkspaceEntity> findUserWorkspaces(Long userId) {
-        if (isPlatformAdmin(userId)) {
+        if (userRoleSupport.isPlatformAdmin(userId)) {
             return workspaceMapper.selectList(new LambdaQueryWrapper<WorkspaceEntity>()
                     .eq(WorkspaceEntity::getStatus, 1)
                     .orderByAsc(WorkspaceEntity::getId));
@@ -201,16 +204,11 @@ public class UserDomainService {
                 user.getUsername(),
                 user.getEmail(),
                 user.getDisplayName(),
-                isSuperAdminRole(user.getRoleCode()) ? "SUPER_ADMIN" : (PlatformRole.PLATFORM_ADMIN.equalsIgnoreCase(user.getRoleCode()) ? "ADMIN" : "MEMBER"),
+                userRoleSupport.isSuperAdminRole(user.getRoleCode()) ? "SUPER_ADMIN" : (PlatformRole.PLATFORM_ADMIN.equalsIgnoreCase(user.getRoleCode()) ? "ADMIN" : "MEMBER"),
                 user.getStatus(),
                 workspaces.stream().map(WorkspaceEntity::getWorkspaceCode).toList(),
                 workspaces.stream().map(WorkspaceEntity::getWorkspaceName).toList()
         );
-    }
-
-    private boolean isPlatformAdmin(Long userId) {
-        UserEntity user = findActiveUser(userId);
-        return user != null && PlatformRole.isAdminRole(user.getRoleCode());
     }
 
     private void clearUserWorkspaces(Long userId) {
@@ -226,24 +224,6 @@ public class UserDomainService {
                 .map(String::trim)
                 .distinct()
                 .toList();
-    }
-
-    private String normalizeStoredRole(String roleCode) {
-        String normalized = roleCode == null ? PlatformRole.MEMBER : roleCode.trim().toUpperCase();
-        return switch (normalized) {
-            case PlatformRole.SUPER_ADMIN -> PlatformRole.SUPER_ADMIN;
-            case "ADMIN", PlatformRole.PLATFORM_ADMIN -> PlatformRole.PLATFORM_ADMIN;
-            case PlatformRole.MEMBER, PlatformRole.VIEWER -> PlatformRole.MEMBER;
-            default -> throw new BadRequestException("无效的成员角色");
-        };
-    }
-
-    private boolean isStoredAdminRole(String roleCode) {
-        return PlatformRole.isAdminRole(roleCode);
-    }
-
-    private boolean isSuperAdminRole(String roleCode) {
-        return PlatformRole.isSuperAdmin(roleCode);
     }
 
     private Map<Long, List<WorkspaceEntity>> buildUserWorkspaceMap() {
@@ -302,34 +282,4 @@ public class UserDomainService {
         }
     }
 
-    private void requireAssignableRole(String storedRole) {
-        if (PlatformRole.SUPER_ADMIN.equals(storedRole)) {
-            throw new BadRequestException("超级管理员仅允许系统初始化创建");
-        }
-        if (PlatformRole.PLATFORM_ADMIN.equals(storedRole) && !isCurrentSuperAdmin()) {
-            throw new BadRequestException("只有超级管理员可以创建或调整管理员");
-        }
-    }
-
-    private void ensureVisibleTarget(UserEntity targetUser) {
-        if (isSuperAdminRole(targetUser.getRoleCode())) {
-            throw new BadRequestException("超级管理员不在成员管理列表中维护");
-        }
-    }
-
-    private void ensureAdminMutationAllowed(UserEntity targetUser) {
-        if (PlatformRole.PLATFORM_ADMIN.equalsIgnoreCase(targetUser.getRoleCode()) && !isCurrentSuperAdmin()) {
-            throw new BadRequestException("只有超级管理员可以操作管理员");
-        }
-    }
-
-    private boolean isCurrentSuperAdmin() {
-        return PlatformRole.isSuperAdmin(CurrentUserContext.require().platformRole());
-    }
-
-    private void requirePlatformAdmin() {
-        if (!PlatformRole.isAdminRole(CurrentUserContext.require().platformRole())) {
-            throw new BadRequestException("只有管理员可执行该操作");
-        }
-    }
 }

@@ -1,7 +1,6 @@
 package com.company.autoplatform.user;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.company.autoplatform.auth.CurrentUserContext;
 import com.company.autoplatform.auth.PlatformRole;
 import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.workspace.WorkspaceEntity;
@@ -21,17 +20,20 @@ public class UserService {
     private final WorkspaceMapper workspaceMapper;
     private final UserDomainService userDomainService;
     private final UserCredentialSupport userCredentialSupport;
+    private final UserRoleSupport userRoleSupport;
 
     public UserService(
             UserMapper userMapper,
             WorkspaceMapper workspaceMapper,
             UserDomainService userDomainService,
-            UserCredentialSupport userCredentialSupport
+            UserCredentialSupport userCredentialSupport,
+            UserRoleSupport userRoleSupport
     ) {
         this.userMapper = userMapper;
         this.workspaceMapper = workspaceMapper;
         this.userDomainService = userDomainService;
         this.userCredentialSupport = userCredentialSupport;
+        this.userRoleSupport = userRoleSupport;
     }
 
     public List<UserItem> listUsers() {
@@ -83,8 +85,8 @@ public class UserService {
     public UserItem replaceWorkspaceRoles(Long userId, ReplaceUserWorkspaceRolesRequest request) {
         requirePlatformAdmin();
         UserEntity entity = requireAnyUser(userId);
-        ensureVisibleTarget(entity);
-        ensureAdminMutationAllowed(entity);
+        userRoleSupport.ensureVisibleTarget(entity);
+        userRoleSupport.ensureAdminMutationAllowed(entity);
         userDomainService.replaceWorkspaceCodes(entity, request.workspaceCodes());
         return userDomainService.toItem(entity, userDomainService.findUserWorkspaces(userId));
     }
@@ -92,8 +94,8 @@ public class UserService {
     public ResetPasswordResponse resetPassword(Long userId) {
         requirePlatformAdmin();
         UserEntity entity = requireAnyUser(userId);
-        ensureVisibleTarget(entity);
-        ensureAdminMutationAllowed(entity);
+        userRoleSupport.ensureVisibleTarget(entity);
+        userRoleSupport.ensureAdminMutationAllowed(entity);
         entity.setPassword(userCredentialSupport.encodeDefaultPassword());
         entity.setUpdatedAt(LocalDateTime.now());
         userMapper.updateById(entity);
@@ -106,7 +108,7 @@ public class UserService {
             throw new BadRequestException("只有超级管理员可以移除管理员");
         }
         UserEntity entity = requireAnyUser(userId);
-        ensureVisibleTarget(entity);
+        userRoleSupport.ensureVisibleTarget(entity);
         if (!PlatformRole.PLATFORM_ADMIN.equalsIgnoreCase(entity.getRoleCode())) {
             throw new BadRequestException("当前成员不是管理员");
         }
@@ -138,21 +140,19 @@ public class UserService {
     }
 
     public boolean isPlatformAdmin(Long userId) {
-        UserEntity user = findActiveUser(userId);
-        return user != null && PlatformRole.isAdminRole(user.getRoleCode());
+        return userRoleSupport.isPlatformAdmin(userId);
     }
 
     public boolean isCurrentPlatformAdmin() {
-        return PlatformRole.isAdminRole(CurrentUserContext.require().platformRole());
+        return userRoleSupport.isCurrentPlatformAdmin();
     }
 
     public boolean isSuperAdmin(Long userId) {
-        UserEntity user = findActiveUser(userId);
-        return user != null && PlatformRole.isSuperAdmin(user.getRoleCode());
+        return userRoleSupport.isSuperAdmin(userId);
     }
 
     public boolean isCurrentSuperAdmin() {
-        return PlatformRole.isSuperAdmin(CurrentUserContext.require().platformRole());
+        return userRoleSupport.isCurrentSuperAdmin();
     }
 
     public List<UserEntity> listPlatformAdminUsers() {
@@ -163,28 +163,11 @@ public class UserService {
     }
 
     public void requirePlatformAdmin() {
-        if (!isCurrentPlatformAdmin()) {
-            throw new BadRequestException("只有管理员可执行该操作");
-        }
+        userRoleSupport.requirePlatformAdmin();
     }
 
     private String safeTrim(String value) {
         return value == null ? "" : value.trim();
     }
 
-    private boolean isSuperAdminRole(String roleCode) {
-        return PlatformRole.isSuperAdmin(roleCode);
-    }
-
-    private void ensureVisibleTarget(UserEntity targetUser) {
-        if (isSuperAdminRole(targetUser.getRoleCode())) {
-            throw new BadRequestException("超级管理员不在成员管理列表中维护");
-        }
-    }
-
-    private void ensureAdminMutationAllowed(UserEntity targetUser) {
-        if (PlatformRole.PLATFORM_ADMIN.equalsIgnoreCase(targetUser.getRoleCode()) && !isCurrentSuperAdmin()) {
-            throw new BadRequestException("只有超级管理员可以操作管理员");
-        }
-    }
 }

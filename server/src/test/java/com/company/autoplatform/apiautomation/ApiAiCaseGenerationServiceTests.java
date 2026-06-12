@@ -69,6 +69,50 @@ class ApiAiCaseGenerationServiceTests extends IntegrationTestSupport {
         assertThat(events.get(3).data.path("message").isNull()).isTrue();
     }
 
+    @Test
+    void streamGenerateEmitsFailedEventWhenProviderConnectionIdIsMissing() throws Exception {
+        List<SseEvent> events = streamGenerate(request(null, "1"));
+
+        assertThat(events).extracting(SseEvent::name)
+                .containsExactly("failed");
+        assertThat(events.get(0).data.path("message").asText()).contains("AI");
+    }
+
+    @Test
+    void streamGenerateEmitsFailedEventWhenProviderDoesNotExist() throws Exception {
+        List<SseEvent> events = streamGenerate(request(-99999L, "1"));
+
+        assertThat(events).extracting(SseEvent::name)
+                .containsExactly("failed");
+        assertThat(events.get(0).data.path("message").asText()).contains("AI");
+    }
+
+    @Test
+    void streamGenerateEmitsFailedEventWhenProviderIsDisabled() throws Exception {
+        Long providerId = createProvider("disabled", 0);
+
+        List<SseEvent> events = streamGenerate(request(providerId, "1"));
+
+        assertThat(events).extracting(SseEvent::name)
+                .containsExactly("failed");
+        assertThat(events.get(0).data.path("message").asText()).contains("AI");
+    }
+
+    @Test
+    void streamGenerateEmitsItemFailedAndCompletedEventsWhenOutlineGenerationFails() throws Exception {
+        Long providerId = createProvider("outline-failed");
+        when(aiProviderClient.streamStructuredContent(any(AiProviderRequestProfile.class), eq("secret-outline-failed"), any(), any()))
+                .thenThrow(new RuntimeException("outline boom"));
+
+        List<SseEvent> events = streamGenerate(request(providerId, "1"));
+
+        assertThat(events).extracting(SseEvent::name)
+                .containsExactly("started", "item_failed", "completed");
+        assertThat(events.get(1).data.path("itemId").asText()).isEqualTo("case-positive");
+        assertThat(events.get(1).data.path("message").asText()).contains("outline boom");
+        assertThat(events.get(2).data.path("message").asText()).isNotBlank();
+    }
+
     private List<SseEvent> streamGenerate(ApiAiCaseGenerationService.ApiAiCaseGenerationRequest request) throws Exception {
         StringWriter writer = new StringWriter();
         service.streamGenerate(WORKSPACE_CODE, request, writer);
@@ -76,6 +120,10 @@ class ApiAiCaseGenerationServiceTests extends IntegrationTestSupport {
     }
 
     private Long createProvider(String suffix) {
+        return createProvider(suffix, 1);
+    }
+
+    private Long createProvider(String suffix, int status) {
         AiProviderConnectionEntity entity = new AiProviderConnectionEntity();
         entity.setWorkspaceId(0L);
         entity.setOwnerUserId(11L);
@@ -85,7 +133,7 @@ class ApiAiCaseGenerationServiceTests extends IntegrationTestSupport {
         entity.setRequestTimeoutSeconds(30);
         entity.setSelectedModelName("gpt-test");
         entity.setApiKeyCipherText(aiSecretCodec.encrypt("secret-" + suffix));
-        entity.setStatus(1);
+        entity.setStatus(status);
         entity.setCreatedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
         providerConnectionMapper.insert(entity);

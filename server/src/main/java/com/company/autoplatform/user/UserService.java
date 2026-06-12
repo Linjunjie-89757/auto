@@ -1,10 +1,7 @@
 package com.company.autoplatform.user;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.company.autoplatform.auth.PlatformRole;
 import com.company.autoplatform.common.BadRequestException;
-import com.company.autoplatform.workspace.WorkspaceEntity;
-import com.company.autoplatform.workspace.WorkspaceMapper;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -17,23 +14,23 @@ public class UserService {
     public static final String DEFAULT_PASSWORD = "zhyt@2025";
 
     private final UserMapper userMapper;
-    private final WorkspaceMapper workspaceMapper;
     private final UserDomainService userDomainService;
     private final UserCredentialSupport userCredentialSupport;
     private final UserRoleSupport userRoleSupport;
+    private final UserWorkspaceGrantSupport userWorkspaceGrantSupport;
 
     public UserService(
             UserMapper userMapper,
-            WorkspaceMapper workspaceMapper,
             UserDomainService userDomainService,
             UserCredentialSupport userCredentialSupport,
-            UserRoleSupport userRoleSupport
+            UserRoleSupport userRoleSupport,
+            UserWorkspaceGrantSupport userWorkspaceGrantSupport
     ) {
         this.userMapper = userMapper;
-        this.workspaceMapper = workspaceMapper;
         this.userDomainService = userDomainService;
         this.userCredentialSupport = userCredentialSupport;
         this.userRoleSupport = userRoleSupport;
+        this.userWorkspaceGrantSupport = userWorkspaceGrantSupport;
     }
 
     public List<UserItem> listUsers() {
@@ -87,8 +84,8 @@ public class UserService {
         UserEntity entity = requireAnyUser(userId);
         userRoleSupport.ensureVisibleTarget(entity);
         userRoleSupport.ensureAdminMutationAllowed(entity);
-        userDomainService.replaceWorkspaceCodes(entity, request.workspaceCodes());
-        return userDomainService.toItem(entity, userDomainService.findUserWorkspaces(userId));
+        userWorkspaceGrantSupport.replaceWorkspaceCodes(entity, request.workspaceCodes());
+        return userDomainService.toItem(entity, userWorkspaceGrantSupport.findUserWorkspaces(userId));
     }
 
     public ResetPasswordResponse resetPassword(Long userId) {
@@ -113,18 +110,10 @@ public class UserService {
             throw new BadRequestException("当前成员不是管理员");
         }
 
-        List<String> remainingWorkspaceCodes = workspaceMapper.selectList(new LambdaQueryWrapper<WorkspaceEntity>()
-                        .eq(WorkspaceEntity::getStatus, 1)
-                        .orderByAsc(WorkspaceEntity::getId))
-                .stream()
-                .map(WorkspaceEntity::getWorkspaceCode)
-                .filter(code -> !code.equals(workspaceCode))
-                .toList();
-
         entity.setRoleCode(PlatformRole.MEMBER);
         entity.setUpdatedAt(LocalDateTime.now());
         userMapper.updateById(entity);
-        userDomainService.replaceWorkspaceCodes(entity, remainingWorkspaceCodes);
+        userWorkspaceGrantSupport.replaceWorkspaceCodes(entity, userWorkspaceGrantSupport.remainingWorkspaceCodesExcept(workspaceCode));
     }
 
     public UserEntity requireUser(Long userId) {
@@ -156,10 +145,7 @@ public class UserService {
     }
 
     public List<UserEntity> listPlatformAdminUsers() {
-        return userMapper.selectList(new LambdaQueryWrapper<UserEntity>()
-                .eq(UserEntity::getRoleCode, PlatformRole.PLATFORM_ADMIN)
-                .eq(UserEntity::getStatus, 1)
-                .orderByAsc(UserEntity::getId));
+        return userWorkspaceGrantSupport.listPlatformAdminUsers();
     }
 
     public void requirePlatformAdmin() {

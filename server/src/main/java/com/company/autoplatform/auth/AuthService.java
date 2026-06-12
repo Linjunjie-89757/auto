@@ -1,31 +1,17 @@
 package com.company.autoplatform.auth;
 
-import com.company.autoplatform.workspace.WorkspaceService;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AuthService {
 
-    private final WorkspaceService workspaceService;
+    private final AuthCurrentUserSupport currentUserSupport;
 
-    public AuthService(WorkspaceService workspaceService) {
-        this.workspaceService = workspaceService;
+    public AuthService(AuthCurrentUserSupport currentUserSupport) {
+        this.currentUserSupport = currentUserSupport;
     }
 
     public CurrentUserResponse currentUser() {
-        CurrentUserPrincipal currentUser = CurrentUserContext.require();
-        String roleCode = PlatformRole.MEMBER;
-        if (workspaceService.isSuperAdmin()) {
-            roleCode = "SUPER_ADMIN";
-        } else if (workspaceService.isPlatformAdmin()) {
-            roleCode = "ADMIN";
-        }
-        return new CurrentUserResponse(
-                currentUser.userId(),
-                currentUser.username(),
-                currentUser.displayName(),
-                roleCode,
-                workspaceService.listReadableWorkspaceCodes()
-        );
+        return currentUserSupport.currentUser();
     }
 }

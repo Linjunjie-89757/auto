@@ -19,7 +19,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.io.Writer;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -46,6 +45,7 @@ public class ApiAiCaseGenerationService {
     private final ObjectMapper objectMapper;
     private final ApiAiCaseGenerationPromptSupport promptSupport;
     private final ApiAiCaseGenerationParsingSupport parsingSupport;
+    private final ApiAiCaseGenerationEventSupport eventSupport;
     private final int defaultRequestTimeoutSeconds;
 
     public ApiAiCaseGenerationService(
@@ -56,6 +56,7 @@ public class ApiAiCaseGenerationService {
             ObjectMapper objectMapper,
             ApiAiCaseGenerationPromptSupport promptSupport,
             ApiAiCaseGenerationParsingSupport parsingSupport,
+            ApiAiCaseGenerationEventSupport eventSupport,
             @Value("${app.ai.request-timeout-seconds:60}") int defaultRequestTimeoutSeconds
     ) {
         this.aiProviderConnectionMapper = aiProviderConnectionMapper;
@@ -65,6 +66,7 @@ public class ApiAiCaseGenerationService {
         this.objectMapper = objectMapper;
         this.promptSupport = promptSupport;
         this.parsingSupport = parsingSupport;
+        this.eventSupport = eventSupport;
         this.defaultRequestTimeoutSeconds = Math.max(10, Math.min(600, defaultRequestTimeoutSeconds));
     }
 
@@ -75,7 +77,7 @@ public class ApiAiCaseGenerationService {
             List<ApiAiCaseGenerationOption> options = normalizeOptions(request.options());
             int targetCount = resolveTargetCount(request.caseCount(), options.size());
             List<ApiAiCaseGenerationSlot> slots = buildSlots(options, targetCount);
-            writeEvent(writer, new ApiAiCaseGenerationEvent("started", null, null, null, slots.size(), null, null, null));
+            eventSupport.writeEvent(writer, new ApiAiCaseGenerationEvent("started", null, null, null, slots.size(), null, null, null));
             int completed = 0;
             try {
                 Map<String, ApiAiGeneratedCaseOutline> outlines;
@@ -86,9 +88,9 @@ public class ApiAiCaseGenerationService {
                             request.definitionId(), request.definitionName(), provider.profile().model(), slots.size(), exception);
                     String message = stageFailureMessage("\u5927\u7eb2\u751f\u6210\u9636\u6bb5\u5931\u8d25", exception);
                     for (ApiAiCaseGenerationSlot slot : slots) {
-                        writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, null, message));
+                        eventSupport.writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, null, message));
                     }
-                    writeEvent(writer, new ApiAiCaseGenerationEvent("completed", null, null, null, slots.size(), null, null, "\u5927\u7eb2\u751f\u6210\u5931\u8d25"));
+                    eventSupport.writeEvent(writer, new ApiAiCaseGenerationEvent("completed", null, null, null, slots.size(), null, null, "\u5927\u7eb2\u751f\u6210\u5931\u8d25"));
                     return;
                 }
                 completed = generateCasesFromOutlines(workspace, provider, request, slots, outlines, writer);
@@ -96,14 +98,14 @@ public class ApiAiCaseGenerationService {
                 log.warn("API AI case generation failed, definitionId={}, definitionName={}, model={}, targetCount={}",
                         request.definitionId(), request.definitionName(), provider.profile().model(), slots.size(), exception);
                 for (ApiAiCaseGenerationSlot slot : slots) {
-                    writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, null,
+                    eventSupport.writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, null,
                             stageFailureMessage("\u7528\u4f8b\u751f\u6210\u9636\u6bb5\u5931\u8d25", exception)));
                 }
             }
-            writeEvent(writer, new ApiAiCaseGenerationEvent("completed", null, null, null, slots.size(), null, null,
+            eventSupport.writeEvent(writer, new ApiAiCaseGenerationEvent("completed", null, null, null, slots.size(), null, null,
                     completed == slots.size() ? null : "\u90e8\u5206\u7528\u4f8b\u751f\u6210\u5931\u8d25"));
         } catch (Exception exception) {
-            writeEvent(writer, new ApiAiCaseGenerationEvent("failed", null, null, null, null, null, null, exception.getMessage()));
+            eventSupport.writeEvent(writer, new ApiAiCaseGenerationEvent("failed", null, null, null, null, null, null, exception.getMessage()));
         }
     }
 
@@ -142,18 +144,18 @@ public class ApiAiCaseGenerationService {
             ApiAiCaseGenerationSlot slot = slots.get(index);
             ApiAiGeneratedCaseOutline outline = outlines.get(slot.id());
             if (outline == null) {
-                writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, null,
+                eventSupport.writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, null,
                         "AI \u672a\u8fd4\u56de\u8be5\u7528\u4f8b\u5927\u7eb2"));
                 continue;
             }
             try {
                 ApiAiGeneratedCaseDraft draft = generateOneCaseFromOutline(workspace, provider, request, slot, outline, index + 1, slots.size());
-                writeEvent(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slots.size(), draft, outline, null));
+                eventSupport.writeEvent(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slots.size(), draft, outline, null));
                 completed += 1;
             } catch (RuntimeException exception) {
                 log.warn("API AI case detail generation failed, definitionId={}, itemId={}, itemIndex={}, total={}, type={}, model={}",
                         request.definitionId(), slot.id(), index + 1, slots.size(), slot.type(), provider.profile().model(), exception);
-                writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, outline,
+                eventSupport.writeEvent(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, outline,
                         "\u7b2c " + (index + 1) + "/" + slots.size() + " \u6761\u8be6\u60c5\u751f\u6210\u5931\u8d25\uff08" + slot.type() + "\uff09\uff1a"
                                 + exceptionMessage(exception)));
             }
@@ -182,7 +184,7 @@ public class ApiAiCaseGenerationService {
         emitRemainingDrafts(content, slots, completedIds, request, writer);
         for (ApiAiCaseGenerationSlot slot : slots) {
             if (!completedIds.contains(slot.id())) {
-                writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, null,
+                eventSupport.writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, null,
                         "AI \u672a\u8fd4\u56de\u8be5\u7528\u4f8b"));
             }
         }
@@ -201,7 +203,7 @@ public class ApiAiCaseGenerationService {
         }
         lineBuffer.append(delta);
         int lineBreakIndex;
-        while ((lineBreakIndex = indexOfLineBreak(lineBuffer)) >= 0) {
+        while ((lineBreakIndex = eventSupport.indexOfLineBreak(lineBuffer)) >= 0) {
             String line = lineBuffer.substring(0, lineBreakIndex).trim();
             int removeEnd = lineBreakIndex + 1;
             if (removeEnd < lineBuffer.length() && lineBuffer.charAt(lineBreakIndex) == '\r' && lineBuffer.charAt(removeEnd) == '\n') {
@@ -225,7 +227,7 @@ public class ApiAiCaseGenerationService {
         }
         lineBuffer.append(delta);
         int lineBreakIndex;
-        while ((lineBreakIndex = indexOfLineBreak(lineBuffer)) >= 0) {
+        while ((lineBreakIndex = eventSupport.indexOfLineBreak(lineBuffer)) >= 0) {
             String line = lineBuffer.substring(0, lineBreakIndex).trim();
             int removeEnd = lineBreakIndex + 1;
             if (removeEnd < lineBuffer.length() && lineBuffer.charAt(lineBreakIndex) == '\r' && lineBuffer.charAt(removeEnd) == '\n') {
@@ -234,16 +236,6 @@ public class ApiAiCaseGenerationService {
             lineBuffer.delete(0, removeEnd);
             emitDraftLine(line, slotById, completedIds, request, writer);
         }
-    }
-
-    private int indexOfLineBreak(StringBuilder builder) {
-        for (int index = 0; index < builder.length(); index++) {
-            char value = builder.charAt(index);
-            if (value == '\n' || value == '\r') {
-                return index;
-            }
-        }
-        return -1;
     }
 
     private void emitDraftLine(
@@ -264,7 +256,7 @@ public class ApiAiCaseGenerationService {
             }
             ApiAiGeneratedCaseDraft normalized = normalizeDraft(parsed.draft(), request, slot, completedIds.size() + 1);
             completedIds.add(slot.id());
-            writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slotById.size(), normalized, null, null));
+            eventSupport.writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slotById.size(), normalized, null, null));
         } catch (RuntimeException exception) {
             // Ignore partial or non-NDJSON lines here. Final full-content parsing below is the fallback.
         }
@@ -287,7 +279,7 @@ public class ApiAiCaseGenerationService {
             }
             ApiAiGeneratedCaseOutline normalized = normalizeOutline(parsed.outline(), slot);
             outlines.put(slot.id(), normalized);
-            writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_outline", slot.id(), slot.group(), slot.type(), slotById.size(), null, normalized, null));
+            eventSupport.writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_outline", slot.id(), slot.group(), slot.type(), slotById.size(), null, normalized, null));
         } catch (RuntimeException exception) {
             // Ignore partial or non-NDJSON lines. Full-content parsing below is the fallback.
         }
@@ -320,7 +312,7 @@ public class ApiAiCaseGenerationService {
             }
             ApiAiGeneratedCaseDraft normalized = normalizeDraft(draft, request, slot, index + 1);
             completedIds.add(slot.id());
-            writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slots.size(), normalized, null, null));
+            eventSupport.writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slots.size(), normalized, null, null));
         }
     }
 
@@ -345,15 +337,7 @@ public class ApiAiCaseGenerationService {
             }
             ApiAiGeneratedCaseOutline normalized = normalizeOutline(parsed.outline(), slot);
             outlines.put(slot.id(), normalized);
-            writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_outline", slot.id(), slot.group(), slot.type(), slots.size(), null, normalized, null));
-        }
-    }
-
-    private void writeUnchecked(Writer writer, ApiAiCaseGenerationEvent event) {
-        try {
-            writeEvent(writer, event);
-        } catch (IOException exception) {
-            throw new UncheckedIOException(exception);
+            eventSupport.writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_outline", slot.id(), slot.group(), slot.type(), slots.size(), null, normalized, null));
         }
     }
 
@@ -542,16 +526,6 @@ public class ApiAiCaseGenerationService {
         return slots;
     }
 
-    private void writeEvent(Writer writer, ApiAiCaseGenerationEvent event) throws IOException {
-        writer.write("event: ");
-        writer.write(event.event());
-        writer.write("\n");
-        writer.write("data: ");
-        writer.write(objectMapper.writeValueAsString(event));
-        writer.write("\n\n");
-        writer.flush();
-    }
-
     private String providerForProtocolType(String protocolType) {
         String normalized = protocolType == null ? "" : protocolType.trim().toUpperCase(Locale.ROOT);
         return switch (normalized) {
@@ -617,14 +591,6 @@ public class ApiAiCaseGenerationService {
             name = slot.type() + " \u2013 " + name;
         }
         return name;
-    }
-
-    private String toJson(Object value) {
-        try {
-            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(value);
-        } catch (IOException exception) {
-            throw new UncheckedIOException(exception);
-        }
     }
 
     private String stageFailureMessage(String stage, Exception exception) {

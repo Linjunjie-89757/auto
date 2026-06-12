@@ -1,0 +1,204 @@
+package com.company.autoplatform.user;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.company.autoplatform.IntegrationTestSupport;
+import com.company.autoplatform.auth.CurrentUserPrincipal;
+import com.company.autoplatform.auth.PlatformRole;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+
+import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.not;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+@AutoConfigureMockMvc
+class UserControllerIntegrationTests extends IntegrationTestSupport {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Test
+    void listUsersKeepsResponseShapeAndHidesSuperAdmin() throws Exception {
+        mockMvc.perform(get("/api/users"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data[*].username", hasItem("zhangli")))
+                .andExpect(jsonPath("$.data[*].username", hasItem("chennan")))
+                .andExpect(jsonPath("$.data[*].roleCode", hasItem("ADMIN")))
+                .andExpect(jsonPath("$.data[*].workspaceCodes").isArray())
+                .andExpect(jsonPath("$.data[*].username", not(hasItem("superadmin"))));
+    }
+
+    @Test
+    void createAndUpdateUserKeepResponseShape() throws Exception {
+        String username = "user_it_" + System.nanoTime();
+        MvcResult createResult = mockMvc.perform(post("/api/users")
+                        .contentType("application/json")
+                        .content(createUserRequest(username, username + "@demo.local", "User IT", "MEMBER", WORKSPACE_CODE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.username").value(username))
+                .andExpect(jsonPath("$.data.email").value(username + "@demo.local"))
+                .andExpect(jsonPath("$.data.displayName").value("User IT"))
+                .andExpect(jsonPath("$.data.roleCode").value("MEMBER"))
+                .andExpect(jsonPath("$.data.status").value(1))
+                .andExpect(jsonPath("$.data.workspaceCodes", hasItem(WORKSPACE_CODE)))
+                .andReturn();
+
+        long userId = data(createResult).path("id").asLong();
+        mockMvc.perform(put("/api/users/{userId}", userId)
+                        .contentType("application/json")
+                        .content(updateUserRequest(username + "-updated@demo.local", "User Updated", "MEMBER", 1, "payments-core")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value(userId))
+                .andExpect(jsonPath("$.data.email").value(username + "-updated@demo.local"))
+                .andExpect(jsonPath("$.data.displayName").value("User Updated"))
+                .andExpect(jsonPath("$.data.workspaceCodes", hasItem("payments-core")))
+                .andExpect(jsonPath("$.data.workspaceCodes", not(hasItem(WORKSPACE_CODE))));
+    }
+
+    @Test
+    void batchCreateAndResetPasswordKeepBehavior() throws Exception {
+        String okUsername = "batch_ok_" + System.nanoTime();
+        String duplicateUsername = "batch_dup_" + System.nanoTime();
+        mockMvc.perform(post("/api/users")
+                        .contentType("application/json")
+                        .content(createUserRequest(duplicateUsername, duplicateUsername + "@demo.local", "Duplicate", "MEMBER", WORKSPACE_CODE)))
+                .andExpect(status().isOk());
+
+        MvcResult batchResult = mockMvc.perform(post("/api/users/batch")
+                        .contentType("application/json")
+                        .content(batchCreateRequest(okUsername, duplicateUsername)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.successCount").value(1))
+                .andExpect(jsonPath("$.data.failureCount").value(1))
+                .andExpect(jsonPath("$.data.results[0].success").value(true))
+                .andExpect(jsonPath("$.data.results[0].user.username").value(okUsername))
+                .andExpect(jsonPath("$.data.results[1].success").value(false))
+                .andReturn();
+
+        long createdUserId = data(batchResult).path("results").get(0).path("user").path("id").asLong();
+        mockMvc.perform(post("/api/users/{userId}/reset-password", createdUserId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.userId").value(createdUserId))
+                .andExpect(jsonPath("$.data.username").value(okUsername))
+                .andExpect(jsonPath("$.data.defaultPassword").value(UserService.DEFAULT_PASSWORD));
+    }
+
+    @Test
+    void nonPlatformAdminCannotWriteUsers() throws Exception {
+        String username = "deny_user_" + System.nanoTime();
+        setMemberUser();
+
+        mockMvc.perform(post("/api/users")
+                        .contentType("application/json")
+                        .content(createUserRequest(username, username + "@demo.local", "Denied", "MEMBER", WORKSPACE_CODE)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false));
+
+        mockMvc.perform(put("/api/users/{userId}", 12L)
+                        .contentType("application/json")
+                        .content(updateUserRequest("chennan-denied@demo.local", "Denied", "MEMBER", 1, WORKSPACE_CODE)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false));
+
+        mockMvc.perform(post("/api/users/{userId}/reset-password", 12L))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false));
+    }
+
+    @Test
+    void superAdminCannotBeMaintainedThroughUserManagement() throws Exception {
+        mockMvc.perform(put("/api/users/{userId}", 1L)
+                        .contentType("application/json")
+                        .content(updateUserRequest("superadmin@local", "Super Admin", "MEMBER", 1, WORKSPACE_CODE)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false));
+
+        mockMvc.perform(post("/api/users/{userId}/reset-password", 1L))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false));
+    }
+
+    private String createUserRequest(String username, String email, String displayName, String roleCode, String workspaceCode) {
+        return """
+                {
+                  "username": "%s",
+                  "email": "%s",
+                  "displayName": "%s",
+                  "roleCode": "%s",
+                  "workspaceCodes": ["%s"]
+                }
+                """.formatted(username, email, displayName, roleCode, workspaceCode);
+    }
+
+    private String updateUserRequest(String email, String displayName, String roleCode, int status, String workspaceCode) {
+        return """
+                {
+                  "email": "%s",
+                  "displayName": "%s",
+                  "roleCode": "%s",
+                  "status": %d,
+                  "workspaceCodes": ["%s"]
+                }
+                """.formatted(email, displayName, roleCode, status, workspaceCode);
+    }
+
+    private String batchCreateRequest(String okUsername, String duplicateUsername) {
+        return """
+                {
+                  "users": [
+                    {
+                      "username": "%s",
+                      "email": "%s@demo.local",
+                      "displayName": "Batch OK",
+                      "roleCode": "MEMBER",
+                      "workspaceCodes": ["%s"]
+                    },
+                    {
+                      "username": "%s",
+                      "email": "%s-second@demo.local",
+                      "displayName": "Batch Duplicate",
+                      "roleCode": "MEMBER",
+                      "workspaceCodes": ["%s"]
+                    }
+                  ]
+                }
+                """.formatted(okUsername, okUsername, WORKSPACE_CODE, duplicateUsername, duplicateUsername, WORKSPACE_CODE);
+    }
+
+    private JsonNode data(MvcResult result) throws Exception {
+        return objectMapper.readTree(result.getResponse().getContentAsString()).path("data");
+    }
+
+    private void setMemberUser() {
+        CurrentUserPrincipal principal = new CurrentUserPrincipal(
+                12L,
+                "chennan",
+                "Chen Nan",
+                "{noop}123456",
+                PlatformRole.MEMBER,
+                1
+        );
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(principal, principal.getPassword(), principal.getAuthorities())
+        );
+    }
+}

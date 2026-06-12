@@ -1,5 +1,6 @@
 package com.company.autoplatform.user;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.company.autoplatform.IntegrationTestSupport;
@@ -15,6 +16,7 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -26,6 +28,12 @@ class UserControllerIntegrationTests extends IntegrationTestSupport {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private UserService userService;
+
+    @Autowired
+    private UserMapper userMapper;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -137,6 +145,74 @@ class UserControllerIntegrationTests extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.success").value(false));
     }
 
+    @Test
+    void roleAndWorkspaceGrantPublicMethodsKeepBehavior() throws Exception {
+        String workspaceCode = "user_ws_" + System.nanoTime();
+        setSuperAdminUser();
+        userService.updateUser(11L, new UpdateUserRequest(
+                "zhangli@demo.local",
+                "Zhang Li",
+                "ADMIN",
+                1,
+                java.util.List.of()
+        ));
+
+        mockMvc.perform(post("/api/workspaces")
+                        .contentType("application/json")
+                        .content(workspaceRequest(workspaceCode)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/workspaces/{workspaceCode}/members", workspaceCode))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[*].id", hasItem(-11)))
+                .andExpect(jsonPath("$.data[*].userId", hasItem(11)))
+                .andExpect(jsonPath("$.data[*].roleCode", hasItem("ADMIN")));
+
+        mockMvc.perform(delete("/api/workspaces/{workspaceCode}", workspaceCode))
+                .andExpect(status().isOk());
+
+        setPlatformAdminUser();
+        org.assertj.core.api.Assertions.assertThat(userService.isPlatformAdmin(11L)).isTrue();
+        org.assertj.core.api.Assertions.assertThat(userService.isSuperAdmin(requireSuperAdminUserId())).isTrue();
+        org.assertj.core.api.Assertions.assertThat(userService.listPlatformAdminUsers())
+                .extracting(UserEntity::getId)
+                .contains(11L);
+
+        setSuperAdminUser();
+        userService.removeAdminFromWorkspace(11L, WORKSPACE_CODE);
+        org.assertj.core.api.Assertions.assertThat(userService.isPlatformAdmin(11L)).isFalse();
+
+        setSuperAdminUser();
+        userService.updateUser(11L, new UpdateUserRequest(
+                "zhangli@demo.local",
+                "Zhang Li",
+                "ADMIN",
+                1,
+                java.util.List.of()
+        ));
+        org.assertj.core.api.Assertions.assertThat(userService.isPlatformAdmin(11L)).isTrue();
+    }
+
+    private String workspaceRequest(String workspaceCode) {
+        return """
+                {
+                  "workspaceCode": "%s",
+                  "workspaceName": "User Regression Workspace",
+                  "description": "user integration test",
+                  "workspaceType": "PROJECT",
+                  "status": 1
+                }
+                """.formatted(workspaceCode);
+    }
+
+    private Long requireSuperAdminUserId() {
+        UserEntity superAdmin = userMapper.selectOne(new LambdaQueryWrapper<UserEntity>()
+                .eq(UserEntity::getRoleCode, PlatformRole.SUPER_ADMIN)
+                .last("limit 1"));
+        org.assertj.core.api.Assertions.assertThat(superAdmin).isNotNull();
+        return superAdmin.getId();
+    }
+
     private String createUserRequest(String username, String email, String displayName, String roleCode, String workspaceCode) {
         return """
                 {
@@ -195,6 +271,34 @@ class UserControllerIntegrationTests extends IntegrationTestSupport {
                 "Chen Nan",
                 "{noop}123456",
                 PlatformRole.MEMBER,
+                1
+        );
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(principal, principal.getPassword(), principal.getAuthorities())
+        );
+    }
+
+    private void setPlatformAdminUser() {
+        CurrentUserPrincipal principal = new CurrentUserPrincipal(
+                11L,
+                "zhangli",
+                "Zhang Li",
+                "{noop}123456",
+                PlatformRole.PLATFORM_ADMIN,
+                1
+        );
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(principal, principal.getPassword(), principal.getAuthorities())
+        );
+    }
+
+    private void setSuperAdminUser() {
+        CurrentUserPrincipal principal = new CurrentUserPrincipal(
+                1L,
+                "superadmin",
+                "Super Admin",
+                "{noop}superadmin123",
+                PlatformRole.SUPER_ADMIN,
                 1
         );
         SecurityContextHolder.getContext().setAuthentication(

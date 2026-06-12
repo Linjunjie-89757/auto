@@ -8,7 +8,6 @@ import com.company.autoplatform.workspace.WorkspaceEntity;
 import com.company.autoplatform.workspace.WorkspaceMapper;
 import com.company.autoplatform.workspace.WorkspaceMemberEntity;
 import com.company.autoplatform.workspace.WorkspaceMemberMapper;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -26,18 +25,18 @@ public class UserDomainService {
     private final UserMapper userMapper;
     private final WorkspaceMemberMapper workspaceMemberMapper;
     private final WorkspaceMapper workspaceMapper;
-    private final PasswordEncoder passwordEncoder;
+    private final UserCredentialSupport userCredentialSupport;
 
     public UserDomainService(
             UserMapper userMapper,
             WorkspaceMemberMapper workspaceMemberMapper,
             WorkspaceMapper workspaceMapper,
-            PasswordEncoder passwordEncoder
+            UserCredentialSupport userCredentialSupport
     ) {
         this.userMapper = userMapper;
         this.workspaceMemberMapper = workspaceMemberMapper;
         this.workspaceMapper = workspaceMapper;
-        this.passwordEncoder = passwordEncoder;
+        this.userCredentialSupport = userCredentialSupport;
     }
 
     public List<UserItem> listUsers() {
@@ -69,7 +68,7 @@ public class UserDomainService {
         entity.setEmail(email);
         entity.setDisplayName(request.displayName().trim());
         entity.setRoleCode(storedRole);
-        entity.setPassword(passwordEncoder.encode(UserService.DEFAULT_PASSWORD));
+        entity.setPassword(userCredentialSupport.encodeDefaultPassword());
         entity.setStatus(1);
         entity.setCreatedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());

@@ -6,7 +6,6 @@ import com.company.autoplatform.auth.PlatformRole;
 import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.workspace.WorkspaceEntity;
 import com.company.autoplatform.workspace.WorkspaceMapper;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -20,19 +19,19 @@ public class UserService {
 
     private final UserMapper userMapper;
     private final WorkspaceMapper workspaceMapper;
-    private final PasswordEncoder passwordEncoder;
     private final UserDomainService userDomainService;
+    private final UserCredentialSupport userCredentialSupport;
 
     public UserService(
             UserMapper userMapper,
             WorkspaceMapper workspaceMapper,
-            PasswordEncoder passwordEncoder,
-            UserDomainService userDomainService
+            UserDomainService userDomainService,
+            UserCredentialSupport userCredentialSupport
     ) {
         this.userMapper = userMapper;
         this.workspaceMapper = workspaceMapper;
-        this.passwordEncoder = passwordEncoder;
         this.userDomainService = userDomainService;
+        this.userCredentialSupport = userCredentialSupport;
     }
 
     public List<UserItem> listUsers() {
@@ -95,10 +94,10 @@ public class UserService {
         UserEntity entity = requireAnyUser(userId);
         ensureVisibleTarget(entity);
         ensureAdminMutationAllowed(entity);
-        entity.setPassword(passwordEncoder.encode(DEFAULT_PASSWORD));
+        entity.setPassword(userCredentialSupport.encodeDefaultPassword());
         entity.setUpdatedAt(LocalDateTime.now());
         userMapper.updateById(entity);
-        return new ResetPasswordResponse(entity.getId(), entity.getUsername(), DEFAULT_PASSWORD);
+        return new ResetPasswordResponse(entity.getId(), entity.getUsername(), userCredentialSupport.defaultPassword());
     }
 
     public void removeAdminFromWorkspace(Long userId, String workspaceCode) {

@@ -20,6 +20,7 @@ import java.util.List;
 import static com.company.autoplatform.apiautomation.ApiAutomationModels.ApiRequestConfigInput;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
@@ -113,6 +114,75 @@ class ApiAiCaseGenerationServiceTests extends IntegrationTestSupport {
         assertThat(events.get(2).data.path("message").asText()).isNotBlank();
     }
 
+    @Test
+    void streamGenerateParsesMultipleOutlineNdjsonLinesInOrder() throws Exception {
+        Long providerId = createProvider("outline-ndjson");
+        when(aiProviderClient.streamStructuredContent(any(AiProviderRequestProfile.class), eq("secret-outline-ndjson"), any(), any()))
+                .thenReturn("""
+                        {"id":"case-positive","outline":{"name":"Positive smoke","description":"outline desc","type":"Smoke","expected":"positive expected"}}
+                        {"id":"case-negative","outline":{"name":"Negative smoke","description":"outline desc","type":"Negative","expected":"negative expected"}}
+                        """);
+        when(aiProviderClient.requestStructuredContent(any(AiProviderRequestProfile.class), eq("secret-outline-ndjson"), any()))
+                .thenReturn("""
+                        {"case":{"name":"Detail smoke","description":"detail desc","expected":"detail expected","requestConfig":{"method":"GET","path":"/ok","timeoutMs":3000,"queryParams":[],"headers":[],"cookies":[],"body":null,"authConfig":null},"assertions":[],"preProcessors":[],"postProcessors":[]}}
+                        """);
+
+        List<SseEvent> events = streamGenerate(request(providerId, "2", List.of(
+                option("case-positive", "positive", "positive", "Smoke", "Positive"),
+                option("case-negative", "negative", "negative", "Negative", "Negative")
+        )));
+
+        assertThat(events).extracting(SseEvent::name)
+                .containsExactly("started", "item_outline", "item_outline", "item_completed", "item_completed", "completed");
+        assertThat(events.get(1).data.path("itemId").asText()).isEqualTo("case-positive");
+        assertThat(events.get(2).data.path("itemId").asText()).isEqualTo("case-negative");
+        assertThat(events.get(3).data.path("itemId").asText()).isEqualTo("case-positive");
+        assertThat(events.get(4).data.path("itemId").asText()).isEqualTo("case-negative");
+        assertThat(events.get(5).data.path("message").isNull()).isTrue();
+    }
+
+    @Test
+    void streamGenerateParsesOutlineFallbackFromReturnedContentWhenNoLineCallbackIsEmitted() throws Exception {
+        Long providerId = createProvider("outline-fallback");
+        when(aiProviderClient.streamStructuredContent(any(AiProviderRequestProfile.class), eq("secret-outline-fallback"), any(), any()))
+                .thenReturn("""
+                        {"id":"case-positive","outline":{"name":"Fallback outline","description":"outline desc","type":"Smoke","expected":"fallback expected"}}
+                        """);
+        when(aiProviderClient.requestStructuredContent(any(AiProviderRequestProfile.class), eq("secret-outline-fallback"), any()))
+                .thenReturn("""
+                        {"case":{"name":"Fallback detail","description":"detail desc","expected":"detail expected","requestConfig":{"method":"GET","path":"/ok","timeoutMs":3000,"queryParams":[],"headers":[],"cookies":[],"body":null,"authConfig":null},"assertions":[],"preProcessors":[],"postProcessors":[]}}
+                        """);
+
+        List<SseEvent> events = streamGenerate(request(providerId, "1"));
+
+        assertThat(events).extracting(SseEvent::name)
+                .containsExactly("started", "item_outline", "item_completed", "completed");
+        assertThat(events.get(1).data.path("outline").path("name").asText())
+                .endsWith("Fallback outline");
+    }
+
+    @Test
+    void streamGenerateParsesSingleCaseJsonWithoutCaseWrapper() throws Exception {
+        Long providerId = createProvider("single-fallback");
+        when(aiProviderClient.streamStructuredContent(any(AiProviderRequestProfile.class), eq("secret-single-fallback"), any(), any()))
+                .thenReturn("""
+                        {"id":"case-positive","outline":{"name":"Single outline","description":"outline desc","type":"Smoke","expected":"single expected"}}
+                        """);
+        when(aiProviderClient.requestStructuredContent(any(AiProviderRequestProfile.class), eq("secret-single-fallback"), anyString()))
+                .thenReturn("""
+                        {"name":"Single fallback detail","description":"detail desc","expected":"detail expected","requestConfig":{"method":"POST","path":"/single","timeoutMs":3000,"queryParams":[],"headers":[],"cookies":[],"body":null,"authConfig":null},"assertions":[],"preProcessors":[],"postProcessors":[]}
+                        """);
+
+        List<SseEvent> events = streamGenerate(request(providerId, "1"));
+
+        assertThat(events).extracting(SseEvent::name)
+                .containsExactly("started", "item_outline", "item_completed", "completed");
+        assertThat(events.get(2).data.path("item").path("name").asText())
+                .endsWith("Single fallback detail");
+        assertThat(events.get(2).data.path("item").path("requestConfig").path("method").asText()).isEqualTo("POST");
+        assertThat(events.get(2).data.path("item").path("requestConfig").path("path").asText()).isEqualTo("/single");
+    }
+
     private List<SseEvent> streamGenerate(ApiAiCaseGenerationService.ApiAiCaseGenerationRequest request) throws Exception {
         StringWriter writer = new StringWriter();
         service.streamGenerate(WORKSPACE_CODE, request, writer);
@@ -141,6 +211,16 @@ class ApiAiCaseGenerationServiceTests extends IntegrationTestSupport {
     }
 
     private ApiAiCaseGenerationService.ApiAiCaseGenerationRequest request(Long providerId, String caseCount) {
+        return request(providerId, caseCount, List.of(
+                option("case-positive", "positive", "positive", "Smoke", "Positive")
+        ));
+    }
+
+    private ApiAiCaseGenerationService.ApiAiCaseGenerationRequest request(
+            Long providerId,
+            String caseCount,
+            List<ApiAiCaseGenerationService.ApiAiCaseGenerationOption> options
+    ) {
         return new ApiAiCaseGenerationService.ApiAiCaseGenerationRequest(
                 WORKSPACE_CODE,
                 100L,
@@ -154,19 +234,23 @@ class ApiAiCaseGenerationServiceTests extends IntegrationTestSupport {
                 caseCount,
                 true,
                 "extra prompt",
-                List.of(new ApiAiCaseGenerationService.ApiAiCaseGenerationOption(
-                        "case-positive",
-                        "positive",
-                        "positive",
-                        "Smoke",
-                        "Positive"
-                )),
+                options,
                 new ApiRequestConfigInput("GET", "/ok", 3000, List.of(), List.of(), List.of(), null, null),
                 List.of(),
                 List.of(),
                 List.of(),
                 List.of()
         );
+    }
+
+    private ApiAiCaseGenerationService.ApiAiCaseGenerationOption option(
+            String id,
+            String key,
+            String group,
+            String label,
+            String groupLabel
+    ) {
+        return new ApiAiCaseGenerationService.ApiAiCaseGenerationOption(id, key, group, label, groupLabel);
     }
 
     private List<SseEvent> parseEvents(String content) throws Exception {

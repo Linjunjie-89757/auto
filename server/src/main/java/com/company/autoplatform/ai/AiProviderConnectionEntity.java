@@ -22,6 +22,9 @@ public class AiProviderConnectionEntity extends BaseEntity {
     @TableField("connection_name")
     private String connectionName;
 
+    @TableField("provider_type")
+    private String providerType;
+
     @TableField("protocol_type")
     private String protocolType;
 

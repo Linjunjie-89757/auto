@@ -7,6 +7,7 @@ public record AiProviderConnectionItem(
         String workspaceCode,
         String workspaceName,
         String connectionName,
+        String providerType,
         String protocolType,
         String baseUrl,
         Integer requestTimeoutSeconds,

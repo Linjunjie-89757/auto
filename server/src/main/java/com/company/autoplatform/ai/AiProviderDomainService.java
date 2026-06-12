@@ -272,6 +272,7 @@ public class AiProviderDomainService {
         created.setWorkspaceId(PERSONAL_SCOPE_WORKSPACE_ID);
         created.setOwnerUserId(CurrentUserContext.get());
         created.setConnectionName("角色迁移连接-" + normalizeRoleType(request.roleType()));
+        created.setProviderType("custom");
         created.setProtocolType(protocolType);
         created.setBaseUrl(baseUrl);
         created.setRequestTimeoutSeconds(null);
@@ -316,6 +317,7 @@ public class AiProviderDomainService {
         cloned.setConnectionName((legacyConnection != null ? legacyConnection.getConnectionName() : null) == null
                 ? "旧版迁移-" + legacyConfig.getRoleType()
                 : legacyConnection.getConnectionName());
+        cloned.setProviderType(legacyConnection == null ? "custom" : normalizeProviderType(legacyConnection.getProviderType()));
         cloned.setProtocolType(protocolType);
         cloned.setBaseUrl(baseUrl);
         cloned.setRequestTimeoutSeconds(legacyConnection == null ? null : legacyConnection.getRequestTimeoutSeconds());
@@ -440,6 +442,7 @@ public class AiProviderDomainService {
                 PERSONAL_SCOPE_WORKSPACE_CODE,
                 PERSONAL_SCOPE_WORKSPACE_NAME,
                 entity.getConnectionName(),
+                normalizeProviderType(entity.getProviderType()),
                 normalizeProtocolType(entity.getProtocolType(), null, entity.getBaseUrl()),
                 entity.getBaseUrl(),
                 entity.getRequestTimeoutSeconds(),
@@ -478,6 +481,9 @@ public class AiProviderDomainService {
         entity.setWorkspaceId(PERSONAL_SCOPE_WORKSPACE_ID);
         entity.setOwnerUserId(CurrentUserContext.get());
         entity.setConnectionName(connectionName);
+        if (creating) {
+            entity.setProviderType(normalizeProviderType(request.providerType()));
+        }
         entity.setProtocolType(resolveProviderProtocolType(request.protocolType(), connectionName, baseUrl, request.modelName()));
         entity.setBaseUrl(baseUrl);
         entity.setRequestTimeoutSeconds(normalizeRequestTimeoutSeconds(request.requestTimeoutSeconds()));
@@ -619,6 +625,25 @@ public class AiProviderDomainService {
 
     private String normalizeProvider(String provider) {
         return provider == null ? "" : provider.trim().toUpperCase(Locale.ROOT).replace(' ', '_');
+    }
+
+    private String normalizeProviderType(String providerType) {
+        String normalized = providerType == null ? "" : providerType.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
+        return switch (normalized) {
+            case "openai",
+                 "anthropic",
+                 "google",
+                 "deepseek",
+                 "qwen",
+                 "azure",
+                 "xiaomi",
+                 "zhipu",
+                 "kimi",
+                 "minimax",
+                 "ollama",
+                 "custom" -> normalized;
+            default -> "custom";
+        };
     }
 
     private String resolveProviderProtocolType(String protocolType, String connectionName, String baseUrl, String modelName) {

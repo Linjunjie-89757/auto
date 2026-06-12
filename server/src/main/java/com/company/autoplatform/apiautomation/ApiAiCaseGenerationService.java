@@ -12,7 +12,6 @@ import com.company.autoplatform.workspace.WorkspaceEntity;
 import com.company.autoplatform.workspace.WorkspaceScope;
 import com.company.autoplatform.workspace.WorkspaceService;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,6 +45,7 @@ public class ApiAiCaseGenerationService {
     private final AiProviderClient aiProviderClient;
     private final ObjectMapper objectMapper;
     private final ApiAiCaseGenerationPromptSupport promptSupport;
+    private final ApiAiCaseGenerationParsingSupport parsingSupport;
     private final int defaultRequestTimeoutSeconds;
 
     public ApiAiCaseGenerationService(
@@ -55,6 +55,7 @@ public class ApiAiCaseGenerationService {
             AiProviderClient aiProviderClient,
             ObjectMapper objectMapper,
             ApiAiCaseGenerationPromptSupport promptSupport,
+            ApiAiCaseGenerationParsingSupport parsingSupport,
             @Value("${app.ai.request-timeout-seconds:60}") int defaultRequestTimeoutSeconds
     ) {
         this.aiProviderConnectionMapper = aiProviderConnectionMapper;
@@ -63,6 +64,7 @@ public class ApiAiCaseGenerationService {
         this.aiProviderClient = aiProviderClient;
         this.objectMapper = objectMapper;
         this.promptSupport = promptSupport;
+        this.parsingSupport = parsingSupport;
         this.defaultRequestTimeoutSeconds = Math.max(10, Math.min(600, defaultRequestTimeoutSeconds));
     }
 
@@ -255,7 +257,7 @@ public class ApiAiCaseGenerationService {
             return;
         }
         try {
-            ApiAiGeneratedCaseLine parsed = parseGeneratedCaseLine(line);
+            ApiAiGeneratedCaseLine parsed = parsingSupport.parseGeneratedCaseLine(line);
             ApiAiCaseGenerationSlot slot = slotById.get(parsed.id());
             if (slot == null || completedIds.contains(slot.id()) || parsed.draft() == null) {
                 return;
@@ -278,7 +280,7 @@ public class ApiAiCaseGenerationService {
             return;
         }
         try {
-            ApiAiGeneratedCaseOutlineLine parsed = parseGeneratedCaseOutlineLine(line);
+            ApiAiGeneratedCaseOutlineLine parsed = parsingSupport.parseGeneratedCaseOutlineLine(line);
             ApiAiCaseGenerationSlot slot = slotById.get(parsed.id());
             if (slot == null || outlines.containsKey(slot.id()) || parsed.outline() == null) {
                 return;
@@ -289,39 +291,6 @@ public class ApiAiCaseGenerationService {
         } catch (RuntimeException exception) {
             // Ignore partial or non-NDJSON lines. Full-content parsing below is the fallback.
         }
-    }
-
-    private ApiAiGeneratedCaseLine parseGeneratedCaseLine(String line) {
-        try {
-            JsonNode parsed = objectMapper.readTree(line);
-            String id = optionalText(parsed, "id");
-            JsonNode draftNode = parsed.has("case") ? parsed.path("case") : parsed;
-            ApiAiGeneratedCaseDraft draft = objectMapper.treeToValue(draftNode, ApiAiGeneratedCaseDraft.class);
-            return new ApiAiGeneratedCaseLine(id, draft);
-        } catch (IOException exception) {
-            throw new BadRequestException("AI \u8fd4\u56de\u7684\u5355\u6761\u7528\u4f8b\u65e0\u6cd5\u89e3\u6790");
-        }
-    }
-
-    private ApiAiGeneratedCaseOutlineLine parseGeneratedCaseOutlineLine(String line) {
-        try {
-            JsonNode parsed = objectMapper.readTree(line);
-            String id = optionalText(parsed, "id");
-            JsonNode outlineNode = parsed.has("outline") ? parsed.path("outline") : parsed;
-            ApiAiGeneratedCaseOutline outline = objectMapper.treeToValue(outlineNode, ApiAiGeneratedCaseOutline.class);
-            return new ApiAiGeneratedCaseOutlineLine(id, outline);
-        } catch (IOException exception) {
-            throw new BadRequestException("AI \u8fd4\u56de\u7684\u5355\u6761\u7528\u4f8b\u5927\u7eb2\u65e0\u6cd5\u89e3\u6790");
-        }
-    }
-
-    private String optionalText(JsonNode item, String field) {
-        JsonNode fieldNode = item == null ? null : item.path(field);
-        if (fieldNode == null || fieldNode.isMissingNode() || fieldNode.isNull()) {
-            return null;
-        }
-        String value = fieldNode.asText();
-        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private void emitRemainingDrafts(
@@ -336,7 +305,7 @@ public class ApiAiCaseGenerationService {
         }
         List<ApiAiGeneratedCaseDraft> drafts;
         try {
-            drafts = parseDrafts(content);
+            drafts = parsingSupport.parseDrafts(content);
         } catch (RuntimeException exception) {
             return;
         }
@@ -364,7 +333,7 @@ public class ApiAiCaseGenerationService {
         if (content == null || content.isBlank() || outlines.size() >= slots.size()) {
             return;
         }
-        List<ApiAiGeneratedCaseOutlineLine> parsedLines = parseOutlinesFromNdjson(content);
+        List<ApiAiGeneratedCaseOutlineLine> parsedLines = parsingSupport.parseOutlinesFromNdjson(content);
         Map<String, ApiAiCaseGenerationSlot> slotById = new LinkedHashMap<>();
         for (ApiAiCaseGenerationSlot slot : slots) {
             slotById.put(slot.id(), slot);
@@ -378,25 +347,6 @@ public class ApiAiCaseGenerationService {
             outlines.put(slot.id(), normalized);
             writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_outline", slot.id(), slot.group(), slot.type(), slots.size(), null, normalized, null));
         }
-    }
-
-    private List<ApiAiGeneratedCaseOutlineLine> parseOutlinesFromNdjson(String content) {
-        List<ApiAiGeneratedCaseOutlineLine> outlines = new ArrayList<>();
-        if (content == null || content.isBlank()) {
-            return outlines;
-        }
-        for (String rawLine : content.split("\\r?\\n")) {
-            String line = rawLine.trim();
-            if (line.isEmpty() || line.startsWith("```")) {
-                continue;
-            }
-            try {
-                outlines.add(parseGeneratedCaseOutlineLine(line));
-            } catch (RuntimeException exception) {
-                // Keep parsing later lines; one malformed line should not discard a whole batch.
-            }
-        }
-        return outlines;
     }
 
     private void writeUnchecked(Writer writer, ApiAiCaseGenerationEvent event) {
@@ -417,7 +367,7 @@ public class ApiAiCaseGenerationService {
     ) {
         String prompt = promptSupport.buildPrompt(workspace, request, slot, index, total);
         String content = aiProviderClient.requestStructuredContent(provider.profile(), provider.apiKey(), prompt);
-        return normalizeDraft(parseDraft(content), request, slot, index);
+        return normalizeDraft(parsingSupport.parseDraft(content), request, slot, index);
     }
 
     private ApiAiGeneratedCaseDraft generateOneCaseFromOutline(
@@ -431,72 +381,7 @@ public class ApiAiCaseGenerationService {
     ) {
         String prompt = promptSupport.buildPrompt(workspace, request, slot, outline, index, total);
         String content = aiProviderClient.requestStructuredContent(provider.profile(), provider.apiKey(), prompt);
-        return normalizeDraft(parseDraft(content), request, slot, index);
-    }
-
-    private List<ApiAiGeneratedCaseDraft> parseDrafts(String content) {
-        try {
-            JsonNode parsed = objectMapper.readTree(content);
-            JsonNode casesNode = parsed.isArray() ? parsed : parsed.path("cases");
-            if (!casesNode.isArray()) {
-                List<ApiAiGeneratedCaseDraft> ndjsonDrafts = parseDraftsFromNdjson(content);
-                if (!ndjsonDrafts.isEmpty()) {
-                    return ndjsonDrafts;
-                }
-                throw new BadRequestException("AI \u8fd4\u56de\u5185\u5bb9\u65e0\u6cd5\u89e3\u6790\u4e3a\u63a5\u53e3\u7528\u4f8b JSON \u5217\u8868");
-            }
-            List<ApiAiGeneratedCaseDraft> drafts = new ArrayList<>();
-            for (JsonNode itemNode : casesNode) {
-                try {
-                    drafts.add(objectMapper.treeToValue(itemNode, ApiAiGeneratedCaseDraft.class));
-                } catch (IOException exception) {
-                    drafts.add(null);
-                }
-            }
-            return drafts;
-        } catch (IOException exception) {
-            List<ApiAiGeneratedCaseDraft> ndjsonDrafts = parseDraftsFromNdjson(content);
-            if (!ndjsonDrafts.isEmpty()) {
-                return ndjsonDrafts;
-            }
-            throw new BadRequestException("AI \u8fd4\u56de\u5185\u5bb9\u65e0\u6cd5\u89e3\u6790\u4e3a\u63a5\u53e3\u7528\u4f8b JSON \u5217\u8868");
-        }
-    }
-
-    private List<ApiAiGeneratedCaseDraft> parseDraftsFromNdjson(String content) {
-        List<ApiAiGeneratedCaseDraft> drafts = new ArrayList<>();
-        if (content == null || content.isBlank()) {
-            return drafts;
-        }
-        for (String rawLine : content.split("\\r?\\n")) {
-            String line = rawLine.trim();
-            if (line.isEmpty() || line.startsWith("```")) {
-                continue;
-            }
-            try {
-                ApiAiGeneratedCaseLine parsed = parseGeneratedCaseLine(line);
-                if (parsed.draft() != null) {
-                    drafts.add(parsed.draft());
-                }
-            } catch (RuntimeException exception) {
-                // Keep parsing later lines; one malformed line should not discard a whole batch.
-            }
-        }
-        return drafts;
-    }
-
-    private ApiAiGeneratedCaseDraft parseDraft(String content) {
-        try {
-            JsonNode parsed = objectMapper.readTree(content);
-            JsonNode draftNode = parsed.has("case") ? parsed.path("case") : parsed;
-            ApiAiGeneratedCaseDraft draft = objectMapper.treeToValue(draftNode, ApiAiGeneratedCaseDraft.class);
-            if (draft == null) {
-                throw new BadRequestException("AI \u8fd4\u56de\u5185\u5bb9\u4e3a\u7a7a");
-            }
-            return draft;
-        } catch (IOException exception) {
-            throw new BadRequestException("AI \u8fd4\u56de\u5185\u5bb9\u65e0\u6cd5\u89e3\u6790\u4e3a\u63a5\u53e3\u7528\u4f8b JSON");
-        }
+        return normalizeDraft(parsingSupport.parseDraft(content), request, slot, index);
     }
 
     private ApiAiGeneratedCaseDraft normalizeDraft(
@@ -870,13 +755,13 @@ public class ApiAiCaseGenerationService {
     ) {
     }
 
-    private record ApiAiGeneratedCaseLine(
+    record ApiAiGeneratedCaseLine(
             String id,
             ApiAiGeneratedCaseDraft draft
     ) {
     }
 
-    private record ApiAiGeneratedCaseOutlineLine(
+    record ApiAiGeneratedCaseOutlineLine(
             String id,
             ApiAiGeneratedCaseOutline outline
     ) {

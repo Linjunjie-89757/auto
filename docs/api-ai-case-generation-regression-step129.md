@@ -47,3 +47,13 @@
 2. 再抽 `ApiAiCaseGenerationParsingSupport`，只迁移 NDJSON / JSON 解析和 fallback 解析纯逻辑。
 3. 暂时不拆 `streamGenerate(...)` 主编排和事件写出，避免改变 SSE 事件顺序。
 
+## 第 131-134 步拆分后状态
+
+- `ApiAiCaseGenerationService`：继续作为 `streamGenerate(...)` 主编排入口，保留 workspace/provider 解析、slot 构建、生成流程、draft/outline normalize 和 SSE 事件顺序控制。
+- `ApiAiCaseGenerationPromptSupport`：承接 outline、单用例详情、批量、流式批量 prompt 构建，以及 prompt payload JSON 序列化。
+- `ApiAiCaseGenerationParsingSupport`：承接单行 NDJSON、outline NDJSON、`case` 包裹、`cases` 数组、裸 case JSON fallback 解析。
+- `ApiAiCaseGenerationEventSupport`：承接 SSE `event/data` 写出、flush、unchecked 写出包装和换行定位辅助。
+
+本阶段没有强行迁移 `emitDraftLine`、`emitOutlineLine`、`emitRemainingDrafts`、`emitRemainingOutlines` 的完整主体，因为这些方法会直接调用 `normalizeDraft` / `normalizeOutline` 并维护 `completedIds` / `outlines` 状态。继续迁移会把用例归一化和主流程状态管理拖入 event support，职责边界反而变糊。当前只抽出事件写出和换行辅助，保持 SSE 事件名称、顺序、data 字段和 flush 行为不变。
+
+拆分后暂未发现 support 之间反向依赖：Prompt / Parsing / Event support 均只依赖 `ApiAiCaseGenerationService` 的数据 record 和通用基础设施，不互相调用。

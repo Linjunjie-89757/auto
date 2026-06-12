@@ -12,7 +12,6 @@ import com.company.autoplatform.workspace.WorkspaceEntity;
 import com.company.autoplatform.workspace.WorkspaceScope;
 import com.company.autoplatform.workspace.WorkspaceService;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,7 +41,6 @@ public class ApiAiCaseGenerationService {
     private final WorkspaceService workspaceService;
     private final AiSecretCodec aiSecretCodec;
     private final AiProviderClient aiProviderClient;
-    private final ObjectMapper objectMapper;
     private final ApiAiCaseGenerationPromptSupport promptSupport;
     private final ApiAiCaseGenerationParsingSupport parsingSupport;
     private final ApiAiCaseGenerationEventSupport eventSupport;
@@ -53,7 +51,6 @@ public class ApiAiCaseGenerationService {
             WorkspaceService workspaceService,
             AiSecretCodec aiSecretCodec,
             AiProviderClient aiProviderClient,
-            ObjectMapper objectMapper,
             ApiAiCaseGenerationPromptSupport promptSupport,
             ApiAiCaseGenerationParsingSupport parsingSupport,
             ApiAiCaseGenerationEventSupport eventSupport,
@@ -63,7 +60,6 @@ public class ApiAiCaseGenerationService {
         this.workspaceService = workspaceService;
         this.aiSecretCodec = aiSecretCodec;
         this.aiProviderClient = aiProviderClient;
-        this.objectMapper = objectMapper;
         this.promptSupport = promptSupport;
         this.parsingSupport = parsingSupport;
         this.eventSupport = eventSupport;

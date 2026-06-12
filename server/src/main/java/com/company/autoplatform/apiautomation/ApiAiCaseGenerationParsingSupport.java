@@ -1,7 +1,6 @@
 package com.company.autoplatform.apiautomation;
 
 import com.company.autoplatform.apiautomation.ApiAiCaseGenerationService.ApiAiGeneratedCaseDraft;
-import com.company.autoplatform.apiautomation.ApiAiCaseGenerationService.ApiAiGeneratedCaseLine;
 import com.company.autoplatform.apiautomation.ApiAiCaseGenerationService.ApiAiGeneratedCaseOutline;
 import com.company.autoplatform.apiautomation.ApiAiCaseGenerationService.ApiAiGeneratedCaseOutlineLine;
 import com.company.autoplatform.common.BadRequestException;
@@ -20,18 +19,6 @@ class ApiAiCaseGenerationParsingSupport {
 
     ApiAiCaseGenerationParsingSupport(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
-    }
-
-    ApiAiGeneratedCaseLine parseGeneratedCaseLine(String line) {
-        try {
-            JsonNode parsed = objectMapper.readTree(line);
-            String id = optionalText(parsed, "id");
-            JsonNode draftNode = parsed.has("case") ? parsed.path("case") : parsed;
-            ApiAiGeneratedCaseDraft draft = objectMapper.treeToValue(draftNode, ApiAiGeneratedCaseDraft.class);
-            return new ApiAiGeneratedCaseLine(id, draft);
-        } catch (IOException exception) {
-            throw new BadRequestException("AI \u8fd4\u56de\u7684\u5355\u6761\u7528\u4f8b\u65e0\u6cd5\u89e3\u6790");
-        }
     }
 
     ApiAiGeneratedCaseOutlineLine parseGeneratedCaseOutlineLine(String line) {
@@ -58,57 +45,6 @@ class ApiAiCaseGenerationParsingSupport {
         } catch (IOException exception) {
             throw new BadRequestException("AI \u8fd4\u56de\u5185\u5bb9\u65e0\u6cd5\u89e3\u6790\u4e3a\u63a5\u53e3\u7528\u4f8b JSON");
         }
-    }
-
-    List<ApiAiGeneratedCaseDraft> parseDrafts(String content) {
-        try {
-            JsonNode parsed = objectMapper.readTree(content);
-            JsonNode casesNode = parsed.isArray() ? parsed : parsed.path("cases");
-            if (!casesNode.isArray()) {
-                List<ApiAiGeneratedCaseDraft> ndjsonDrafts = parseDraftsFromNdjson(content);
-                if (!ndjsonDrafts.isEmpty()) {
-                    return ndjsonDrafts;
-                }
-                throw new BadRequestException("AI \u8fd4\u56de\u5185\u5bb9\u65e0\u6cd5\u89e3\u6790\u4e3a\u63a5\u53e3\u7528\u4f8b JSON \u5217\u8868");
-            }
-            List<ApiAiGeneratedCaseDraft> drafts = new ArrayList<>();
-            for (JsonNode itemNode : casesNode) {
-                try {
-                    drafts.add(objectMapper.treeToValue(itemNode, ApiAiGeneratedCaseDraft.class));
-                } catch (IOException exception) {
-                    drafts.add(null);
-                }
-            }
-            return drafts;
-        } catch (IOException exception) {
-            List<ApiAiGeneratedCaseDraft> ndjsonDrafts = parseDraftsFromNdjson(content);
-            if (!ndjsonDrafts.isEmpty()) {
-                return ndjsonDrafts;
-            }
-            throw new BadRequestException("AI \u8fd4\u56de\u5185\u5bb9\u65e0\u6cd5\u89e3\u6790\u4e3a\u63a5\u53e3\u7528\u4f8b JSON \u5217\u8868");
-        }
-    }
-
-    List<ApiAiGeneratedCaseDraft> parseDraftsFromNdjson(String content) {
-        List<ApiAiGeneratedCaseDraft> drafts = new ArrayList<>();
-        if (content == null || content.isBlank()) {
-            return drafts;
-        }
-        for (String rawLine : content.split("\\r?\\n")) {
-            String line = rawLine.trim();
-            if (line.isEmpty() || line.startsWith("```")) {
-                continue;
-            }
-            try {
-                ApiAiGeneratedCaseLine parsed = parseGeneratedCaseLine(line);
-                if (parsed.draft() != null) {
-                    drafts.add(parsed.draft());
-                }
-            } catch (RuntimeException exception) {
-                // Keep parsing later lines; one malformed line should not discard a whole batch.
-            }
-        }
-        return drafts;
     }
 
     List<ApiAiGeneratedCaseOutlineLine> parseOutlinesFromNdjson(String content) {

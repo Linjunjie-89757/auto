@@ -26,8 +26,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.HashSet;
-import java.util.Set;
 
 import static com.company.autoplatform.apiautomation.ApiAutomationModels.*;
 
@@ -159,34 +157,6 @@ public class ApiAiCaseGenerationService {
         return completed;
     }
 
-    private int streamGenerateBatchCases(
-            WorkspaceEntity workspace,
-            ResolvedAiProvider provider,
-            ApiAiCaseGenerationRequest request,
-            List<ApiAiCaseGenerationSlot> slots,
-            Writer writer
-    ) {
-        String prompt = promptSupport.buildStreamingBatchPrompt(workspace, request, slots);
-        Map<String, ApiAiCaseGenerationSlot> slotById = new LinkedHashMap<>();
-        for (ApiAiCaseGenerationSlot slot : slots) {
-            slotById.put(slot.id(), slot);
-        }
-        Set<String> completedIds = new HashSet<>();
-        StringBuilder lineBuffer = new StringBuilder();
-        String content = aiProviderClient.streamStructuredContent(provider.profile(), provider.apiKey(), prompt, delta -> {
-            appendAndEmitCompletedLines(delta, lineBuffer, slotById, completedIds, request, writer);
-        });
-        appendAndEmitCompletedLines("\n", lineBuffer, slotById, completedIds, request, writer);
-        emitRemainingDrafts(content, slots, completedIds, request, writer);
-        for (ApiAiCaseGenerationSlot slot : slots) {
-            if (!completedIds.contains(slot.id())) {
-                eventSupport.writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_failed", slot.id(), slot.group(), slot.type(), slots.size(), null, null,
-                        "AI \u672a\u8fd4\u56de\u8be5\u7528\u4f8b"));
-            }
-        }
-        return completedIds.size();
-    }
-
     private void appendAndEmitOutlineLines(
             String delta,
             StringBuilder lineBuffer,
@@ -207,54 +177,6 @@ public class ApiAiCaseGenerationService {
             }
             lineBuffer.delete(0, removeEnd);
             emitOutlineLine(line, slotById, outlines, writer);
-        }
-    }
-
-    private void appendAndEmitCompletedLines(
-            String delta,
-            StringBuilder lineBuffer,
-            Map<String, ApiAiCaseGenerationSlot> slotById,
-            Set<String> completedIds,
-            ApiAiCaseGenerationRequest request,
-            Writer writer
-    ) {
-        if (delta == null || delta.isEmpty()) {
-            return;
-        }
-        lineBuffer.append(delta);
-        int lineBreakIndex;
-        while ((lineBreakIndex = eventSupport.indexOfLineBreak(lineBuffer)) >= 0) {
-            String line = lineBuffer.substring(0, lineBreakIndex).trim();
-            int removeEnd = lineBreakIndex + 1;
-            if (removeEnd < lineBuffer.length() && lineBuffer.charAt(lineBreakIndex) == '\r' && lineBuffer.charAt(removeEnd) == '\n') {
-                removeEnd += 1;
-            }
-            lineBuffer.delete(0, removeEnd);
-            emitDraftLine(line, slotById, completedIds, request, writer);
-        }
-    }
-
-    private void emitDraftLine(
-            String line,
-            Map<String, ApiAiCaseGenerationSlot> slotById,
-            Set<String> completedIds,
-            ApiAiCaseGenerationRequest request,
-            Writer writer
-    ) {
-        if (line == null || line.isBlank() || line.startsWith("```")) {
-            return;
-        }
-        try {
-            ApiAiGeneratedCaseLine parsed = parsingSupport.parseGeneratedCaseLine(line);
-            ApiAiCaseGenerationSlot slot = slotById.get(parsed.id());
-            if (slot == null || completedIds.contains(slot.id()) || parsed.draft() == null) {
-                return;
-            }
-            ApiAiGeneratedCaseDraft normalized = normalizeDraft(parsed.draft(), request, slot, completedIds.size() + 1);
-            completedIds.add(slot.id());
-            eventSupport.writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slotById.size(), normalized, null, null));
-        } catch (RuntimeException exception) {
-            // Ignore partial or non-NDJSON lines here. Final full-content parsing below is the fallback.
         }
     }
 
@@ -281,37 +203,6 @@ public class ApiAiCaseGenerationService {
         }
     }
 
-    private void emitRemainingDrafts(
-            String content,
-            List<ApiAiCaseGenerationSlot> slots,
-            Set<String> completedIds,
-            ApiAiCaseGenerationRequest request,
-            Writer writer
-    ) {
-        if (content == null || content.isBlank() || completedIds.size() >= slots.size()) {
-            return;
-        }
-        List<ApiAiGeneratedCaseDraft> drafts;
-        try {
-            drafts = parsingSupport.parseDrafts(content);
-        } catch (RuntimeException exception) {
-            return;
-        }
-        for (int index = 0; index < slots.size(); index++) {
-            ApiAiCaseGenerationSlot slot = slots.get(index);
-            if (completedIds.contains(slot.id())) {
-                continue;
-            }
-            ApiAiGeneratedCaseDraft draft = index < drafts.size() ? drafts.get(index) : null;
-            if (draft == null) {
-                continue;
-            }
-            ApiAiGeneratedCaseDraft normalized = normalizeDraft(draft, request, slot, index + 1);
-            completedIds.add(slot.id());
-            eventSupport.writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_completed", slot.id(), slot.group(), slot.type(), slots.size(), normalized, null, null));
-        }
-    }
-
     private void emitRemainingOutlines(
             String content,
             List<ApiAiCaseGenerationSlot> slots,
@@ -335,19 +226,6 @@ public class ApiAiCaseGenerationService {
             outlines.put(slot.id(), normalized);
             eventSupport.writeUnchecked(writer, new ApiAiCaseGenerationEvent("item_outline", slot.id(), slot.group(), slot.type(), slots.size(), null, normalized, null));
         }
-    }
-
-    private ApiAiGeneratedCaseDraft generateOneCase(
-            WorkspaceEntity workspace,
-            ResolvedAiProvider provider,
-            ApiAiCaseGenerationRequest request,
-            ApiAiCaseGenerationSlot slot,
-            int index,
-            int total
-    ) {
-        String prompt = promptSupport.buildPrompt(workspace, request, slot, index, total);
-        String content = aiProviderClient.requestStructuredContent(provider.profile(), provider.apiKey(), prompt);
-        return normalizeDraft(parsingSupport.parseDraft(content), request, slot, index);
     }
 
     private ApiAiGeneratedCaseDraft generateOneCaseFromOutline(
@@ -714,12 +592,6 @@ public class ApiAiCaseGenerationService {
             String groupKey,
             String type,
             String typeKey
-    ) {
-    }
-
-    record ApiAiGeneratedCaseLine(
-            String id,
-            ApiAiGeneratedCaseDraft draft
     ) {
     }
 

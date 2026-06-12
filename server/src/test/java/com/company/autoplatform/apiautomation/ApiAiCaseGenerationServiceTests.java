@@ -17,6 +17,9 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.company.autoplatform.apiautomation.ApiAutomationModels.ApiAuthConfigInput;
+import static com.company.autoplatform.apiautomation.ApiAutomationModels.ApiAuthCredentialInput;
+import static com.company.autoplatform.apiautomation.ApiAutomationModels.ApiRequestBodyInput;
 import static com.company.autoplatform.apiautomation.ApiAutomationModels.ApiRequestConfigInput;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -183,6 +186,114 @@ class ApiAiCaseGenerationServiceTests extends IntegrationTestSupport {
         assertThat(events.get(2).data.path("item").path("requestConfig").path("path").asText()).isEqualTo("/single");
     }
 
+    @Test
+    void streamGenerateFallsBackToSourceRequestConfigWhenDetailOmitsRequestConfig() throws Exception {
+        Long providerId = createProvider("detail-request-fallback");
+        when(aiProviderClient.streamStructuredContent(any(AiProviderRequestProfile.class), eq("secret-detail-request-fallback"), any(), any()))
+                .thenReturn("""
+                        {"id":"case-positive","outline":{"name":"Fallback outline","description":"outline desc","type":"Smoke","expected":"fallback expected"}}
+                        """);
+        when(aiProviderClient.requestStructuredContent(any(AiProviderRequestProfile.class), eq("secret-detail-request-fallback"), anyString()))
+                .thenReturn("""
+                        {"case":{"name":"Fallback detail","description":"detail desc","tags":["custom"],"expected":"detail expected","assertions":[],"preProcessors":[],"postProcessors":[]}}
+                        """);
+
+        ApiRequestBodyInput body = new ApiRequestBodyInput("RAW_JSON", "{\"source\":true}", List.of(),
+                "application/json", null, null);
+        ApiAuthConfigInput authConfig = new ApiAuthConfigInput("BASIC",
+                new ApiAuthCredentialInput("api-user", "api-pass"),
+                new ApiAuthCredentialInput("", ""));
+        ApiRequestConfigInput sourceConfig = new ApiRequestConfigInput("POST", "/fallback", 7000,
+                List.of(), List.of(), List.of(), body, authConfig);
+
+        List<SseEvent> events = streamGenerate(request(providerId, "1", List.of(
+                option("case-positive", "positive", "positive", "Smoke", "Positive")
+        ), sourceConfig));
+
+        JsonNode item = events.get(2).data.path("item");
+        JsonNode requestConfig = item.path("requestConfig");
+        assertThat(requestConfig.path("method").asText()).isEqualTo("POST");
+        assertThat(requestConfig.path("path").asText()).isEqualTo("/fallback");
+        assertThat(requestConfig.path("timeoutMs").asInt()).isEqualTo(7000);
+        assertThat(requestConfig.path("body").path("type").asText()).isEqualTo("RAW_JSON");
+        assertThat(requestConfig.path("body").path("rawText").asText()).isEqualTo("{\"source\":true}");
+        assertThat(requestConfig.path("authConfig").path("authType").asText()).isEqualTo("BASIC");
+        assertThat(requestConfig.path("authConfig").path("basicAuth").path("userName").asText()).isEqualTo("api-user");
+    }
+
+    @Test
+    void streamGenerateAddsDefaultAssertionsAndNormalizesTags() throws Exception {
+        Long providerId = createProvider("detail-normalize");
+        when(aiProviderClient.streamStructuredContent(any(AiProviderRequestProfile.class), eq("secret-detail-normalize"), any(), any()))
+                .thenReturn("""
+                        {"id":"case-positive","outline":{"name":"Normalize outline","description":"outline desc","type":"Smoke","expected":"normalize expected"}}
+                        """);
+        when(aiProviderClient.requestStructuredContent(any(AiProviderRequestProfile.class), eq("secret-detail-normalize"), anyString()))
+                .thenReturn("""
+                        {"case":{"name":"Normalize detail","description":"detail desc","tags":["custom"],"expected":"detail expected","requestConfig":{"method":"GET","path":"/ok","timeoutMs":3000,"queryParams":[],"headers":[],"cookies":[],"body":null,"authConfig":null},"assertions":[],"preProcessors":[],"postProcessors":[]}}
+                        """);
+
+        List<SseEvent> events = streamGenerate(request(providerId, "1"));
+
+        JsonNode item = events.get(2).data.path("item");
+        assertThat(jsonArrayValues(item.path("tags"))).contains("custom", "Positive", "Smoke");
+        JsonNode assertion = item.path("assertions").get(0);
+        assertThat(assertion.path("type").asText()).isEqualTo("STATUS_CODE");
+        assertThat(assertion.path("subject").asText()).isEqualTo("STATUS_CODE");
+        assertThat(assertion.path("operator").asText()).isEqualTo("LT");
+        assertThat(assertion.path("expectedValue").asText()).isEqualTo("400");
+    }
+
+    @Test
+    void streamGenerateNormalizesOutlineDefaultsFromSlot() throws Exception {
+        Long providerId = createProvider("outline-normalize");
+        when(aiProviderClient.streamStructuredContent(any(AiProviderRequestProfile.class), eq("secret-outline-normalize"), any(), any()))
+                .thenReturn("""
+                        {"id":"case-positive","outline":{"name":"Outline defaults","description":"outline desc","tags":["outline-tag"]}}
+                        """);
+        when(aiProviderClient.requestStructuredContent(any(AiProviderRequestProfile.class), eq("secret-outline-normalize"), anyString()))
+                .thenReturn("""
+                        {"case":{"name":"Detail defaults","description":"detail desc","expected":"detail expected","requestConfig":{"method":"GET","path":"/ok","timeoutMs":3000,"queryParams":[],"headers":[],"cookies":[],"body":null,"authConfig":null},"assertions":[],"preProcessors":[],"postProcessors":[]}}
+                        """);
+
+        List<SseEvent> events = streamGenerate(request(providerId, "1"));
+
+        JsonNode outline = events.get(1).data.path("outline");
+        assertThat(outline.path("name").asText()).startsWith("Smoke");
+        assertThat(outline.path("group").asText()).isEqualTo("Positive");
+        assertThat(outline.path("groupKey").asText()).isEqualTo("positive");
+        assertThat(outline.path("type").asText()).isEqualTo("Smoke");
+        assertThat(outline.path("typeKey").asText()).isEqualTo("positive");
+        assertThat(outline.path("expected").asText()).isNotBlank();
+        assertThat(jsonArrayValues(outline.path("tags"))).contains("outline-tag", "Positive", "Smoke");
+    }
+
+    @Test
+    void streamGenerateEmitsItemFailedAndPartialCompletedWhenOneDetailGenerationFails() throws Exception {
+        Long providerId = createProvider("detail-partial-failure");
+        when(aiProviderClient.streamStructuredContent(any(AiProviderRequestProfile.class), eq("secret-detail-partial-failure"), any(), any()))
+                .thenReturn("""
+                        {"id":"case-positive","outline":{"name":"Positive outline","description":"outline desc","type":"Smoke","expected":"positive expected"}}
+                        {"id":"case-negative","outline":{"name":"Negative outline","description":"outline desc","type":"Negative","expected":"negative expected"}}
+                        """);
+        when(aiProviderClient.requestStructuredContent(any(AiProviderRequestProfile.class), eq("secret-detail-partial-failure"), anyString()))
+                .thenReturn("""
+                        {"case":{"name":"Positive detail","description":"detail desc","expected":"detail expected","requestConfig":{"method":"GET","path":"/ok","timeoutMs":3000,"queryParams":[],"headers":[],"cookies":[],"body":null,"authConfig":null},"assertions":[],"preProcessors":[],"postProcessors":[]}}
+                        """)
+                .thenThrow(new RuntimeException("detail boom"));
+
+        List<SseEvent> events = streamGenerate(request(providerId, "2", List.of(
+                option("case-positive", "positive", "positive", "Smoke", "Positive"),
+                option("case-negative", "negative", "negative", "Negative", "Negative")
+        )));
+
+        assertThat(events).extracting(SseEvent::name)
+                .containsExactly("started", "item_outline", "item_outline", "item_completed", "item_failed", "completed");
+        assertThat(events.get(4).data.path("itemId").asText()).isEqualTo("case-negative");
+        assertThat(events.get(4).data.path("message").asText()).contains("detail boom");
+        assertThat(events.get(5).data.path("message").asText()).contains("部分");
+    }
+
     private List<SseEvent> streamGenerate(ApiAiCaseGenerationService.ApiAiCaseGenerationRequest request) throws Exception {
         StringWriter writer = new StringWriter();
         service.streamGenerate(WORKSPACE_CODE, request, writer);
@@ -221,13 +332,23 @@ class ApiAiCaseGenerationServiceTests extends IntegrationTestSupport {
             String caseCount,
             List<ApiAiCaseGenerationService.ApiAiCaseGenerationOption> options
     ) {
+        return request(providerId, caseCount, options,
+                new ApiRequestConfigInput("GET", "/ok", 3000, List.of(), List.of(), List.of(), null, null));
+    }
+
+    private ApiAiCaseGenerationService.ApiAiCaseGenerationRequest request(
+            Long providerId,
+            String caseCount,
+            List<ApiAiCaseGenerationService.ApiAiCaseGenerationOption> options,
+            ApiRequestConfigInput requestConfig
+    ) {
         return new ApiAiCaseGenerationService.ApiAiCaseGenerationRequest(
                 WORKSPACE_CODE,
                 100L,
                 "Demo API",
                 "Demo API",
-                "GET",
-                "/ok",
+                requestConfig.method(),
+                requestConfig.path(),
                 "demo description",
                 providerId,
                 "gpt-test",
@@ -235,7 +356,7 @@ class ApiAiCaseGenerationServiceTests extends IntegrationTestSupport {
                 true,
                 "extra prompt",
                 options,
-                new ApiRequestConfigInput("GET", "/ok", 3000, List.of(), List.of(), List.of(), null, null),
+                requestConfig,
                 List.of(),
                 List.of(),
                 List.of(),
@@ -273,6 +394,12 @@ class ApiAiCaseGenerationServiceTests extends IntegrationTestSupport {
             events.add(new SseEvent(name, objectMapper.readTree(data)));
         }
         return events;
+    }
+
+    private List<String> jsonArrayValues(JsonNode node) {
+        List<String> values = new ArrayList<>();
+        node.forEach(item -> values.add(item.asText()));
+        return values;
     }
 
     private record SseEvent(String name, JsonNode data) {

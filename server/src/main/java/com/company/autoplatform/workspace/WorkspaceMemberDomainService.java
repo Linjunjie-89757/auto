@@ -1,8 +1,6 @@
 package com.company.autoplatform.workspace;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.company.autoplatform.auth.CurrentUserContext;
-import com.company.autoplatform.auth.PlatformRole;
 import com.company.autoplatform.common.BadRequestException;
 import com.company.autoplatform.user.UserEntity;
 import com.company.autoplatform.user.UserService;
@@ -23,20 +21,23 @@ public class WorkspaceMemberDomainService {
 
     private final WorkspaceMemberMapper workspaceMemberMapper;
     private final UserService userService;
+    private final WorkspaceAccessSupport workspaceAccessSupport;
     private final WorkspaceDomainService workspaceDomainService;
 
     public WorkspaceMemberDomainService(
             WorkspaceMemberMapper workspaceMemberMapper,
             UserService userService,
+            WorkspaceAccessSupport workspaceAccessSupport,
             WorkspaceDomainService workspaceDomainService
     ) {
         this.workspaceMemberMapper = workspaceMemberMapper;
         this.userService = userService;
+        this.workspaceAccessSupport = workspaceAccessSupport;
         this.workspaceDomainService = workspaceDomainService;
     }
 
     public List<WorkspaceMemberItem> listMembers(String workspaceCode) {
-        WorkspaceEntity workspace = requireReadableWorkspace(workspaceCode);
+        WorkspaceEntity workspace = workspaceAccessSupport.requireReadableWorkspace(workspaceCode);
         Map<Long, WorkspaceMemberItem> result = new LinkedHashMap<>();
 
         List<UserEntity> admins = userService.listPlatformAdminUsers();
@@ -65,7 +66,7 @@ public class WorkspaceMemberDomainService {
     }
 
     public WorkspaceMemberItem createMember(String workspaceCode, CreateWorkspaceMemberRequest request) {
-        requirePlatformAdmin();
+        workspaceAccessSupport.requirePlatformAdmin();
         WorkspaceEntity workspace = workspaceDomainService.requireWorkspace(workspaceCode);
         UserEntity user = userService.requireAnyUser(request.userId());
         if (userService.isPlatformAdmin(user.getId())) {
@@ -96,7 +97,7 @@ public class WorkspaceMemberDomainService {
     }
 
     public List<WorkspaceMemberItem> createMembers(String workspaceCode, BatchWorkspaceMemberRequest request) {
-        requirePlatformAdmin();
+        workspaceAccessSupport.requirePlatformAdmin();
         List<WorkspaceMemberItem> result = new ArrayList<>();
         for (Long userId : request.userIds()) {
             result.add(createMember(workspaceCode, new CreateWorkspaceMemberRequest(userId, request.roleCode())));
@@ -105,7 +106,7 @@ public class WorkspaceMemberDomainService {
     }
 
     public WorkspaceMemberItem updateMember(String workspaceCode, Long memberId, UpdateWorkspaceMemberRequest request) {
-        requirePlatformAdmin();
+        workspaceAccessSupport.requirePlatformAdmin();
         WorkspaceEntity workspace = workspaceDomainService.requireWorkspace(workspaceCode);
         WorkspaceMemberEntity entity = requireMember(memberId);
         if (!entity.getWorkspaceId().equals(workspace.getId())) {
@@ -122,7 +123,7 @@ public class WorkspaceMemberDomainService {
     }
 
     public void deleteMember(String workspaceCode, Long memberId) {
-        requirePlatformAdmin();
+        workspaceAccessSupport.requirePlatformAdmin();
         if (memberId < 0) {
             userService.removeAdminFromWorkspace(-memberId, workspaceCode);
             return;
@@ -144,27 +145,6 @@ public class WorkspaceMemberDomainService {
             throw new BadRequestException("成员不存在");
         }
         return entity;
-    }
-
-    private WorkspaceEntity requireReadableWorkspace(String workspaceCode) {
-        WorkspaceEntity workspace = workspaceDomainService.requireWorkspace(workspaceCode);
-        if (!isPlatformAdmin() && !workspaceDomainService.listReadableWorkspaceEntities().stream()
-                .map(WorkspaceEntity::getId)
-                .toList()
-                .contains(workspace.getId())) {
-            throw new BadRequestException("当前账号无权访问该工作空间");
-        }
-        return workspace;
-    }
-
-    private boolean isPlatformAdmin() {
-        return PlatformRole.isAdminRole(CurrentUserContext.require().platformRole());
-    }
-
-    private void requirePlatformAdmin() {
-        if (!isPlatformAdmin()) {
-            throw new BadRequestException("只有管理员可执行该操作");
-        }
     }
 
     private String normalizeMemberRole(String roleCode) {

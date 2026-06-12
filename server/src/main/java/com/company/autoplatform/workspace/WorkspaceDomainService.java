@@ -2,7 +2,6 @@ package com.company.autoplatform.workspace;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.company.autoplatform.auth.CurrentUserContext;
-import com.company.autoplatform.auth.CurrentUserPrincipal;
 import com.company.autoplatform.auth.PlatformRole;
 import com.company.autoplatform.bug.BugMapper;
 import com.company.autoplatform.casecenter.CaseMapper;
@@ -16,9 +15,7 @@ import com.company.autoplatform.user.UserService;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -57,20 +54,6 @@ public class WorkspaceDomainService {
         this.bugMapper = bugMapper;
         this.envConfigMapper = envConfigMapper;
         this.paramSetMapper = paramSetMapper;
-    }
-
-    public List<WorkspaceItem> listAll() {
-        return listReadableWorkspaceEntities().stream()
-                .map(this::toWorkspaceItem)
-                .toList();
-    }
-
-    public List<WorkspaceItem> listSwitchable() {
-        List<WorkspaceItem> result = new java.util.ArrayList<>();
-        result.add(new WorkspaceItem(WorkspaceScope.ALL, "全部", "查看当前账号可见的全部空间数据", true,
-                null, null, null, 1, null, null));
-        result.addAll(listAll());
-        return result;
     }
 
     public WorkspaceEntity requireWorkspace(String workspaceCode) {
@@ -132,52 +115,6 @@ public class WorkspaceDomainService {
         workspaceMemberMapper.delete(new LambdaQueryWrapper<WorkspaceMemberEntity>()
                 .eq(WorkspaceMemberEntity::getWorkspaceId, workspace.getId()));
         workspaceMapper.deleteById(workspace.getId());
-    }
-
-    List<WorkspaceEntity> listReadableWorkspaceEntities() {
-        if (isPlatformAdmin()) {
-            return workspaceMapper.selectList(new LambdaQueryWrapper<WorkspaceEntity>()
-                    .eq(WorkspaceEntity::getStatus, 1)
-                    .orderByAsc(WorkspaceEntity::getId));
-        }
-        Set<Long> workspaceIds = new LinkedHashSet<>(listReadableWorkspaceIds());
-        if (workspaceIds.isEmpty()) {
-            return List.of();
-        }
-        return workspaceMapper.selectList(new LambdaQueryWrapper<WorkspaceEntity>()
-                .eq(WorkspaceEntity::getStatus, 1)
-                .in(WorkspaceEntity::getId, workspaceIds)
-                .orderByAsc(WorkspaceEntity::getId));
-    }
-
-    private List<Long> listReadableWorkspaceIds() {
-        CurrentUserPrincipal currentUser = CurrentUserContext.require();
-        if (PlatformRole.isAdminRole(currentUser.platformRole())) {
-            return workspaceMapper.selectList(new LambdaQueryWrapper<WorkspaceEntity>()
-                            .eq(WorkspaceEntity::getStatus, 1)
-                            .orderByAsc(WorkspaceEntity::getId))
-                    .stream()
-                    .map(WorkspaceEntity::getId)
-                    .toList();
-        }
-        return workspaceMemberMapper.selectList(new LambdaQueryWrapper<WorkspaceMemberEntity>()
-                        .eq(WorkspaceMemberEntity::getUserId, currentUser.userId())
-                        .eq(WorkspaceMemberEntity::getStatus, 1)
-                        .orderByAsc(WorkspaceMemberEntity::getId))
-                .stream()
-                .map(WorkspaceMemberEntity::getWorkspaceId)
-                .distinct()
-                .toList();
-    }
-
-    private boolean isPlatformAdmin() {
-        return PlatformRole.isAdminRole(CurrentUserContext.require().platformRole());
-    }
-
-    private void requirePlatformAdmin() {
-        if (!isPlatformAdmin()) {
-            throw new BadRequestException("只有管理员可执行该操作");
-        }
     }
 
     private String generateWorkspaceCode() {
@@ -256,7 +193,17 @@ public class WorkspaceDomainService {
         workspaceMemberMapper.updateById(entity);
     }
 
-    private WorkspaceItem toWorkspaceItem(WorkspaceEntity entity) {
+    private boolean isPlatformAdmin() {
+        return PlatformRole.isAdminRole(CurrentUserContext.require().platformRole());
+    }
+
+    private void requirePlatformAdmin() {
+        if (!isPlatformAdmin()) {
+            throw new BadRequestException("只有管理员可执行该操作");
+        }
+    }
+
+    WorkspaceItem toWorkspaceItem(WorkspaceEntity entity) {
         String ownerName = null;
         if (entity.getOwnerUserId() != null) {
             UserEntity owner = userService.findActiveUser(entity.getOwnerUserId());

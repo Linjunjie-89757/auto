@@ -113,6 +113,10 @@ public class BugAttachmentSupport {
         return attachment;
     }
 
+    public void deleteStoredFile(String storedPath) {
+        bugAttachmentStorageService.delete(storedPath);
+    }
+
     public BugAttachmentResponse toAttachmentResponse(BugEntity bug, BugAttachmentEntity attachment) {
         UserEntity uploader = attachment.getCreatedBy() == null ? null : userService.findActiveUser(attachment.getCreatedBy());
         return new BugAttachmentResponse(

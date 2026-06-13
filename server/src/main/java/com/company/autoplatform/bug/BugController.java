@@ -73,6 +73,15 @@ public class BugController {
         return ApiResponse.ok(bugService.updateBug(id, workspaceCode, request), "缺陷更新成功");
     }
 
+    @DeleteMapping("/bugs/{id}")
+    public ApiResponse<Void> deleteBug(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        bugService.deleteBug(id, workspaceCode);
+        return ApiResponse.ok(null, "缺陷删除成功");
+    }
+
     @PostMapping("/bugs/{id}/assign")
     public ApiResponse<BugDetailResponse> assignBug(
             @PathVariable Long id,

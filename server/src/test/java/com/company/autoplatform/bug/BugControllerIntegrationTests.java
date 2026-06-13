@@ -18,6 +18,8 @@ import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.hasItem;
@@ -279,6 +281,63 @@ class BugControllerIntegrationTests extends IntegrationTestSupport {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.attachments.length()").value(0));
+    }
+
+    @Test
+    void deleteBugRemovesMainRecordCommentsFlowsAndAttachmentFiles() throws Exception {
+        String unique = uniquePrefix("delete");
+        Integer bugId = createBug("DISPOSABLE-153-" + unique, "P1", "HIGH", null, null, null);
+        String commentContent = unique + " comment";
+
+        mockMvc.perform(post("/api/bugs/{id}/comments", bugId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "workspaceCode": "%s",
+                                  "content": "%s"
+                                }
+                                """.formatted(WORKSPACE_CODE, commentContent)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        byte[] content = "delete bug attachment evidence".getBytes(StandardCharsets.UTF_8);
+        MockMultipartFile file = new MockMultipartFile(
+                "files",
+                "delete-bug-evidence.txt",
+                "text/plain",
+                content
+        );
+
+        mockMvc.perform(multipart("/api/bugs/{id}/attachments", bugId)
+                        .file(file)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        Path attachmentDirectory = Path.of("data/bug-files/workspace-11/bug-" + bugId).toAbsolutePath().normalize();
+        org.junit.jupiter.api.Assertions.assertTrue(Files.exists(attachmentDirectory));
+
+        mockMvc.perform(delete("/api/bugs/{id}", bugId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        mockMvc.perform(get("/api/bugs/{id}", bugId)
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE))
+                .andExpect(status().isNotFound());
+
+        mockMvc.perform(get("/api/bugs")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .param("keyword", "DISPOSABLE-153-" + unique)
+                        .param("pageNo", "1")
+                        .param("pageSize", "10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.total").value(0))
+                .andExpect(jsonPath("$.data.items.length()").value(0));
+
+        org.junit.jupiter.api.Assertions.assertFalse(Files.exists(attachmentDirectory));
     }
 
     private Integer createBug(String title, String priority, String severity, Long caseId, Long reportId, Long taskId) throws Exception {

@@ -1,7 +1,9 @@
 package com.company.autoplatform.bug;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.company.autoplatform.common.PageResponse;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
@@ -14,18 +16,30 @@ public class BugService {
     private final BugCommentDomainService bugCommentDomainService;
     private final BugSourceContextSupport bugSourceContextSupport;
     private final BugResponseAssembler bugResponseAssembler;
+    private final BugAttachmentMapper bugAttachmentMapper;
+    private final BugCommentMapper bugCommentMapper;
+    private final BugFlowMapper bugFlowMapper;
+    private final BugMapper bugMapper;
 
     public BugService(BugDomainService bugDomainService, BugAttachmentSupport bugAttachmentSupport,
                       BugWorkflowDomainService bugWorkflowDomainService,
                       BugCommentDomainService bugCommentDomainService,
                       BugSourceContextSupport bugSourceContextSupport,
-                      BugResponseAssembler bugResponseAssembler) {
+                      BugResponseAssembler bugResponseAssembler,
+                      BugAttachmentMapper bugAttachmentMapper,
+                      BugCommentMapper bugCommentMapper,
+                      BugFlowMapper bugFlowMapper,
+                      BugMapper bugMapper) {
         this.bugDomainService = bugDomainService;
         this.bugAttachmentSupport = bugAttachmentSupport;
         this.bugWorkflowDomainService = bugWorkflowDomainService;
         this.bugCommentDomainService = bugCommentDomainService;
         this.bugSourceContextSupport = bugSourceContextSupport;
         this.bugResponseAssembler = bugResponseAssembler;
+        this.bugAttachmentMapper = bugAttachmentMapper;
+        this.bugCommentMapper = bugCommentMapper;
+        this.bugFlowMapper = bugFlowMapper;
+        this.bugMapper = bugMapper;
     }
 
     public PageResponse<BugSummaryResponse> listBugs(
@@ -57,6 +71,25 @@ public class BugService {
 
     public BugDetailResponse updateBug(Long id, String headerWorkspaceCode, UpdateBugRequest request) {
         return bugResponseAssembler.toDetail(bugDomainService.updateBug(id, headerWorkspaceCode, request));
+    }
+
+    @Transactional
+    public void deleteBug(Long id, String workspaceCode) {
+        BugEntity bug = bugDomainService.getBug(id, workspaceCode);
+        bugDomainService.requireWritableBug(bug);
+
+        List<BugAttachmentEntity> attachments = bugAttachmentMapper.selectList(new LambdaQueryWrapper<BugAttachmentEntity>()
+                .eq(BugAttachmentEntity::getBugId, id));
+
+        bugAttachmentMapper.delete(new LambdaQueryWrapper<BugAttachmentEntity>()
+                .eq(BugAttachmentEntity::getBugId, id));
+        bugCommentMapper.delete(new LambdaQueryWrapper<BugCommentEntity>()
+                .eq(BugCommentEntity::getBugId, id));
+        bugFlowMapper.delete(new LambdaQueryWrapper<BugFlowEntity>()
+                .eq(BugFlowEntity::getBugId, id));
+        bugMapper.deleteById(id);
+
+        attachments.forEach(attachment -> bugAttachmentSupport.deleteStoredFile(attachment.getStoredPath()));
     }
 
     public BugDetailResponse assignBug(Long id, String headerWorkspaceCode, AssignBugRequest request) {

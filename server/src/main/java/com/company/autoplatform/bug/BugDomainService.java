@@ -219,6 +219,10 @@ public class BugDomainService {
         return entity;
     }
 
+    public void requireWritableBug(BugEntity entity) {
+        workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
+    }
+
     WorkspaceEntity resolveScopedWorkspace(String workspaceCode) {
         String normalized = WorkspaceScope.normalize(workspaceCode);
         return WorkspaceScope.isAll(normalized) ? null : workspaceService.requireReadableWorkspace(normalized);

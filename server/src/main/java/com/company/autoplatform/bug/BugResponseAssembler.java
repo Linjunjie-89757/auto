@@ -227,11 +227,13 @@ public class BugResponseAssembler {
         }
 
         for (BugAttachmentEntity attachment : attachmentEntities) {
+            UserEntity uploader = attachment.getCreatedBy() == null ? null : userService.findActiveUser(attachment.getCreatedBy());
+            String uploaderName = uploader == null ? null : uploader.getDisplayName();
             activities.add(new BugActivityResponse(
                     "attachment-" + attachment.getId(),
                     BugActivityType.ATTACHMENT_ADDED,
-                    null,
-                    null,
+                    attachment.getCreatedBy(),
+                    uploaderName,
                     attachment.getCreatedAt(),
                     "上传了附件",
                     attachment.getFileName(),

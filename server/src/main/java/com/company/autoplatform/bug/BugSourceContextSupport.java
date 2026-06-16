@@ -79,7 +79,7 @@ public class BugSourceContextSupport {
         );
     }
 
-    private BugCaseSummaryResponse safeCaseSummary(Long caseId, String workspaceCode) {
+    public BugCaseSummaryResponse safeCaseSummary(Long caseId, String workspaceCode) {
         try {
             return toCaseSummary(caseService.getCase(caseId, workspaceCode));
         } catch (NotFoundException exception) {

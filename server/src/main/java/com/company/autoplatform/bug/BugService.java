@@ -19,6 +19,7 @@ public class BugService {
     private final BugAttachmentMapper bugAttachmentMapper;
     private final BugCommentMapper bugCommentMapper;
     private final BugFlowMapper bugFlowMapper;
+    private final BugCaseRelationMapper bugCaseRelationMapper;
     private final BugMapper bugMapper;
 
     public BugService(BugDomainService bugDomainService, BugAttachmentSupport bugAttachmentSupport,
@@ -29,6 +30,7 @@ public class BugService {
                       BugAttachmentMapper bugAttachmentMapper,
                       BugCommentMapper bugCommentMapper,
                       BugFlowMapper bugFlowMapper,
+                      BugCaseRelationMapper bugCaseRelationMapper,
                       BugMapper bugMapper) {
         this.bugDomainService = bugDomainService;
         this.bugAttachmentSupport = bugAttachmentSupport;
@@ -39,6 +41,7 @@ public class BugService {
         this.bugAttachmentMapper = bugAttachmentMapper;
         this.bugCommentMapper = bugCommentMapper;
         this.bugFlowMapper = bugFlowMapper;
+        this.bugCaseRelationMapper = bugCaseRelationMapper;
         this.bugMapper = bugMapper;
     }
 
@@ -87,6 +90,8 @@ public class BugService {
                 .eq(BugCommentEntity::getBugId, id));
         bugFlowMapper.delete(new LambdaQueryWrapper<BugFlowEntity>()
                 .eq(BugFlowEntity::getBugId, id));
+        bugCaseRelationMapper.delete(new LambdaQueryWrapper<BugCaseRelationEntity>()
+                .eq(BugCaseRelationEntity::getBugId, id));
         bugMapper.deleteById(id);
 
         attachments.forEach(attachment -> bugAttachmentSupport.deleteStoredFile(attachment.getStoredPath()));
@@ -122,6 +127,18 @@ public class BugService {
 
     public BugStatisticsResponse statistics(String workspaceCode) {
         return bugDomainService.statistics(workspaceCode);
+    }
+
+    public List<BugCaseSummaryResponse> listBugCases(Long id, String workspaceCode) {
+        return bugResponseAssembler.toDetail(bugDomainService.getBug(id, workspaceCode)).relatedCases();
+    }
+
+    public BugDetailResponse replaceBugCases(Long id, String workspaceCode, ReplaceBugCasesRequest request) {
+        return bugResponseAssembler.toDetail(bugDomainService.replaceBugCases(id, workspaceCode, request.caseIds()));
+    }
+
+    public BugDetailResponse deleteBugCase(Long id, String workspaceCode, Long caseId) {
+        return bugResponseAssembler.toDetail(bugDomainService.deleteBugCase(id, workspaceCode, caseId));
     }
 
     public BugDetailResponse createBugFromCase(Long caseId, String workspaceCode, CreateBugRequest request) {

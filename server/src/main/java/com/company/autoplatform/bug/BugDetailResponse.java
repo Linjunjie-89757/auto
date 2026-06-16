@@ -17,6 +17,7 @@ public record BugDetailResponse(
         Long reporterId,
         String reporterName,
         Long relatedCaseId,
+        List<BugCaseSummaryResponse> relatedCases,
         Long relatedReportId,
         Long relatedTaskId,
         List<String> tags,

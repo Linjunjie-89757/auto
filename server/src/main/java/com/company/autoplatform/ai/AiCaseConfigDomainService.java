@@ -314,8 +314,8 @@ public class AiCaseConfigDomainService {
 
     ResolvedRoleConfig requireResolvedRoleConfig(String roleType) {
         AiCaseConfigEntity roleConfig = findByOwnerUserIdAndRoleType(CurrentUserContext.get(), roleType);
-        if (roleConfig == null || normalizeStatus(roleConfig.getStatus()) != 1) {
-            throw new BadRequestException("No active personal " + roleType + " config found");
+        if (roleConfig == null) {
+            throw new BadRequestException("No personal " + roleType + " config found");
         }
         AiProviderConnectionEntity connection = aiProviderDomainService.resolveBoundConnection(roleConfig);
         String apiKey;

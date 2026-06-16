@@ -26,6 +26,7 @@ public class BugDomainService {
 
     private final BugMapper bugMapper;
     private final BugFlowMapper bugFlowMapper;
+    private final BugCaseRelationMapper bugCaseRelationMapper;
     private final UserService userService;
     private final WorkspaceService workspaceService;
     private final CaseService caseService;
@@ -34,6 +35,7 @@ public class BugDomainService {
     public BugDomainService(
             BugMapper bugMapper,
             BugFlowMapper bugFlowMapper,
+            BugCaseRelationMapper bugCaseRelationMapper,
             UserService userService,
             WorkspaceService workspaceService,
             CaseService caseService,
@@ -41,6 +43,7 @@ public class BugDomainService {
     ) {
         this.bugMapper = bugMapper;
         this.bugFlowMapper = bugFlowMapper;
+        this.bugCaseRelationMapper = bugCaseRelationMapper;
         this.userService = userService;
         this.workspaceService = workspaceService;
         this.caseService = caseService;
@@ -142,6 +145,7 @@ public class BugDomainService {
         entity.setCreatedAt(LocalDateTime.now());
         entity.setUpdatedAt(LocalDateTime.now());
         bugMapper.insert(entity);
+        replaceBugCaseRelations(entity, request.relatedCaseId() == null ? List.of() : List.of(request.relatedCaseId()));
 
         if (request.assigneeId() != null) {
             appendInitialFlow(entity.getId());
@@ -184,7 +188,26 @@ public class BugDomainService {
                         .set(BugEntity::getTagsJson, entity.getTagsJson())
                         .set(BugEntity::getUpdatedAt, entity.getUpdatedAt())
         );
+        replaceBugCaseRelations(entity, request.relatedCaseId() == null ? List.of() : List.of(request.relatedCaseId()));
         return entity;
+    }
+
+    public BugEntity replaceBugCases(Long id, String headerWorkspaceCode, List<Long> caseIds) {
+        BugEntity entity = getBug(id, headerWorkspaceCode);
+        requireWritableBug(entity);
+        replaceBugCaseRelations(entity, caseIds);
+        return requireBug(id);
+    }
+
+    public BugEntity deleteBugCase(Long id, String headerWorkspaceCode, Long caseId) {
+        BugEntity entity = getBug(id, headerWorkspaceCode);
+        requireWritableBug(entity);
+        bugCaseRelationMapper.delete(new LambdaQueryWrapper<BugCaseRelationEntity>()
+                .eq(BugCaseRelationEntity::getBugId, id)
+                .eq(BugCaseRelationEntity::getCaseId, caseId));
+        List<Long> remainingCaseIds = listBugCaseIds(id);
+        syncPrimaryRelatedCaseId(entity, remainingCaseIds);
+        return requireBug(id);
     }
 
     public BugStatisticsResponse statistics(String workspaceCode) {
@@ -249,6 +272,56 @@ public class BugDomainService {
         flow.setCreatedAt(LocalDateTime.now());
         flow.setUpdatedAt(LocalDateTime.now());
         bugFlowMapper.insert(flow);
+    }
+
+    private void replaceBugCaseRelations(BugEntity entity, List<Long> rawCaseIds) {
+        List<Long> caseIds = rawCaseIds == null ? List.of() : rawCaseIds.stream()
+                .filter(item -> item != null)
+                .distinct()
+                .toList();
+
+        for (Long caseId : caseIds) {
+            caseService.requireCase(caseId);
+        }
+
+        bugCaseRelationMapper.delete(new LambdaQueryWrapper<BugCaseRelationEntity>()
+                .eq(BugCaseRelationEntity::getBugId, entity.getId()));
+
+        LocalDateTime now = LocalDateTime.now();
+        Long currentUserId = CurrentUserContext.get();
+        for (Long caseId : caseIds) {
+            BugCaseRelationEntity relation = new BugCaseRelationEntity();
+            relation.setBugId(entity.getId());
+            relation.setCaseId(caseId);
+            relation.setCreatedBy(currentUserId);
+            relation.setCreatedAt(now);
+            relation.setUpdatedAt(now);
+            bugCaseRelationMapper.insert(relation);
+        }
+
+        syncPrimaryRelatedCaseId(entity, caseIds);
+    }
+
+    private void syncPrimaryRelatedCaseId(BugEntity entity, List<Long> caseIds) {
+        Long primaryCaseId = caseIds.isEmpty() ? null : caseIds.getFirst();
+        entity.setRelatedCaseId(primaryCaseId);
+        entity.setUpdatedAt(LocalDateTime.now());
+        bugMapper.update(
+                null,
+                new LambdaUpdateWrapper<BugEntity>()
+                        .eq(BugEntity::getId, entity.getId())
+                        .set(BugEntity::getRelatedCaseId, primaryCaseId)
+                        .set(BugEntity::getUpdatedAt, entity.getUpdatedAt())
+        );
+    }
+
+    private List<Long> listBugCaseIds(Long bugId) {
+        return bugCaseRelationMapper.selectList(new LambdaQueryWrapper<BugCaseRelationEntity>()
+                        .eq(BugCaseRelationEntity::getBugId, bugId)
+                        .orderByAsc(BugCaseRelationEntity::getId))
+                .stream()
+                .map(BugCaseRelationEntity::getCaseId)
+                .toList();
     }
 
     private String blankToNull(String value) {

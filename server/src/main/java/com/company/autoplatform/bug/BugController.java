@@ -117,6 +117,32 @@ public class BugController {
         return ApiResponse.ok(bugService.addComment(id, workspaceCode, request), "评论添加成功");
     }
 
+    @GetMapping("/bugs/{id}/cases")
+    public ApiResponse<List<BugCaseSummaryResponse>> listBugCases(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(bugService.listBugCases(id, workspaceCode));
+    }
+
+    @PutMapping("/bugs/{id}/cases")
+    public ApiResponse<BugDetailResponse> replaceBugCases(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody ReplaceBugCasesRequest request
+    ) {
+        return ApiResponse.ok(bugService.replaceBugCases(id, workspaceCode, request), "关联用例已更新");
+    }
+
+    @DeleteMapping("/bugs/{id}/cases/{caseId}")
+    public ApiResponse<BugDetailResponse> deleteBugCase(
+            @PathVariable Long id,
+            @PathVariable Long caseId,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(bugService.deleteBugCase(id, workspaceCode, caseId), "已取消关联用例");
+    }
+
     @PostMapping(value = "/bugs/{id}/attachments", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ApiResponse<List<BugAttachmentResponse>> uploadBugAttachment(
             @PathVariable Long id,

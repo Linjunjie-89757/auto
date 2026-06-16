@@ -74,6 +74,14 @@ public class CaseController {
         return ApiResponse.ok(caseService.getCase(id, workspaceCode));
     }
 
+    @GetMapping("/{id}/executions")
+    public ApiResponse<PageResponse<CaseExecutionHistoryResponse>> listCaseExecutions(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(caseService.listCaseExecutions(id, workspaceCode));
+    }
+
     @PostMapping
     public ApiResponse<CaseSummaryResponse> createCase(
             @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,

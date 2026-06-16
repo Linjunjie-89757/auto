@@ -93,9 +93,6 @@ public class AiCaseService {
         );
         ResolvedRoleConfig resolved = aiCaseConfigDomainService.requireResolvedRoleConfig(ROLE_GENERATOR);
         AiCaseConfigEntity config = resolved.roleConfig();
-        if (aiCaseConfigDomainService.normalizeStatus(config.getStatus()) != 1) {
-            throw new BadRequestException("No active personal case generator config found");
-        }
         int systemMaxCases = INITIAL_SMART_MAX_CASES;
         int requestedMaxCases = request.maxCases() == null ? INITIAL_SMART_MAX_CASES : request.maxCases();
         int effectiveMaxCases = Math.min(requestedMaxCases, INITIAL_SMART_MAX_CASES);
@@ -156,9 +153,6 @@ public class AiCaseService {
         );
         ResolvedRoleConfig resolved = aiCaseConfigDomainService.requireResolvedRoleConfig(ROLE_GENERATOR);
         AiCaseConfigEntity config = resolved.roleConfig();
-        if (aiCaseConfigDomainService.normalizeStatus(config.getStatus()) != 1) {
-            throw new BadRequestException("No active personal case generator config found");
-        }
         int systemMaxCases = INITIAL_SMART_MAX_CASES;
         int requestedMaxCases = request.maxCases() == null ? INITIAL_SMART_MAX_CASES : request.maxCases();
         int effectiveMaxCases = Math.min(requestedMaxCases, INITIAL_SMART_MAX_CASES);

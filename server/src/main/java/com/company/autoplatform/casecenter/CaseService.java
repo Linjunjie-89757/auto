@@ -11,6 +11,7 @@ import com.company.autoplatform.workspace.WorkspaceEntity;
 import com.company.autoplatform.workspace.WorkspaceScope;
 import com.company.autoplatform.workspace.WorkspaceService;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDateTime;
@@ -24,6 +25,7 @@ public class CaseService {
     private final CaseExecutionAttachmentSupport caseExecutionAttachmentSupport;
     private final CaseMapper caseMapper;
     private final CaseExecutionAttachmentMapper caseExecutionAttachmentMapper;
+    private final CaseExecutionHistoryMapper caseExecutionHistoryMapper;
     private final UserService userService;
     private final WorkspaceService workspaceService;
 
@@ -34,6 +36,7 @@ public class CaseService {
             CaseExecutionAttachmentSupport caseExecutionAttachmentSupport,
             CaseMapper caseMapper,
             CaseExecutionAttachmentMapper caseExecutionAttachmentMapper,
+            CaseExecutionHistoryMapper caseExecutionHistoryMapper,
             UserService userService,
             WorkspaceService workspaceService
     ) {
@@ -43,6 +46,7 @@ public class CaseService {
         this.caseExecutionAttachmentSupport = caseExecutionAttachmentSupport;
         this.caseMapper = caseMapper;
         this.caseExecutionAttachmentMapper = caseExecutionAttachmentMapper;
+        this.caseExecutionHistoryMapper = caseExecutionHistoryMapper;
         this.userService = userService;
         this.workspaceService = workspaceService;
     }
@@ -95,20 +99,53 @@ public class CaseService {
         return toCaseDetail(entity);
     }
 
+    @Transactional
     public CaseDetailResponse executeCase(Long id, String workspaceCode, ExecuteCaseRequest request) {
         CaseEntity entity = requireCase(id);
         validateReadable(entity, workspaceCode);
         workspaceService.requireWritableWorkspace(workspaceService.requireWorkspaceById(entity.getWorkspaceId()).getWorkspaceCode());
+        LocalDateTime now = LocalDateTime.now();
+        var currentUser = CurrentUserContext.require();
+        String normalizedStatus = normalizeExecutionStatus(request.executionStatus());
+        String executionComment = blankToNull(request.executionComment());
+        String executionNote = blankToNull(request.executionNote());
 
-        entity.setExecutionStatus(normalizeExecutionStatus(request.executionStatus()));
-        entity.setExecutionComment(blankToNull(request.executionComment()));
-        entity.setExecutionNote(blankToNull(request.executionNote()));
-        entity.setExecutorId(CurrentUserContext.require().userId());
-        entity.setExecutedAt(LocalDateTime.now());
-        entity.setUpdatedAt(LocalDateTime.now());
-        entity.setUpdatedBy(CurrentUserContext.get());
+        entity.setExecutionStatus(normalizedStatus);
+        entity.setExecutionComment(executionComment);
+        entity.setExecutionNote(executionNote);
+        entity.setExecutorId(currentUser.userId());
+        entity.setExecutedAt(now);
+        entity.setUpdatedAt(now);
+        entity.setUpdatedBy(currentUser.userId());
         caseMapper.updateById(entity);
+
+        CaseExecutionHistoryEntity history = new CaseExecutionHistoryEntity();
+        history.setWorkspaceId(entity.getWorkspaceId());
+        history.setCaseId(entity.getId());
+        history.setExecutionStatus(normalizedStatus);
+        history.setExecutionComment(executionComment);
+        history.setExecutionNote(executionNote);
+        history.setExecutorId(currentUser.userId());
+        history.setExecutorName(currentUser.displayName());
+        history.setExecutedAt(now);
+        history.setCreatedAt(now);
+        history.setUpdatedAt(now);
+        caseExecutionHistoryMapper.insert(history);
+
         return toCaseDetail(entity);
+    }
+
+    public PageResponse<CaseExecutionHistoryResponse> listCaseExecutions(Long id, String workspaceCode) {
+        CaseEntity entity = requireCase(id);
+        validateReadable(entity, workspaceCode);
+        List<CaseExecutionHistoryResponse> items = caseExecutionHistoryMapper.selectList(new LambdaQueryWrapper<CaseExecutionHistoryEntity>()
+                        .eq(CaseExecutionHistoryEntity::getCaseId, id)
+                        .orderByDesc(CaseExecutionHistoryEntity::getExecutedAt)
+                        .orderByDesc(CaseExecutionHistoryEntity::getId))
+                .stream()
+                .map(this::toCaseExecutionHistory)
+                .toList();
+        return PageResponse.of(items, items.size(), 1, items.isEmpty() ? 1 : items.size());
     }
 
     public List<CaseExecutionAttachmentResponse> uploadExecutionAttachments(Long caseId, String workspaceCode, List<MultipartFile> files) {
@@ -277,6 +314,19 @@ public class CaseService {
             return null;
         }
         return value.trim();
+    }
+
+    private CaseExecutionHistoryResponse toCaseExecutionHistory(CaseExecutionHistoryEntity item) {
+        return new CaseExecutionHistoryResponse(
+                item.getId(),
+                item.getCaseId(),
+                defaultExecutionStatus(item.getExecutionStatus()),
+                item.getExecutionComment(),
+                item.getExecutionNote(),
+                item.getExecutorId(),
+                blankToNull(item.getExecutorName()) == null ? "-" : item.getExecutorName(),
+                item.getExecutedAt() == null ? null : item.getExecutedAt().toString()
+        );
     }
 
 

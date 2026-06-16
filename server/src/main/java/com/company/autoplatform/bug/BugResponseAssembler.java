@@ -21,6 +21,7 @@ public class BugResponseAssembler {
     private final BugFlowMapper bugFlowMapper;
     private final BugCommentMapper bugCommentMapper;
     private final BugAttachmentMapper bugAttachmentMapper;
+    private final BugCaseRelationMapper bugCaseRelationMapper;
     private final UserService userService;
     private final WorkspaceService workspaceService;
 
@@ -30,6 +31,7 @@ public class BugResponseAssembler {
             BugFlowMapper bugFlowMapper,
             BugCommentMapper bugCommentMapper,
             BugAttachmentMapper bugAttachmentMapper,
+            BugCaseRelationMapper bugCaseRelationMapper,
             UserService userService,
             WorkspaceService workspaceService
     ) {
@@ -38,6 +40,7 @@ public class BugResponseAssembler {
         this.bugFlowMapper = bugFlowMapper;
         this.bugCommentMapper = bugCommentMapper;
         this.bugAttachmentMapper = bugAttachmentMapper;
+        this.bugCaseRelationMapper = bugCaseRelationMapper;
         this.userService = userService;
         this.workspaceService = workspaceService;
     }
@@ -47,6 +50,8 @@ public class BugResponseAssembler {
         UserEntity assignee = entity.getAssigneeId() == null ? null : userService.requireUser(entity.getAssigneeId());
         UserEntity reporter = userService.requireUser(entity.getReporterId());
         String updatedByName = resolveUpdatedByName(entity, reporter);
+        List<BugCaseSummaryResponse> relatedCases = listRelatedCaseSummaries(entity, workspace.getWorkspaceCode());
+        Long primaryCaseId = resolvePrimaryCaseId(entity, relatedCases);
         return new BugSummaryResponse(
                 entity.getId(),
                 entity.getBugNo(),
@@ -60,8 +65,8 @@ public class BugResponseAssembler {
                 entity.getCreatedAt(),
                 updatedByName,
                 entity.getUpdatedAt(),
-                entity.getRelatedCaseId(),
-                entity.getRelatedCaseId() == null ? 0 : 1,
+                primaryCaseId,
+                relatedCases.size(),
                 workspace.getWorkspaceCode(),
                 workspace.getWorkspaceName()
         );
@@ -75,6 +80,8 @@ public class BugResponseAssembler {
         List<BugAttachmentEntity> attachmentEntities = listAttachmentEntities(entity.getId());
         List<BugCommentEntity> commentEntities = listCommentEntities(entity.getId());
         List<BugFlowEntity> flowEntities = listFlowEntities(entity.getId());
+        List<BugCaseSummaryResponse> relatedCases = listRelatedCaseSummaries(entity, workspace.getWorkspaceCode());
+        Long primaryCaseId = resolvePrimaryCaseId(entity, relatedCases);
         return new BugDetailResponse(
                 entity.getId(),
                 entity.getBugNo(),
@@ -88,7 +95,8 @@ public class BugResponseAssembler {
                 assignee == null ? "-" : assignee.getDisplayName(),
                 entity.getReporterId(),
                 reporter.getDisplayName(),
-                entity.getRelatedCaseId(),
+                primaryCaseId,
+                relatedCases,
                 entity.getRelatedReportId(),
                 entity.getRelatedTaskId(),
                 JsonUtils.toStringList(entity.getTagsJson()),
@@ -132,6 +140,31 @@ public class BugResponseAssembler {
         return bugAttachmentMapper.selectList(new LambdaQueryWrapper<BugAttachmentEntity>()
                 .eq(BugAttachmentEntity::getBugId, bugId)
                 .orderByAsc(BugAttachmentEntity::getId));
+    }
+
+    private List<BugCaseSummaryResponse> listRelatedCaseSummaries(BugEntity entity, String workspaceCode) {
+        List<Long> caseIds = bugCaseRelationMapper.selectList(new LambdaQueryWrapper<BugCaseRelationEntity>()
+                        .eq(BugCaseRelationEntity::getBugId, entity.getId())
+                        .orderByAsc(BugCaseRelationEntity::getId))
+                .stream()
+                .map(BugCaseRelationEntity::getCaseId)
+                .toList();
+        List<Long> normalizedCaseIds = new ArrayList<>(caseIds);
+        if (entity.getRelatedCaseId() != null && !normalizedCaseIds.contains(entity.getRelatedCaseId())) {
+            normalizedCaseIds.addFirst(entity.getRelatedCaseId());
+        }
+
+        return normalizedCaseIds.stream()
+                .map(caseId -> bugSourceContextSupport.safeCaseSummary(caseId, workspaceCode))
+                .filter(item -> item != null)
+                .toList();
+    }
+
+    private Long resolvePrimaryCaseId(BugEntity entity, List<BugCaseSummaryResponse> relatedCases) {
+        if (!relatedCases.isEmpty()) {
+            return relatedCases.getFirst().id();
+        }
+        return entity.getRelatedCaseId();
     }
 
     private String resolveUpdatedByName(BugEntity entity, UserEntity reporter) {

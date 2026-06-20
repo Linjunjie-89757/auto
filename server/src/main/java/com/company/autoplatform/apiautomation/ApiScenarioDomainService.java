@@ -41,6 +41,9 @@ public class ApiScenarioDomainService {
     private static final String SCENARIO_STEP_SCRIPT = "SCRIPT";
     private static final int MAX_SCENARIO_LOOP_COUNT = 50;
     private static final int MAX_SCENARIO_WAIT_MS = 60000;
+    private static final int DEFAULT_SCENARIO_GLOBAL_TIMEOUT_MS = 300000;
+    private static final int MAX_SCENARIO_GLOBAL_TIMEOUT_MS = 3600000;
+    private static final int MAX_SCENARIO_STEP_RETRY_COUNT = 5;
 
     private final ApiScenarioMapper scenarioMapper;
     private final ApiScenarioModuleMapper scenarioModuleMapper;
@@ -267,6 +270,9 @@ public class ApiScenarioDomainService {
         entity.setDefaultEnvId(request.defaultEnvironmentId());
         entity.setVariableSetId(request.variableSetId());
         entity.setContinueOnFailure(Boolean.TRUE.equals(request.continueOnFailure()));
+        entity.setGlobalTimeoutMs(normalizeScenarioGlobalTimeoutMs(request.globalTimeoutMs()));
+        entity.setStepFailureRetryCount(normalizeScenarioStepFailureRetryCount(request.stepFailureRetryCount()));
+        entity.setDefaultStepWaitMs(normalizeScenarioDefaultStepWaitMs(request.defaultStepWaitMs()));
         entity.setRelatedCaseId(request.relatedCaseId());
     }
 
@@ -290,6 +296,9 @@ public class ApiScenarioDomainService {
                 entity.getDefaultEnvId(),
                 entity.getVariableSetId(),
                 Boolean.TRUE.equals(entity.getContinueOnFailure()),
+                normalizeScenarioGlobalTimeoutMs(entity.getGlobalTimeoutMs()),
+                normalizeScenarioStepFailureRetryCount(entity.getStepFailureRetryCount()),
+                normalizeScenarioDefaultStepWaitMs(entity.getDefaultStepWaitMs()),
                 entity.getLastRunResult(),
                 entity.getLastRunAt(),
                 entity.getUpdatedAt()
@@ -314,6 +323,9 @@ public class ApiScenarioDomainService {
                 entity.getDefaultEnvId(),
                 entity.getVariableSetId(),
                 Boolean.TRUE.equals(entity.getContinueOnFailure()),
+                normalizeScenarioGlobalTimeoutMs(entity.getGlobalTimeoutMs()),
+                normalizeScenarioStepFailureRetryCount(entity.getStepFailureRetryCount()),
+                normalizeScenarioDefaultStepWaitMs(entity.getDefaultStepWaitMs()),
                 entity.getRelatedCaseId(),
                 readVariables(entity.getScenarioVariablesJson()),
                 readScenarioAssertions(entity.getScenarioAssertionsJson()),
@@ -671,6 +683,27 @@ public class ApiScenarioDomainService {
             return 1000;
         }
         return Math.max(1, Math.min(MAX_SCENARIO_WAIT_MS, delayMs));
+    }
+
+    private Integer normalizeScenarioGlobalTimeoutMs(Integer timeoutMs) {
+        if (timeoutMs == null || timeoutMs <= 0) {
+            return DEFAULT_SCENARIO_GLOBAL_TIMEOUT_MS;
+        }
+        return Math.max(1000, Math.min(MAX_SCENARIO_GLOBAL_TIMEOUT_MS, timeoutMs));
+    }
+
+    private Integer normalizeScenarioStepFailureRetryCount(Integer retryCount) {
+        if (retryCount == null || retryCount < 0) {
+            return 0;
+        }
+        return Math.min(MAX_SCENARIO_STEP_RETRY_COUNT, retryCount);
+    }
+
+    private Integer normalizeScenarioDefaultStepWaitMs(Integer waitMs) {
+        if (waitMs == null || waitMs < 0) {
+            return 0;
+        }
+        return Math.min(MAX_SCENARIO_WAIT_MS, waitMs);
     }
 
     private Integer normalizeScenarioLoopCount(Integer loopCount) {

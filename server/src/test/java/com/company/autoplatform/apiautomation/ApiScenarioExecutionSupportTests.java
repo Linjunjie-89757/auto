@@ -34,7 +34,7 @@ class ApiScenarioExecutionSupportTests {
                 1L,
                 0,
                 new HashSet<>(),
-                false,
+                ApiScenarioExecutionSupport.ScenarioExecutionPolicy.of(false, 300000, 0, 0),
                 new FakeDelegate()
         );
 
@@ -61,7 +61,7 @@ class ApiScenarioExecutionSupportTests {
                 1L,
                 0,
                 new HashSet<>(),
-                false,
+                ApiScenarioExecutionSupport.ScenarioExecutionPolicy.of(false, 300000, 0, 0),
                 delegate
         );
         assertThat(matched).hasSize(2);
@@ -79,7 +79,7 @@ class ApiScenarioExecutionSupportTests {
                 1L,
                 0,
                 new HashSet<>(),
-                false,
+                ApiScenarioExecutionSupport.ScenarioExecutionPolicy.of(false, 300000, 0, 0),
                 delegate
         );
         assertThat(skipped).hasSize(1);
@@ -102,7 +102,7 @@ class ApiScenarioExecutionSupportTests {
                 1L,
                 0,
                 new HashSet<>(),
-                false,
+                ApiScenarioExecutionSupport.ScenarioExecutionPolicy.of(false, 300000, 0, 0),
                 delegate
         );
 
@@ -125,13 +125,85 @@ class ApiScenarioExecutionSupportTests {
                 1L,
                 3,
                 new HashSet<>(),
-                false,
+                ApiScenarioExecutionSupport.ScenarioExecutionPolicy.of(false, 300000, 0, 0),
                 delegate
         );
 
         assertThat(results).hasSize(1);
         assertThat(results.getFirst().success()).isFalse();
         assertThat(results.getFirst().response().errorMessage()).contains("Scenario nesting depth exceeds 3");
+    }
+
+    @Test
+    void retriesFailedStepBeforeContinuing() {
+        FakeDelegate delegate = new FakeDelegate();
+        delegate.definitionFailuresBeforeSuccess = 1;
+
+        List<ApiExecutionRuntimeModels.RunStepComputation> results = scenarioSupport.executeScenarioSteps(
+                List.of(apiStep(10L)),
+                new int[]{1},
+                new HashMap<>(),
+                null,
+                "APP",
+                1L,
+                1L,
+                0,
+                new HashSet<>(),
+                ApiScenarioExecutionSupport.ScenarioExecutionPolicy.of(false, 300000, 2, 0),
+                delegate
+        );
+
+        assertThat(results).hasSize(1);
+        assertThat(results.getFirst().success()).isTrue();
+        assertThat(delegate.executedDefinitions).isEqualTo(2);
+        assertThat(results.getFirst().response().processorResults()).anyMatch(log -> log.message().contains("Retry 1/2"));
+    }
+
+    @Test
+    void stopsWhenGlobalTimeoutIsExceededBeforeNextStep() {
+        FakeDelegate delegate = new FakeDelegate();
+        delegate.nextDurationMs = 1200L;
+
+        List<ApiExecutionRuntimeModels.RunStepComputation> results = scenarioSupport.executeScenarioSteps(
+                List.of(apiStep(10L), apiStep(20L)),
+                new int[]{1},
+                new HashMap<>(),
+                null,
+                "APP",
+                1L,
+                1L,
+                0,
+                new HashSet<>(),
+                ApiScenarioExecutionSupport.ScenarioExecutionPolicy.of(true, 1000, 0, 0),
+                delegate
+        );
+
+        assertThat(results).hasSize(2);
+        assertThat(delegate.executedDefinitions).isEqualTo(1);
+        assertThat(results.get(1).success()).isFalse();
+        assertThat(results.get(1).response().errorMessage()).contains("场景执行超过全局超时时间");
+    }
+
+    @Test
+    void defaultStepWaitAppliesBetweenExecutableSteps() {
+        FakeDelegate delegate = new FakeDelegate();
+
+        List<ApiExecutionRuntimeModels.RunStepComputation> results = scenarioSupport.executeScenarioSteps(
+                List.of(apiStep(10L), apiStep(20L)),
+                new int[]{1},
+                new HashMap<>(),
+                null,
+                "APP",
+                1L,
+                1L,
+                0,
+                new HashSet<>(),
+                ApiScenarioExecutionSupport.ScenarioExecutionPolicy.of(false, 300000, 0, 1),
+                delegate
+        );
+
+        assertThat(results).hasSize(2);
+        assertThat(results.getFirst().response().processorResults()).anyMatch(log -> log.message().contains("Default wait 1 ms"));
     }
 
     private ApiScenarioStepInput apiStep(Long resourceId) {
@@ -161,6 +233,8 @@ class ApiScenarioExecutionSupportTests {
 
     private static class FakeDelegate implements ApiScenarioExecutionSupport.ScenarioExecutionDelegate {
         int executedDefinitions;
+        int definitionFailuresBeforeSuccess;
+        long nextDurationMs;
 
         @Override
         public String normalizeScenarioStepType(ApiScenarioStepInput step) {
@@ -221,6 +295,10 @@ class ApiScenarioExecutionSupportTests {
                 ApiExecutionRuntimeModels.ResolvedEnvironment environment
         ) {
             executedDefinitions++;
+            if (definitionFailuresBeforeSuccess > 0) {
+                definitionFailuresBeforeSuccess--;
+                return failedStep(stepOrder, stepName, "Mock failure");
+            }
             return successfulStep(stepOrder, stepName);
         }
 
@@ -247,6 +325,8 @@ class ApiScenarioExecutionSupportTests {
         }
 
         private ApiExecutionRuntimeModels.RunStepComputation successfulStep(int stepOrder, String stepName) {
+            long durationMs = nextDurationMs;
+            nextDurationMs = 0L;
             return new ApiExecutionRuntimeModels.RunStepComputation(true, new ApiRunStepResultResponse(
                     null,
                     null,
@@ -254,13 +334,32 @@ class ApiScenarioExecutionSupportTests {
                     stepName,
                     null,
                     true,
+                    durationMs,
+                    null,
+                    null,
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    null,
+                    java.time.LocalDateTime.now()
+            ));
+        }
+
+        private ApiExecutionRuntimeModels.RunStepComputation failedStep(int stepOrder, String stepName, String message) {
+            return new ApiExecutionRuntimeModels.RunStepComputation(false, new ApiRunStepResultResponse(
+                    null,
+                    null,
+                    stepOrder,
+                    stepName,
+                    null,
+                    false,
                     0L,
                     null,
                     null,
                     List.of(),
                     List.of(),
                     List.of(),
-                    null,
+                    message,
                     java.time.LocalDateTime.now()
             ));
         }

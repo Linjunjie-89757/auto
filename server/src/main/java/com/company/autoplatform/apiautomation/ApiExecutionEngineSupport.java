@@ -318,7 +318,7 @@ public class ApiExecutionEngineSupport {
             Long rootScenarioId,
             int nestingDepth,
             Set<String> onceOnlyKeys,
-            boolean continueOnFailure
+            ApiScenarioExecutionSupport.ScenarioExecutionPolicy policy
     ) {
         return scenarioExecutionSupport.executeScenarioSteps(
                 steps,
@@ -330,7 +330,7 @@ public class ApiExecutionEngineSupport {
                 rootScenarioId,
                 nestingDepth,
                 onceOnlyKeys,
-                continueOnFailure,
+                policy,
                 new ApiScenarioExecutionSupport.ScenarioExecutionDelegate() {
                     @Override
                     public String normalizeScenarioStepType(ApiScenarioStepInput step) {

@@ -52,6 +52,15 @@ public class ApiScenarioEntity extends BaseEntity {
     @TableField("continue_on_failure")
     private Boolean continueOnFailure;
 
+    @TableField("global_timeout_ms")
+    private Integer globalTimeoutMs;
+
+    @TableField("step_failure_retry_count")
+    private Integer stepFailureRetryCount;
+
+    @TableField("default_step_wait_ms")
+    private Integer defaultStepWaitMs;
+
     @TableField("related_case_id")
     private Long relatedCaseId;
 

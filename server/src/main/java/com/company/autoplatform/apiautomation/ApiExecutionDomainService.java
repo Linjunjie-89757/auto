@@ -236,6 +236,12 @@ public class ApiExecutionDomainService {
         String failureSummary = null;
         int[] stepOrder = {1};
         Set<String> onceOnlyKeys = new java.util.HashSet<>();
+        ApiScenarioExecutionSupport.ScenarioExecutionPolicy policy = ApiScenarioExecutionSupport.ScenarioExecutionPolicy.of(
+                Boolean.TRUE.equals(scenario.getContinueOnFailure()),
+                scenario.getGlobalTimeoutMs(),
+                scenario.getStepFailureRetryCount(),
+                scenario.getDefaultStepWaitMs()
+        );
         for (ApiExecutionRuntimeModels.RunStepComputation computation : executionEngine.executeScenarioSteps(
                 steps,
                 stepOrder,
@@ -246,14 +252,14 @@ public class ApiExecutionDomainService {
                 scenario.getId(),
                 0,
                 onceOnlyKeys,
-                Boolean.TRUE.equals(scenario.getContinueOnFailure())
+                policy
         )) {
             executionEngine.persistStep(envelope.report(), scenario.getWorkspaceId(), computation);
             responses.add(computation.response());
             if (!computation.success()) {
                 success = false;
                 failureSummary = blankToFallback(computation.response().errorMessage(), computation.response().stepName() + " failed");
-                if (!Boolean.TRUE.equals(scenario.getContinueOnFailure())) {
+                if (!policy.continueOnFailure()) {
                     break;
                 }
             }
@@ -302,4 +308,3 @@ public class ApiExecutionDomainService {
         );
     }
 }
-

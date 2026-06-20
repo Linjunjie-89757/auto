@@ -36,6 +36,7 @@ class AiGenerationTaskExecutionServiceTests extends IntegrationTestSupport {
         String model = unique + "-model";
         AiProviderConnectionItem provider = aiCaseService.createProvider(WORKSPACE_CODE, new SaveAiProviderConnectionRequest(
                 WORKSPACE_CODE,
+                null,
                 unique + "-provider",
                 AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_CHAT,
                 "https://ai.example.test/v1",
@@ -251,6 +252,7 @@ class AiGenerationTaskExecutionServiceTests extends IntegrationTestSupport {
         String model = unique + "-model";
         AiProviderConnectionItem provider = aiCaseService.createProvider(WORKSPACE_CODE, new SaveAiProviderConnectionRequest(
                 WORKSPACE_CODE,
+                null,
                 unique + "-provider",
                 AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_CHAT,
                 "https://ai.example.test/v1",
@@ -454,6 +456,7 @@ class AiGenerationTaskExecutionServiceTests extends IntegrationTestSupport {
     private AiProviderConnectionItem createProvider(String unique, String model) {
         return aiCaseService.createProvider(WORKSPACE_CODE, new SaveAiProviderConnectionRequest(
                 WORKSPACE_CODE,
+                null,
                 unique + "-provider",
                 AiProviderClient.PROTOCOL_OPENAI_COMPATIBLE_CHAT,
                 "https://ai.example.test/v1",

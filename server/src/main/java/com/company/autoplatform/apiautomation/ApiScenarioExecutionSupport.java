@@ -34,6 +34,9 @@ public class ApiScenarioExecutionSupport {
     private static final int MAX_SCENARIO_NESTING_DEPTH = 3;
     private static final int MAX_SCENARIO_LOOP_COUNT = 50;
     private static final int MAX_SCENARIO_WAIT_MS = 60000;
+    private static final int DEFAULT_GLOBAL_TIMEOUT_MS = 300000;
+    private static final int MAX_GLOBAL_TIMEOUT_MS = 3600000;
+    private static final int MAX_STEP_RETRY_COUNT = 5;
 
     private final ApiAutomationScriptRunner scriptRunner;
     private final ApiVariableResolver variableResolver;
@@ -62,28 +65,41 @@ public class ApiScenarioExecutionSupport {
             Long rootScenarioId,
             int nestingDepth,
             Set<String> onceOnlyKeys,
-            boolean continueOnFailure,
+            ScenarioExecutionPolicy policy,
             ScenarioExecutionDelegate delegate
     ) {
         List<ApiExecutionRuntimeModels.RunStepComputation> results = new ArrayList<>();
+        ScenarioExecutionPolicy effectivePolicy = policy == null
+                ? ScenarioExecutionPolicy.of(false, DEFAULT_GLOBAL_TIMEOUT_MS, 0, 0)
+                : policy.normalized();
+        long startedAt = System.currentTimeMillis();
         for (ApiScenarioStepInput step : defaultList(steps)) {
             if (step == null || Boolean.FALSE.equals(step.enabled())) {
                 continue;
+            }
+            if (isScenarioTimedOut(startedAt, results, effectivePolicy)) {
+                results.add(timeoutScenarioStep(stepOrder[0]++, effectivePolicy));
+                break;
+            }
+            applyDefaultStepWaitIfNeeded(results, effectivePolicy);
+            if (isScenarioTimedOut(startedAt, results, effectivePolicy)) {
+                results.add(timeoutScenarioStep(stepOrder[0]++, effectivePolicy));
+                break;
             }
             String stepType = delegate.normalizeScenarioStepType(step);
             int resultStart = results.size();
             try {
                 switch (stepType) {
                     case SCENARIO_STEP_API, SCENARIO_STEP_API_CASE, SCENARIO_STEP_CUSTOM_REQUEST ->
-                            results.add(executeScenarioStep(step, stepOrder[0]++, variables, environment, workspaceCode, workspaceId, delegate));
+                            results.add(executeScenarioStepWithRetry(step, stepOrder[0]++, variables, environment, workspaceCode, workspaceId, effectivePolicy, delegate));
                     case SCENARIO_STEP_API_SCENARIO -> results.addAll(executeReferencedScenarioStep(
-                            step, stepOrder, variables, environment, workspaceCode, workspaceId, rootScenarioId, nestingDepth, onceOnlyKeys, continueOnFailure, delegate));
+                            step, stepOrder, variables, environment, workspaceCode, workspaceId, rootScenarioId, nestingDepth, onceOnlyKeys, effectivePolicy, delegate));
                     case SCENARIO_STEP_IF_CONTROLLER -> results.addAll(executeIfControllerStep(
-                            step, stepOrder, variables, environment, workspaceCode, workspaceId, rootScenarioId, nestingDepth, onceOnlyKeys, continueOnFailure, delegate));
+                            step, stepOrder, variables, environment, workspaceCode, workspaceId, rootScenarioId, nestingDepth, onceOnlyKeys, effectivePolicy, delegate));
                     case SCENARIO_STEP_LOOP_CONTROLLER -> results.addAll(executeLoopControllerStep(
-                            step, stepOrder, variables, environment, workspaceCode, workspaceId, rootScenarioId, nestingDepth, onceOnlyKeys, continueOnFailure, delegate));
+                            step, stepOrder, variables, environment, workspaceCode, workspaceId, rootScenarioId, nestingDepth, onceOnlyKeys, effectivePolicy, delegate));
                     case SCENARIO_STEP_ONCE_ONLY_CONTROLLER -> results.addAll(executeOnceOnlyControllerStep(
-                            step, stepOrder, variables, environment, workspaceCode, workspaceId, rootScenarioId, nestingDepth, onceOnlyKeys, continueOnFailure, delegate));
+                            step, stepOrder, variables, environment, workspaceCode, workspaceId, rootScenarioId, nestingDepth, onceOnlyKeys, effectivePolicy, delegate));
                     case SCENARIO_STEP_CONSTANT_TIMER -> results.add(executeConstantTimerStep(step, stepOrder[0]++));
                     case SCENARIO_STEP_SCRIPT -> results.add(executeScriptScenarioStep(step, stepOrder[0]++, variables));
                     default -> results.add(syntheticScenarioStep(
@@ -105,11 +121,96 @@ public class ApiScenarioExecutionSupport {
                         List.of()
                 ));
             }
-            if (!continueOnFailure && results.subList(resultStart, results.size()).stream().anyMatch(result -> !result.success())) {
+            if (!effectivePolicy.continueOnFailure() && results.subList(resultStart, results.size()).stream().anyMatch(result -> !result.success())) {
                 break;
             }
         }
         return results;
+    }
+
+    private boolean isScenarioTimedOut(
+            long startedAt,
+            List<ApiExecutionRuntimeModels.RunStepComputation> results,
+            ScenarioExecutionPolicy policy
+    ) {
+        return policy.globalTimeoutMs() > 0 && scenarioElapsedMs(startedAt, results) >= policy.globalTimeoutMs();
+    }
+
+    private long scenarioElapsedMs(long startedAt, List<ApiExecutionRuntimeModels.RunStepComputation> results) {
+        long wallClockElapsedMs = System.currentTimeMillis() - startedAt;
+        long reportedStepElapsedMs = defaultList(results).stream()
+                .map(ApiExecutionRuntimeModels.RunStepComputation::response)
+                .filter(Objects::nonNull)
+                .map(ApiRunStepResultResponse::durationMs)
+                .filter(Objects::nonNull)
+                .mapToLong(Long::longValue)
+                .sum();
+        return Math.max(wallClockElapsedMs, reportedStepElapsedMs);
+    }
+
+    private ApiExecutionRuntimeModels.RunStepComputation timeoutScenarioStep(int stepOrder, ScenarioExecutionPolicy policy) {
+        return syntheticScenarioStep(
+                stepOrder,
+                "场景全局超时",
+                false,
+                0L,
+                "场景执行超过全局超时时间 " + policy.globalTimeoutMs() + " ms",
+                List.of()
+        );
+    }
+
+    private void applyDefaultStepWaitIfNeeded(List<ApiExecutionRuntimeModels.RunStepComputation> results, ScenarioExecutionPolicy policy) {
+        if (policy.defaultStepWaitMs() <= 0 || results.isEmpty()) {
+            return;
+        }
+        long started = System.currentTimeMillis();
+        sleep(policy.defaultStepWaitMs());
+        ApiExecutionRuntimeModels.RunStepComputation previous = results.getLast();
+        List<ApiProcessorResult> processorResults = new ArrayList<>(defaultList(previous.response().processorResults()));
+        processorResults.add(new ApiProcessorResult(
+                "SCENARIO",
+                "DEFAULT_WAIT",
+                "步骤间默认等待",
+                true,
+                System.currentTimeMillis() - started,
+                "Default wait " + policy.defaultStepWaitMs() + " ms",
+                List.of(),
+                Map.of()
+        ));
+        results.set(results.size() - 1, copyWithProcessorResults(previous, processorResults));
+    }
+
+    private ApiExecutionRuntimeModels.RunStepComputation executeScenarioStepWithRetry(
+            ApiScenarioStepInput step,
+            int stepOrder,
+            Map<String, String> variables,
+            ApiExecutionRuntimeModels.ResolvedEnvironment environment,
+            String workspaceCode,
+            Long workspaceId,
+            ScenarioExecutionPolicy policy,
+            ScenarioExecutionDelegate delegate
+    ) {
+        ApiExecutionRuntimeModels.RunStepComputation result = executeScenarioStep(step, stepOrder, variables, environment, workspaceCode, workspaceId, delegate);
+        List<ApiProcessorResult> retryLogs = new ArrayList<>();
+        for (int attempt = 1; !result.success() && attempt <= policy.stepFailureRetryCount(); attempt++) {
+            retryLogs.add(new ApiProcessorResult(
+                    "SCENARIO",
+                    "RETRY",
+                    "失败重试",
+                    true,
+                    0L,
+                    "Retry " + attempt + "/" + policy.stepFailureRetryCount(),
+                    List.of(blankToFallback(result.response().errorMessage(), "Step failed")),
+                    Map.of()
+            ));
+            result = executeScenarioStep(step, stepOrder, variables, environment, workspaceCode, workspaceId, delegate);
+        }
+        if (!retryLogs.isEmpty()) {
+            List<ApiProcessorResult> processorResults = new ArrayList<>(retryLogs);
+            processorResults.addAll(defaultList(result.response().processorResults()));
+            result = copyWithProcessorResults(result, processorResults);
+        }
+        return result;
     }
 
     private ApiExecutionRuntimeModels.RunStepComputation executeScenarioStep(
@@ -159,7 +260,7 @@ public class ApiScenarioExecutionSupport {
             Long rootScenarioId,
             int nestingDepth,
             Set<String> onceOnlyKeys,
-            boolean continueOnFailure,
+            ScenarioExecutionPolicy policy,
             ScenarioExecutionDelegate delegate
     ) {
         if (nestingDepth >= MAX_SCENARIO_NESTING_DEPTH) {
@@ -181,7 +282,7 @@ public class ApiScenarioExecutionSupport {
         List<ApiExecutionRuntimeModels.RunStepComputation> results = new ArrayList<>();
         results.add(syntheticScenarioStep(stepOrder[0]++, blankToFallback(step.stepName(), scenario.getScenarioName()), true, 0L, null, List.of()));
         results.addAll(executeScenarioSteps(childSteps, stepOrder, variables, environment, workspaceCode, workspaceId,
-                rootScenarioId, nestingDepth + 1, onceOnlyKeys, continueOnFailure, delegate));
+                rootScenarioId, nestingDepth + 1, onceOnlyKeys, policy, delegate));
         return results;
     }
 
@@ -195,7 +296,7 @@ public class ApiScenarioExecutionSupport {
             Long rootScenarioId,
             int nestingDepth,
             Set<String> onceOnlyKeys,
-            boolean continueOnFailure,
+            ScenarioExecutionPolicy policy,
             ScenarioExecutionDelegate delegate
     ) {
         boolean matched = evaluateScenarioCondition(step, variables);
@@ -204,7 +305,7 @@ public class ApiScenarioExecutionSupport {
                 matched ? "Condition matched" : "Condition not matched", List.of()));
         if (matched) {
             results.addAll(executeScenarioSteps(step.children(), stepOrder, variables, environment, workspaceCode, workspaceId,
-                    rootScenarioId, nestingDepth, onceOnlyKeys, continueOnFailure, delegate));
+                    rootScenarioId, nestingDepth, onceOnlyKeys, policy, delegate));
         }
         return results;
     }
@@ -219,7 +320,7 @@ public class ApiScenarioExecutionSupport {
             Long rootScenarioId,
             int nestingDepth,
             Set<String> onceOnlyKeys,
-            boolean continueOnFailure,
+            ScenarioExecutionPolicy policy,
             ScenarioExecutionDelegate delegate
     ) {
         List<ApiExecutionRuntimeModels.RunStepComputation> results = new ArrayList<>();
@@ -236,8 +337,8 @@ public class ApiScenarioExecutionSupport {
                 break;
             }
             results.addAll(executeScenarioSteps(step.children(), stepOrder, variables, environment, workspaceCode, workspaceId,
-                    rootScenarioId, nestingDepth, onceOnlyKeys, continueOnFailure, delegate));
-            if (!continueOnFailure && results.stream().anyMatch(result -> !result.success())) {
+                    rootScenarioId, nestingDepth, onceOnlyKeys, policy, delegate));
+            if (!policy.continueOnFailure() && results.stream().anyMatch(result -> !result.success())) {
                 break;
             }
         }
@@ -254,7 +355,7 @@ public class ApiScenarioExecutionSupport {
             Long rootScenarioId,
             int nestingDepth,
             Set<String> onceOnlyKeys,
-            boolean continueOnFailure,
+            ScenarioExecutionPolicy policy,
             ScenarioExecutionDelegate delegate
     ) {
         String key = blankToFallback(step.id(), blankToFallback(step.stepName(), "once-only-" + stepOrder[0]));
@@ -264,7 +365,7 @@ public class ApiScenarioExecutionSupport {
                 firstRun ? "Executed" : "Skipped", List.of()));
         if (firstRun) {
             results.addAll(executeScenarioSteps(step.children(), stepOrder, variables, environment, workspaceCode, workspaceId,
-                    rootScenarioId, nestingDepth, onceOnlyKeys, continueOnFailure, delegate));
+                    rootScenarioId, nestingDepth, onceOnlyKeys, policy, delegate));
         }
         return results;
     }
@@ -437,6 +538,29 @@ public class ApiScenarioExecutionSupport {
         ));
     }
 
+    private ApiExecutionRuntimeModels.RunStepComputation copyWithProcessorResults(
+            ApiExecutionRuntimeModels.RunStepComputation computation,
+            List<ApiProcessorResult> processorResults
+    ) {
+        ApiRunStepResultResponse response = computation.response();
+        return new ApiExecutionRuntimeModels.RunStepComputation(computation.success(), new ApiRunStepResultResponse(
+                response.id(),
+                response.reportId(),
+                response.stepOrder(),
+                response.stepName(),
+                response.definitionId(),
+                response.success(),
+                response.durationMs(),
+                response.request(),
+                response.response(),
+                response.assertionResults(),
+                response.extractionResults(),
+                defaultList(processorResults),
+                response.errorMessage(),
+                response.createdAt()
+        ));
+    }
+
     private void sleep(int delayMs) {
         try {
             Thread.sleep(delayMs);
@@ -448,6 +572,52 @@ public class ApiScenarioExecutionSupport {
 
     private String firstNonBlank(String first, String fallback) {
         return first == null || first.isBlank() ? fallback : first.trim();
+    }
+
+    public record ScenarioExecutionPolicy(
+            boolean continueOnFailure,
+            int globalTimeoutMs,
+            int stepFailureRetryCount,
+            int defaultStepWaitMs
+    ) {
+        public static ScenarioExecutionPolicy of(
+                boolean continueOnFailure,
+                Integer globalTimeoutMs,
+                Integer stepFailureRetryCount,
+                Integer defaultStepWaitMs
+        ) {
+            return new ScenarioExecutionPolicy(
+                    continueOnFailure,
+                    normalizeGlobalTimeoutMs(globalTimeoutMs),
+                    normalizeRetryCount(stepFailureRetryCount),
+                    normalizeDefaultStepWaitMs(defaultStepWaitMs)
+            );
+        }
+
+        ScenarioExecutionPolicy normalized() {
+            return of(continueOnFailure, globalTimeoutMs, stepFailureRetryCount, defaultStepWaitMs);
+        }
+
+        private static int normalizeGlobalTimeoutMs(Integer value) {
+            if (value == null || value <= 0) {
+                return DEFAULT_GLOBAL_TIMEOUT_MS;
+            }
+            return Math.max(1000, Math.min(MAX_GLOBAL_TIMEOUT_MS, value));
+        }
+
+        private static int normalizeRetryCount(Integer value) {
+            if (value == null || value < 0) {
+                return 0;
+            }
+            return Math.min(MAX_STEP_RETRY_COUNT, value);
+        }
+
+        private static int normalizeDefaultStepWaitMs(Integer value) {
+            if (value == null || value < 0) {
+                return 0;
+            }
+            return Math.min(MAX_SCENARIO_WAIT_MS, value);
+        }
     }
 
     interface ScenarioExecutionDelegate {

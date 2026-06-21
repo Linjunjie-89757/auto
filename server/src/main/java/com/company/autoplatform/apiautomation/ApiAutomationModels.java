@@ -415,6 +415,195 @@ public final class ApiAutomationModels {
     ) {
     }
 
+    public record ApiExecutionSuiteModuleRequest(
+            String workspaceCode,
+            Long parentId,
+            @NotBlank(message = "Module name cannot be blank") String name
+    ) {
+    }
+
+    public record MoveApiExecutionSuiteModuleRequest(
+            Long parentId,
+            Integer sortOrder
+    ) {
+    }
+
+    public record ApiExecutionSuiteModuleItem(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            Long parentId,
+            String name,
+            Integer sortOrder,
+            Long suiteCount,
+            List<ApiExecutionSuiteModuleItem> children
+    ) {
+    }
+
+    public record SaveApiExecutionSuiteRequest(
+            String workspaceCode,
+            Long moduleId,
+            @NotBlank(message = "Suite name cannot be blank") String name,
+            String priority,
+            String status,
+            String description,
+            Long environmentId,
+            Long variableSetId,
+            String runMode,
+            String runOn,
+            Boolean notifyEnabled,
+            Boolean continueOnFailure,
+            Integer globalTimeoutMs,
+            Integer stepFailureRetryCount,
+            Integer defaultStepWaitMs,
+            Boolean scheduleEnabled,
+            String cronExpression,
+            String branchName,
+            String triggerSource,
+            String branchNote
+    ) {
+    }
+
+    public record ApiExecutionSuiteItem(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            Long moduleId,
+            String moduleName,
+            String name,
+            String priority,
+            String status,
+            String description,
+            Long environmentId,
+            Long variableSetId,
+            String runMode,
+            String runOn,
+            Boolean notifyEnabled,
+            Boolean continueOnFailure,
+            Integer globalTimeoutMs,
+            Integer stepFailureRetryCount,
+            Integer defaultStepWaitMs,
+            Boolean scheduleEnabled,
+            String cronExpression,
+            String branchName,
+            String triggerSource,
+            String branchNote,
+            String lastRunResult,
+            LocalDateTime lastRunAt,
+            LocalDateTime updatedAt
+    ) {
+    }
+
+    public record ApiExecutionSuiteDetail(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            Long moduleId,
+            String moduleName,
+            String name,
+            String priority,
+            String status,
+            String description,
+            Long environmentId,
+            Long variableSetId,
+            String runMode,
+            String runOn,
+            Boolean notifyEnabled,
+            Boolean continueOnFailure,
+            Integer globalTimeoutMs,
+            Integer stepFailureRetryCount,
+            Integer defaultStepWaitMs,
+            Boolean scheduleEnabled,
+            String cronExpression,
+            String branchName,
+            String triggerSource,
+            String branchNote,
+            String lastRunResult,
+            LocalDateTime lastRunAt,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt
+    ) {
+    }
+
+    public record ApiExecutionSuiteItemRequest(
+            @NotBlank(message = "Item type cannot be blank") String itemType,
+            @NotNull(message = "Item id cannot be blank") Long itemId,
+            Boolean enabled,
+            String description
+    ) {
+    }
+
+    public record ApiExecutionSuiteItemOrderRequest(
+            List<ApiExecutionSuiteItemOrderInput> items
+    ) {
+    }
+
+    public record ApiExecutionSuiteItemOrderInput(
+            @NotNull(message = "Suite item id cannot be blank") Long id,
+            Integer sortOrder,
+            Boolean enabled
+    ) {
+    }
+
+    public record ApiExecutionSuiteItemDetail(
+            Long id,
+            Long suiteId,
+            String itemType,
+            Long itemId,
+            String itemName,
+            Integer sortOrder,
+            Boolean enabled,
+            String description,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt
+    ) {
+    }
+
+    public record ApiExecutionSuiteRunHistoryItem(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            Long suiteId,
+            String suiteName,
+            Long reportId,
+            String result,
+            String failureSummary,
+            Integer totalCount,
+            Integer successCount,
+            Integer failedCount,
+            Integer skippedCount,
+            Long durationMs,
+            Long environmentId,
+            Long variableSetId,
+            Long operatorId,
+            String operatorName,
+            LocalDateTime createdAt
+    ) {
+    }
+
+    public record ApiExecutionSuiteRunHistoryDetail(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            Long suiteId,
+            String suiteName,
+            Long reportId,
+            String result,
+            String failureSummary,
+            Integer totalCount,
+            Integer successCount,
+            Integer failedCount,
+            Integer skippedCount,
+            Long durationMs,
+            Long environmentId,
+            Long variableSetId,
+            Long operatorId,
+            String operatorName,
+            LocalDateTime createdAt,
+            List<ApiRunStepResultResponse> stepResults
+    ) {
+    }
+
     public record SaveApiScenarioRequest(
             String workspaceCode,
             @NotBlank(message = "Scenario name cannot be blank") String name,

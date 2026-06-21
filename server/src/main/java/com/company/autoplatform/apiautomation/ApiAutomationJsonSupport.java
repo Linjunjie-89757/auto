@@ -9,7 +9,7 @@ import java.util.List;
 
 final class ApiAutomationJsonSupport {
 
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper().findAndRegisterModules();
 
     private ApiAutomationJsonSupport() {
     }

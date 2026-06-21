@@ -331,6 +331,103 @@ class WebUiAutomationControllerIntegrationTests extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.data.screenshotBase64").isNotEmpty());
     }
 
+    @Test
+    void batchUpdateAndInspectElementQuality() throws Exception {
+        String unique = uniquePrefix("element-batch");
+        Long moduleId = createElementModule(unique + "-module");
+        Long pageId = createElementPage(moduleId, unique + "-page");
+        Long firstGroupId = createElementGroup(pageId, unique + "-search");
+        Long secondGroupId = createElementGroup(pageId, unique + "-result");
+        Long buttonId = createElement(pageId, firstGroupId, unique + "-submit", "CSS", ".el-button");
+        Long inputId = createElement(pageId, null, unique + "-keyword", "CSS", "#keyword");
+
+        mockMvc.perform(post("/api/automation/web/elements/batch/status")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "elementIds", List.of(buttonId, inputId),
+                                "status", "disabled"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.requestedCount").value(2))
+                .andExpect(jsonPath("$.data.updatedCount").value(2));
+
+        mockMvc.perform(post("/api/automation/web/elements/batch/move")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "elementIds", List.of(buttonId),
+                                "pageId", pageId,
+                                "groupId", secondGroupId
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.updatedCount").value(1));
+
+        mockMvc.perform(get("/api/automation/web/elements")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .param("keyword", unique)
+                        .param("status", "disabled")
+                        .param("pageNo", "1")
+                        .param("pageSize", "10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.items[?(@.id==" + buttonId + ")].groupName").value(hasItem(unique + "-result")));
+
+        mockMvc.perform(get("/api/automation/web/elements/quality-check")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .param("keyword", unique)
+                        .param("pageNo", "1")
+                        .param("pageSize", "50"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.totalElements").value(2))
+                .andExpect(jsonPath("$.data.issues[?(@.elementId==" + buttonId + ")].title").value(hasItem("定位器过宽")))
+                .andExpect(jsonPath("$.data.issues[?(@.elementId==" + inputId + ")].title").value(hasItem("未归入分组")));
+    }
+
+    @Test
+    void batchValidateElementsReturnsPerElementResultsAndUpdatesSnapshots() throws Exception {
+        when(locatorValidationRunner.validate(any()))
+                .thenReturn(new WebUiLocatorValidationRunner.LocatorValidationResult(true, 1, null, "ok-png".getBytes()))
+                .thenReturn(new WebUiLocatorValidationRunner.LocatorValidationResult(false, 0, "not found", "fail-png".getBytes()));
+
+        String unique = uniquePrefix("element-validate");
+        Long moduleId = createElementModule(unique + "-module");
+        Long pageId = createElementPage(moduleId, unique + "-page");
+        Long groupId = createElementGroup(pageId, unique + "-form");
+        Long usernameId = createElement(pageId, groupId, unique + "-username", "CSS", "#username");
+        Long passwordId = createElement(pageId, groupId, unique + "-password", "CSS", "#password");
+
+        mockMvc.perform(post("/api/automation/web/elements/batch/validate")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "elementIds", List.of(usernameId, passwordId),
+                                "baseUrl", "https://example.com/login",
+                                "browserType", "chromium",
+                                "headless", true,
+                                "timeoutMs", 3000
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.totalCount").value(2))
+                .andExpect(jsonPath("$.data.passedCount").value(1))
+                .andExpect(jsonPath("$.data.failedCount").value(1))
+                .andExpect(jsonPath("$.data.results[?(@.elementId==" + usernameId + ")].matched").value(hasItem(true)))
+                .andExpect(jsonPath("$.data.results[?(@.elementId==" + passwordId + ")].errorMessage").value(hasItem("not found")));
+
+        mockMvc.perform(get("/api/automation/web/elements")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .param("keyword", unique)
+                        .param("pageNo", "1")
+                        .param("pageSize", "10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[?(@.id==" + usernameId + ")].lastValidateResult").value(hasItem("PASSED")))
+                .andExpect(jsonPath("$.data.items[?(@.id==" + passwordId + ")].lastValidateResult").value(hasItem("FAILED")));
+    }
+
     private Long createCase(String caseName, String moduleName, List<Map<String, Object>> steps) throws Exception {
         String response = mockMvc.perform(post("/api/automation/web/cases")
                         .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
@@ -339,6 +436,82 @@ class WebUiAutomationControllerIntegrationTests extends IntegrationTestSupport {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.caseName").value(caseName))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return objectMapper.readTree(response).at("/data/id").asLong();
+    }
+
+    private Long createElementModule(String moduleName) throws Exception {
+        String response = mockMvc.perform(post("/api/automation/web/elements/modules")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "workspaceCode", WORKSPACE_CODE,
+                                "moduleName", moduleName,
+                                "status", "enabled"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return objectMapper.readTree(response).at("/data/id").asLong();
+    }
+
+    private Long createElementPage(Long moduleId, String pageName) throws Exception {
+        String response = mockMvc.perform(post("/api/automation/web/elements/pages")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "workspaceCode", WORKSPACE_CODE,
+                                "moduleId", moduleId,
+                                "pageName", pageName,
+                                "status", "enabled"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return objectMapper.readTree(response).at("/data/id").asLong();
+    }
+
+    private Long createElementGroup(Long pageId, String groupName) throws Exception {
+        String response = mockMvc.perform(post("/api/automation/web/elements/groups")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "workspaceCode", WORKSPACE_CODE,
+                                "pageId", pageId,
+                                "groupName", groupName,
+                                "status", "enabled"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return objectMapper.readTree(response).at("/data/id").asLong();
+    }
+
+    private Long createElement(Long pageId, Long groupId, String elementName, String locatorType, String locatorValue) throws Exception {
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("workspaceCode", WORKSPACE_CODE);
+        request.put("pageId", pageId);
+        request.put("groupId", groupId);
+        request.put("pageName", elementName + "-page-snapshot");
+        request.put("elementName", elementName);
+        request.put("locatorType", locatorType);
+        request.put("locatorValue", locatorValue);
+        request.put("status", "enabled");
+
+        String response = mockMvc.perform(post("/api/automation/web/elements")
+                        .header(WorkspaceScope.HEADER, WORKSPACE_CODE)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();

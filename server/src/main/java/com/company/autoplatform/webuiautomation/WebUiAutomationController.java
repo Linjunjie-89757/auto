@@ -135,6 +135,218 @@ public class WebUiAutomationController {
         return ApiResponse.ok(null, "Web UI template deleted");
     }
 
+    @GetMapping("/elements")
+    public ApiResponse<PageResponse<WebUiElementItem>> listElements(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Long moduleId,
+            @RequestParam(required = false) Long pageId,
+            @RequestParam(required = false) Long groupId,
+            @RequestParam(required = false) String pageName,
+            @RequestParam(required = false) String groupName,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Integer pageNo,
+            @RequestParam(required = false) Integer pageSize
+    ) {
+        return ApiResponse.ok(webUiAutomationService.listElements(workspaceCode, keyword, moduleId, pageId, groupId, pageName, groupName, status, pageNo, pageSize));
+    }
+
+    @GetMapping("/elements/quality-check")
+    public ApiResponse<WebUiElementQualityCheckResult> checkElementQuality(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Long moduleId,
+            @RequestParam(required = false) Long pageId,
+            @RequestParam(required = false) Long groupId,
+            @RequestParam(required = false) String pageName,
+            @RequestParam(required = false) String groupName,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Integer pageNo,
+            @RequestParam(required = false) Integer pageSize
+    ) {
+        return ApiResponse.ok(webUiAutomationService.checkElementQuality(workspaceCode, keyword, moduleId, pageId, groupId, pageName, groupName, status, pageNo, pageSize));
+    }
+
+    @PostMapping("/elements/batch/status")
+    public ApiResponse<WebUiElementBatchResult> batchUpdateElementStatus(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody BatchUpdateWebUiElementStatusRequest request
+    ) {
+        return ApiResponse.ok(webUiAutomationService.batchUpdateElementStatus(workspaceCode, request), "Web UI elements status updated");
+    }
+
+    @PostMapping("/elements/batch/move")
+    public ApiResponse<WebUiElementBatchResult> batchMoveElements(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody BatchMoveWebUiElementRequest request
+    ) {
+        return ApiResponse.ok(webUiAutomationService.batchMoveElements(workspaceCode, request), "Web UI elements moved");
+    }
+
+    @PostMapping("/elements/batch/delete")
+    public ApiResponse<WebUiElementBatchResult> batchDeleteElements(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestBody BatchDeleteWebUiElementRequest request
+    ) {
+        return ApiResponse.ok(webUiAutomationService.batchDeleteElements(workspaceCode, request), "Web UI elements deleted");
+    }
+
+    @PostMapping("/elements/batch/validate")
+    public ApiResponse<WebUiElementBatchValidateResult> batchValidateElements(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody BatchValidateWebUiElementRequest request
+    ) {
+        return ApiResponse.ok(webUiAutomationService.batchValidateElements(workspaceCode, request), "Web UI elements validated");
+    }
+
+    @GetMapping("/elements/tree")
+    public ApiResponse<java.util.List<WebUiElementTreeNode>> getElementTree(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(webUiAutomationService.getElementTree(workspaceCode));
+    }
+
+    @GetMapping("/elements/pages")
+    public ApiResponse<PageResponse<WebUiElementPageItem>> listElementPages(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(webUiAutomationService.listElementPages(workspaceCode));
+    }
+
+    @GetMapping("/elements/modules")
+    public ApiResponse<PageResponse<WebUiElementModuleItem>> listElementModules(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(webUiAutomationService.listElementModules(workspaceCode));
+    }
+
+    @PostMapping("/elements/modules")
+    public ApiResponse<WebUiElementModuleItem> createElementModule(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody SaveWebUiElementModuleRequest request
+    ) {
+        return ApiResponse.ok(webUiAutomationService.createElementModule(workspaceCode, request), "Web UI element module created");
+    }
+
+    @PostMapping("/elements/pages")
+    public ApiResponse<WebUiElementPageItem> createElementPage(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody SaveWebUiElementPageRequest request
+    ) {
+        return ApiResponse.ok(webUiAutomationService.createElementPage(workspaceCode, request), "Web UI element page created");
+    }
+
+    @PutMapping("/elements/pages/{id}")
+    public ApiResponse<WebUiElementPageItem> updateElementPage(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody SaveWebUiElementPageRequest request
+    ) {
+        return ApiResponse.ok(webUiAutomationService.updateElementPage(id, workspaceCode, request), "Web UI element page updated");
+    }
+
+    @DeleteMapping("/elements/pages/{id}")
+    public ApiResponse<Void> deleteElementPage(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        webUiAutomationService.deleteElementPage(id, workspaceCode);
+        return ApiResponse.ok(null, "Web UI element page deleted");
+    }
+
+    @GetMapping("/elements/groups")
+    public ApiResponse<PageResponse<WebUiElementGroupItem>> listElementGroups(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestParam(required = false) Long pageId
+    ) {
+        return ApiResponse.ok(webUiAutomationService.listElementGroups(workspaceCode, pageId));
+    }
+
+    @PostMapping("/elements/groups")
+    public ApiResponse<WebUiElementGroupItem> createElementGroup(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody SaveWebUiElementGroupRequest request
+    ) {
+        return ApiResponse.ok(webUiAutomationService.createElementGroup(workspaceCode, request), "Web UI element group created");
+    }
+
+    @PutMapping("/elements/groups/{id}")
+    public ApiResponse<WebUiElementGroupItem> updateElementGroup(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody SaveWebUiElementGroupRequest request
+    ) {
+        return ApiResponse.ok(webUiAutomationService.updateElementGroup(id, workspaceCode, request), "Web UI element group updated");
+    }
+
+    @DeleteMapping("/elements/groups/{id}")
+    public ApiResponse<Void> deleteElementGroup(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        webUiAutomationService.deleteElementGroup(id, workspaceCode);
+        return ApiResponse.ok(null, "Web UI element group deleted");
+    }
+
+    @GetMapping("/elements/{id}")
+    public ApiResponse<WebUiElementItem> getElement(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(webUiAutomationService.getElement(id, workspaceCode));
+    }
+
+    @GetMapping("/elements/{id}/references")
+    public ApiResponse<java.util.List<WebUiElementReferenceItem>> listElementReferences(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(webUiAutomationService.listElementReferences(id, workspaceCode));
+    }
+
+    @PostMapping("/elements/{id}/references/sync-locator")
+    public ApiResponse<WebUiElementReferenceSyncResult> syncElementReferenceLocators(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(webUiAutomationService.syncElementReferenceLocators(id, workspaceCode), "Web UI element references synced");
+    }
+
+    @PostMapping("/elements")
+    public ApiResponse<WebUiElementItem> createElement(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody SaveWebUiElementRequest request
+    ) {
+        return ApiResponse.ok(webUiAutomationService.createElement(workspaceCode, request), "Web UI element created");
+    }
+
+    @PutMapping("/elements/{id}")
+    public ApiResponse<WebUiElementItem> updateElement(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody SaveWebUiElementRequest request
+    ) {
+        return ApiResponse.ok(webUiAutomationService.updateElement(id, workspaceCode, request), "Web UI element updated");
+    }
+
+    @DeleteMapping("/elements/{id}")
+    public ApiResponse<Void> deleteElement(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        webUiAutomationService.deleteElement(id, workspaceCode);
+        return ApiResponse.ok(null, "Web UI element deleted");
+    }
+
+    @PostMapping("/elements/{id}/validate")
+    public ApiResponse<ValidateWebUiLocatorResponse> validateElement(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody ValidateWebUiElementRequest request
+    ) {
+        return ApiResponse.ok(webUiAutomationService.validateElement(id, workspaceCode, request), "Web UI element validated");
+    }
+
     @PostMapping("/cases/{id}/run")
     public ApiResponse<WebUiRunResponse> runCase(
             @PathVariable Long id,

@@ -158,4 +158,29 @@ class WebUiExecutionSupportTests {
         assertThat(masked).containsEntry("USERNAME", "admin");
         assertThat(masked).containsEntry("PASSWORD", "******");
     }
+
+    @Test
+    void buildFailureMessageIncludesStepEvidenceForReadableReports() {
+        WebUiPlaywrightBrowserRunner runner = new WebUiPlaywrightBrowserRunner(locatorSupport);
+        WebUiCaseStepEntity step = new WebUiCaseStepEntity();
+        step.setStepName("Click login");
+        step.setStepType("CLICK");
+        step.setLocatorType("CSS");
+        step.setLocatorValue("#login");
+        step.setInputValue("alice");
+        step.setTimeoutMs(3000);
+        step.setSortOrder(2);
+
+        String message = runner.buildFailureMessage(step, new BadRequestException("Locator not found: #login"));
+
+        assertThat(message)
+                .contains("定位器未找到或不可用")
+                .contains("第 2 步")
+                .contains("Click login")
+                .contains("CLICK")
+                .contains("CSS: #login")
+                .contains("输入/目标：alice")
+                .contains("超时：3000 ms")
+                .contains("Locator not found: #login");
+    }
 }

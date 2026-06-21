@@ -18,6 +18,7 @@ final class WebUiAutomationFormatSupport {
 
     private static final Set<String> BROWSER_TYPES = Set.of("CHROMIUM", "FIREFOX", "WEBKIT");
     private static final Set<String> CASE_STATUSES = Set.of("ENABLED", "DISABLED");
+    private static final Set<String> LOCATOR_TYPES = Set.of("CSS", "TEXT", "ROLE", "PLACEHOLDER", "LABEL", "TEST_ID", "XPATH");
     private static final Set<String> STEP_TYPES = Set.of(
             "OPEN", "CLICK", "FILL", "CLEAR", "WAIT_FOR", "ASSERT_VISIBLE", "ASSERT_TEXT", "SCREENSHOT",
             "HOVER", "DOUBLE_CLICK", "RIGHT_CLICK", "PRESS_KEY", "SELECT", "FILE_UPLOAD",
@@ -47,6 +48,10 @@ final class WebUiAutomationFormatSupport {
 
     static String normalizeStatus(String status) {
         return normalizeAllowed(status, DEFAULT_STATUS, CASE_STATUSES, "Unsupported status: ");
+    }
+
+    static String normalizeLocatorType(String locatorType) {
+        return normalizeAllowed(locatorType, null, LOCATOR_TYPES, "Unsupported locator type: ");
     }
 
     static int normalizeEnvironmentStatus(Integer status) {

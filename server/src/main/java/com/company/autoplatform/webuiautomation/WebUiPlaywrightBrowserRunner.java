@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 @Component
 public class WebUiPlaywrightBrowserRunner implements WebUiBrowserRunner {
@@ -68,7 +69,7 @@ public class WebUiPlaywrightBrowserRunner implements WebUiBrowserRunner {
             }
             return new StepExecutionResult(step, true, elapsedMs(startedAt), null, screenshotBytes);
         } catch (PlaywrightException | BadRequestException | IllegalArgumentException exception) {
-            return new StepExecutionResult(step, false, elapsedMs(startedAt), exception.getMessage(), captureFailureScreenshot(page));
+            return new StepExecutionResult(step, false, elapsedMs(startedAt), buildFailureMessage(step, exception), captureFailureScreenshot(page));
         }
     }
 
@@ -82,21 +83,24 @@ public class WebUiPlaywrightBrowserRunner implements WebUiBrowserRunner {
         String actual = locator(page, step).textContent();
         String expected = requiredInput(step);
         if (actual == null || !actual.contains(expected)) {
-            throw new BadRequestException("Element text does not contain expected value");
+            throw new BadRequestException("Element text does not contain expected value. expected="
+                    + expected + ", actual=" + (actual == null ? "<empty>" : actual));
         }
     }
 
     private void assertUrl(Page page, WebUiCaseStepEntity step) {
         String expected = requiredInput(step);
         if (!page.url().contains(expected)) {
-            throw new BadRequestException("Current URL does not contain expected value");
+            throw new BadRequestException("Current URL does not contain expected value. expected="
+                    + expected + ", actual=" + page.url());
         }
     }
 
     private void assertTitle(Page page, WebUiCaseStepEntity step) {
         String expected = requiredInput(step);
         if (!page.title().contains(expected)) {
-            throw new BadRequestException("Current title does not contain expected value");
+            throw new BadRequestException("Current title does not contain expected value. expected="
+                    + expected + ", actual=" + page.title());
         }
     }
 
@@ -105,15 +109,91 @@ public class WebUiPlaywrightBrowserRunner implements WebUiBrowserRunner {
                 WebUiExecutionEngineSupport.parseAttributeExpectation(requiredInput(step));
         String actual = locator(page, step).getAttribute(expectation.name());
         if (actual == null || !actual.contains(expectation.expectedValue())) {
-            throw new BadRequestException("Element attribute does not contain expected value");
+            throw new BadRequestException("Element attribute does not contain expected value. attribute="
+                    + expectation.name() + ", expected=" + expectation.expectedValue()
+                    + ", actual=" + (actual == null ? "<empty>" : actual));
         }
     }
 
     private void assertCount(Page page, WebUiCaseStepEntity step) {
         int actual = locator(page, step).count();
-        if (!WebUiExecutionEngineSupport.matchesCountExpectation(actual, requiredInput(step))) {
-            throw new BadRequestException("Element count does not match expected value");
+        String expected = requiredInput(step);
+        if (!WebUiExecutionEngineSupport.matchesCountExpectation(actual, expected)) {
+            throw new BadRequestException("Element count does not match expected value. expected="
+                    + expected + ", actual=" + actual);
         }
+    }
+
+    String buildFailureMessage(WebUiCaseStepEntity step, Exception exception) {
+        List<String> parts = new ArrayList<>();
+        parts.add("失败类型：" + classifyFailure(step, exception));
+        parts.add("步骤：" + formatStepLabel(step));
+        String locator = formatLocator(step);
+        if (locator != null) {
+            parts.add("定位器：" + locator);
+        }
+        String inputValue = WebUiAutomationFormatSupport.blankToNull(step == null ? null : step.getInputValue());
+        if (inputValue != null) {
+            parts.add("输入/目标：" + inputValue);
+        }
+        Integer timeoutMs = step == null ? null : step.getTimeoutMs();
+        if (timeoutMs != null && timeoutMs > 0) {
+            parts.add("超时：" + timeoutMs + " ms");
+        }
+        String rawMessage = WebUiAutomationFormatSupport.blankToNull(exception == null ? null : exception.getMessage());
+        if (rawMessage != null) {
+            parts.add("原始错误：" + rawMessage);
+        }
+        return String.join("；", parts);
+    }
+
+    private String classifyFailure(WebUiCaseStepEntity step, Exception exception) {
+        String stepType = step == null ? "" : String.valueOf(step.getStepType()).toUpperCase(Locale.ROOT);
+        String message = exception == null || exception.getMessage() == null
+                ? ""
+                : exception.getMessage().toLowerCase(Locale.ROOT);
+        if ("OPEN".equals(stepType)) {
+            return "页面打开失败";
+        }
+        if (stepType.startsWith("ASSERT_") || message.contains("expected") || message.contains("assert")) {
+            return "断言失败";
+        }
+        if (message.contains("timeout") || message.contains("timed out")) {
+            return "等待超时";
+        }
+        if (message.contains("locator")
+                || message.contains("strict mode violation")
+                || message.contains("element is not visible")
+                || WebUiAutomationFormatSupport.blankToNull(step == null ? null : step.getLocatorValue()) != null) {
+            return "定位器未找到或不可用";
+        }
+        return "执行异常";
+    }
+
+    private String formatStepLabel(WebUiCaseStepEntity step) {
+        if (step == null) {
+            return "-";
+        }
+        StringBuilder builder = new StringBuilder();
+        if (step.getSortOrder() != null) {
+            builder.append("第 ").append(step.getSortOrder()).append(" 步 ");
+        }
+        String stepName = WebUiAutomationFormatSupport.blankToNull(step.getStepName());
+        if (stepName != null) {
+            builder.append(stepName);
+        } else {
+            builder.append("未命名步骤");
+        }
+        builder.append("（").append(WebUiAutomationFormatSupport.blankToNull(step.getStepType()) == null ? "-" : step.getStepType()).append("）");
+        return builder.toString();
+    }
+
+    private String formatLocator(WebUiCaseStepEntity step) {
+        if (step == null || WebUiAutomationFormatSupport.blankToNull(step.getLocatorValue()) == null) {
+            return null;
+        }
+        String locatorType = WebUiAutomationFormatSupport.blankToNull(step.getLocatorType());
+        return (locatorType == null ? "-" : locatorType) + ": " + step.getLocatorValue();
     }
 
     private Locator locator(Page page, WebUiCaseStepEntity step) {

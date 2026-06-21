@@ -31,6 +31,7 @@ public final class WebUiAutomationModels {
     public record SaveWebUiCaseStepRequest(
             @NotBlank(message = "Step name cannot be blank") String stepName,
             String stepType,
+            Long elementId,
             String locatorType,
             String locatorValue,
             String inputValue,
@@ -86,6 +87,8 @@ public final class WebUiAutomationModels {
             Long caseId,
             String stepName,
             String stepType,
+            Long elementId,
+            String elementName,
             String locatorType,
             String locatorValue,
             String inputValue,
@@ -159,6 +162,8 @@ public final class WebUiAutomationModels {
             Long templateId,
             String stepName,
             String stepType,
+            Long elementId,
+            String elementName,
             String locatorType,
             String locatorValue,
             String inputValue,
@@ -270,6 +275,253 @@ public final class WebUiAutomationModels {
             Integer matchCount,
             String errorMessage,
             String screenshotBase64
+    ) {
+    }
+
+    public record SaveWebUiElementRequest(
+            String workspaceCode,
+            Long pageId,
+            Long groupId,
+            @NotBlank(message = "Page name cannot be blank") String pageName,
+            String groupName,
+            @NotBlank(message = "Element name cannot be blank") String elementName,
+            @NotBlank(message = "Locator type cannot be blank") String locatorType,
+            @NotBlank(message = "Locator value cannot be blank") String locatorValue,
+            String description,
+            String status
+    ) {
+    }
+
+    public record ValidateWebUiElementRequest(
+            @NotBlank(message = "Base URL cannot be blank") String baseUrl,
+            String browserType,
+            Boolean headless,
+            Integer timeoutMs
+    ) {
+    }
+
+    public record BatchUpdateWebUiElementStatusRequest(
+            List<Long> elementIds,
+            @NotBlank(message = "Status cannot be blank") String status
+    ) {
+    }
+
+    public record BatchMoveWebUiElementRequest(
+            List<Long> elementIds,
+            Long pageId,
+            Long groupId
+    ) {
+    }
+
+    public record BatchDeleteWebUiElementRequest(
+            List<Long> elementIds
+    ) {
+    }
+
+    public record BatchValidateWebUiElementRequest(
+            List<Long> elementIds,
+            @NotBlank(message = "Base URL cannot be blank") String baseUrl,
+            String browserType,
+            Boolean headless,
+            Integer timeoutMs
+    ) {
+    }
+
+    public record WebUiElementBatchResult(
+            Integer requestedCount,
+            Integer updatedCount,
+            Integer deletedCount,
+            Integer blockedCount,
+            List<WebUiElementBatchBlockedItem> blockedItems
+    ) {
+    }
+
+    public record WebUiElementBatchBlockedItem(
+            Long elementId,
+            String elementName,
+            Integer usageCount,
+            String reason
+    ) {
+    }
+
+    public record WebUiElementBatchValidateResult(
+            Integer totalCount,
+            Integer passedCount,
+            Integer failedCount,
+            List<WebUiElementValidateResultItem> results
+    ) {
+    }
+
+    public record WebUiElementValidateResultItem(
+            Long elementId,
+            String elementName,
+            Boolean matched,
+            Integer matchCount,
+            String errorMessage,
+            String screenshotBase64
+    ) {
+    }
+
+    public record WebUiElementQualityCheckResult(
+            Integer totalElements,
+            Integer highRiskCount,
+            Integer mediumRiskCount,
+            Integer lowRiskCount,
+            List<WebUiElementQualityIssue> issues
+    ) {
+    }
+
+    public record WebUiElementQualityIssue(
+            String id,
+            String level,
+            String title,
+            String description,
+            Long elementId,
+            String elementName,
+            Long pageId,
+            Long groupId,
+            String pageName,
+            String groupName,
+            String locatorType,
+            String locatorValue,
+            Integer usageCount,
+            String lastValidateResult,
+            LocalDateTime lastValidateAt
+    ) {
+    }
+
+    public record WebUiElementItem(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            Long pageId,
+            Long groupId,
+            String pageName,
+            String groupName,
+            String elementName,
+            String locatorType,
+            String locatorValue,
+            String description,
+            String status,
+            String lastValidateResult,
+            LocalDateTime lastValidateAt,
+            String lastValidateMessage,
+            Integer lastMatchCount,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt,
+            Integer usageCount
+    ) {
+    }
+
+    public record WebUiElementReferenceItem(
+            String sourceType,
+            Long sourceId,
+            String sourceName,
+            String moduleName,
+            Long stepId,
+            String stepName,
+            String stepType,
+            String locatorType,
+            String locatorValue,
+            Boolean enabled,
+            Integer sortOrder,
+            LocalDateTime updatedAt
+    ) {
+    }
+
+    public record WebUiElementReferenceSyncResult(
+            Integer caseStepCount,
+            Integer templateStepCount,
+            Integer totalCount
+    ) {
+    }
+
+    public record SaveWebUiElementPageRequest(
+            String workspaceCode,
+            Long moduleId,
+            String moduleName,
+            @NotBlank(message = "Page name cannot be blank") String pageName,
+            String pagePath,
+            String description,
+            Integer sortOrder,
+            String status
+    ) {
+    }
+
+    public record SaveWebUiElementGroupRequest(
+            String workspaceCode,
+            Long pageId,
+            @NotBlank(message = "Group name cannot be blank") String groupName,
+            String description,
+            Integer sortOrder,
+            String status
+    ) {
+    }
+
+    public record SaveWebUiElementModuleRequest(
+            String workspaceCode,
+            @NotBlank(message = "Module name cannot be blank") String moduleName,
+            String description,
+            Integer sortOrder,
+            String status
+    ) {
+    }
+
+    public record WebUiElementPageItem(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            Long moduleId,
+            String moduleName,
+            String pageName,
+            String pagePath,
+            String description,
+            Integer sortOrder,
+            String status,
+            Integer groupCount,
+            Integer elementCount,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt
+    ) {
+    }
+
+    public record WebUiElementModuleItem(
+            Long id,
+            String workspaceCode,
+            String workspaceName,
+            String moduleName,
+            String description,
+            Integer sortOrder,
+            String status,
+            Integer pageCount,
+            Integer elementCount,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt
+    ) {
+    }
+
+    public record WebUiElementGroupItem(
+            Long id,
+            Long pageId,
+            String workspaceCode,
+            String workspaceName,
+            String groupName,
+            String description,
+            Integer sortOrder,
+            String status,
+            Integer elementCount,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt
+    ) {
+    }
+
+    public record WebUiElementTreeNode(
+            String id,
+            Long rawId,
+            String type,
+            String label,
+            Integer elementCount,
+            List<WebUiElementTreeNode> children
     ) {
     }
 

@@ -14,6 +14,7 @@ public class ApiAutomationService {
     private final ApiDefinitionDomainService definitionDomainService;
     private final ApiCaseDomainService caseDomainService;
     private final ApiScenarioDomainService scenarioDomainService;
+    private final ApiExecutionSuiteDomainService executionSuiteDomainService;
     private final ApiConfigDomainService configDomainService;
     private final ApiRunHistoryDomainService runHistoryDomainService;
     private final ObjectProvider<ApiExecutionDomainService> executionDomainServiceProvider;
@@ -22,6 +23,7 @@ public class ApiAutomationService {
             ApiDefinitionDomainService definitionDomainService,
             ApiCaseDomainService caseDomainService,
             ApiScenarioDomainService scenarioDomainService,
+            ApiExecutionSuiteDomainService executionSuiteDomainService,
             ApiConfigDomainService configDomainService,
             ApiRunHistoryDomainService runHistoryDomainService,
             ObjectProvider<ApiExecutionDomainService> executionDomainServiceProvider
@@ -29,6 +31,7 @@ public class ApiAutomationService {
         this.definitionDomainService = definitionDomainService;
         this.caseDomainService = caseDomainService;
         this.scenarioDomainService = scenarioDomainService;
+        this.executionSuiteDomainService = executionSuiteDomainService;
         this.configDomainService = configDomainService;
         this.runHistoryDomainService = runHistoryDomainService;
         this.executionDomainServiceProvider = executionDomainServiceProvider;
@@ -147,6 +150,85 @@ public class ApiAutomationService {
 
     public void deleteScenarioModule(Long id, String workspaceCode) {
         scenarioDomainService.deleteScenarioModule(id, workspaceCode);
+    }
+
+    public List<ApiExecutionSuiteModuleItem> listExecutionSuiteModules(String workspaceCode) {
+        return executionSuiteDomainService.listSuiteModules(workspaceCode);
+    }
+
+    public ApiExecutionSuiteModuleItem createExecutionSuiteModule(String headerWorkspaceCode, ApiExecutionSuiteModuleRequest request) {
+        return executionSuiteDomainService.createSuiteModule(headerWorkspaceCode, request);
+    }
+
+    public ApiExecutionSuiteModuleItem updateExecutionSuiteModule(Long id, String workspaceCode, ApiExecutionSuiteModuleRequest request) {
+        return executionSuiteDomainService.updateSuiteModule(id, workspaceCode, request);
+    }
+
+    public ApiExecutionSuiteModuleItem moveExecutionSuiteModule(Long id, String workspaceCode, MoveApiExecutionSuiteModuleRequest request) {
+        return executionSuiteDomainService.moveSuiteModule(id, workspaceCode, request);
+    }
+
+    public void deleteExecutionSuiteModule(Long id, String workspaceCode) {
+        executionSuiteDomainService.deleteSuiteModule(id, workspaceCode);
+    }
+
+    public PageResponse<ApiExecutionSuiteItem> listExecutionSuites(
+            String workspaceCode,
+            Long moduleId,
+            String keyword,
+            Integer pageNo,
+            Integer pageSize
+    ) {
+        return executionSuiteDomainService.listSuites(workspaceCode, moduleId, keyword, pageNo, pageSize);
+    }
+
+    public ApiExecutionSuiteDetail getExecutionSuite(Long id, String workspaceCode) {
+        return executionSuiteDomainService.getSuite(id, workspaceCode);
+    }
+
+    public ApiExecutionSuiteDetail createExecutionSuite(String headerWorkspaceCode, SaveApiExecutionSuiteRequest request) {
+        return executionSuiteDomainService.createSuite(headerWorkspaceCode, request);
+    }
+
+    public ApiExecutionSuiteDetail updateExecutionSuite(Long id, String headerWorkspaceCode, SaveApiExecutionSuiteRequest request) {
+        return executionSuiteDomainService.updateSuite(id, headerWorkspaceCode, request);
+    }
+
+    public void deleteExecutionSuite(Long id, String workspaceCode) {
+        executionSuiteDomainService.deleteSuite(id, workspaceCode);
+    }
+
+    public List<ApiExecutionSuiteItemDetail> listExecutionSuiteItems(Long suiteId, String workspaceCode) {
+        return executionSuiteDomainService.listSuiteItems(suiteId, workspaceCode);
+    }
+
+    public ApiExecutionSuiteItemDetail addExecutionSuiteItem(Long suiteId, String workspaceCode, ApiExecutionSuiteItemRequest request) {
+        return executionSuiteDomainService.addSuiteItem(suiteId, workspaceCode, request);
+    }
+
+    public List<ApiExecutionSuiteItemDetail> reorderExecutionSuiteItems(Long suiteId, String workspaceCode, ApiExecutionSuiteItemOrderRequest request) {
+        return executionSuiteDomainService.reorderSuiteItems(suiteId, workspaceCode, request);
+    }
+
+    public void deleteExecutionSuiteItem(Long suiteId, Long itemId, String workspaceCode) {
+        executionSuiteDomainService.deleteSuiteItem(suiteId, itemId, workspaceCode);
+    }
+
+    public ApiRunResponse runExecutionSuite(Long suiteId, String workspaceCode, ApiRunRequest request) {
+        return executionSuiteDomainService.runSuite(suiteId, workspaceCode, request);
+    }
+
+    public PageResponse<ApiExecutionSuiteRunHistoryItem> listExecutionSuiteRunHistory(
+            Long suiteId,
+            String workspaceCode,
+            Integer pageNo,
+            Integer pageSize
+    ) {
+        return executionSuiteDomainService.listSuiteRunHistory(suiteId, workspaceCode, pageNo, pageSize);
+    }
+
+    public ApiExecutionSuiteRunHistoryDetail getExecutionSuiteRunHistoryDetail(Long historyId, String workspaceCode) {
+        return executionSuiteDomainService.getSuiteRunHistoryDetail(historyId, workspaceCode);
     }
 
     public ApiScenarioDetail getScenario(Long id, String workspaceCode) {

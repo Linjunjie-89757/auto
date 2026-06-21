@@ -20,6 +20,9 @@ public class WebUiCaseTemplateStepEntity extends BaseEntity {
     @TableField("step_type")
     private String stepType;
 
+    @TableField("element_id")
+    private Long elementId;
+
     @TableField("locator_type")
     private String locatorType;
 

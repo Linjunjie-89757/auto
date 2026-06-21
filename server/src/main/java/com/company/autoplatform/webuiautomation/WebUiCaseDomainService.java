@@ -22,17 +22,20 @@ public class WebUiCaseDomainService {
 
     private final WebUiCaseMapper caseMapper;
     private final WebUiCaseStepMapper stepMapper;
+    private final WebUiElementMapper elementMapper;
     private final WorkspaceService workspaceService;
     private final ApiWorkspaceScopeSupport workspaceScopeSupport;
 
     public WebUiCaseDomainService(
             WebUiCaseMapper caseMapper,
             WebUiCaseStepMapper stepMapper,
+            WebUiElementMapper elementMapper,
             WorkspaceService workspaceService,
             ApiWorkspaceScopeSupport workspaceScopeSupport
     ) {
         this.caseMapper = caseMapper;
         this.stepMapper = stepMapper;
+        this.elementMapper = elementMapper;
         this.workspaceService = workspaceService;
         this.workspaceScopeSupport = workspaceScopeSupport;
     }
@@ -150,10 +153,12 @@ public class WebUiCaseDomainService {
         String locatorType = blankToNull(request.locatorType());
         String locatorValue = blankToNull(request.locatorValue());
         String inputValue = blankToNull(request.inputValue());
+        Long elementId = validateElementReference(caseId, request.elementId());
         validateStepRequirements(stepType, locatorType, locatorValue, inputValue);
         entity.setCaseId(caseId);
         entity.setStepName(request.stepName().trim());
         entity.setStepType(stepType);
+        entity.setElementId(elementId);
         entity.setLocatorType(locatorType);
         entity.setLocatorValue(locatorValue);
         entity.setInputValue(inputValue);
@@ -166,6 +171,18 @@ public class WebUiCaseDomainService {
 
     private void deleteSteps(Long caseId) {
         stepMapper.delete(new LambdaQueryWrapper<WebUiCaseStepEntity>().eq(WebUiCaseStepEntity::getCaseId, caseId));
+    }
+
+    private Long validateElementReference(Long caseId, Long elementId) {
+        if (elementId == null) {
+            return null;
+        }
+        WebUiCaseEntity webUiCase = requireCase(caseId);
+        WebUiElementEntity element = elementMapper.selectById(elementId);
+        if (element == null || !element.getWorkspaceId().equals(webUiCase.getWorkspaceId())) {
+            throw new BadRequestException("Referenced web UI element does not exist in current workspace");
+        }
+        return elementId;
     }
 
     private WebUiCaseEntity requireCase(Long id) {
@@ -241,6 +258,8 @@ public class WebUiCaseDomainService {
                 entity.getCaseId(),
                 entity.getStepName(),
                 entity.getStepType(),
+                entity.getElementId(),
+                getElementName(entity.getElementId()),
                 entity.getLocatorType(),
                 entity.getLocatorValue(),
                 entity.getInputValue(),
@@ -250,6 +269,14 @@ public class WebUiCaseDomainService {
                 entity.getEnabled(),
                 entity.getSortOrder()
         );
+    }
+
+    private String getElementName(Long elementId) {
+        if (elementId == null) {
+            return null;
+        }
+        WebUiElementEntity element = elementMapper.selectById(elementId);
+        return element == null ? null : element.getElementName();
     }
 
     private int safePageNo(Integer pageNo) {

@@ -22,6 +22,7 @@ public class WebUiCaseTemplateDomainService {
 
     private final WebUiCaseTemplateMapper templateMapper;
     private final WebUiCaseTemplateStepMapper templateStepMapper;
+    private final WebUiElementMapper elementMapper;
     private final WebUiCaseDomainService caseDomainService;
     private final WorkspaceService workspaceService;
     private final ApiWorkspaceScopeSupport workspaceScopeSupport;
@@ -29,12 +30,14 @@ public class WebUiCaseTemplateDomainService {
     public WebUiCaseTemplateDomainService(
             WebUiCaseTemplateMapper templateMapper,
             WebUiCaseTemplateStepMapper templateStepMapper,
+            WebUiElementMapper elementMapper,
             WebUiCaseDomainService caseDomainService,
             WorkspaceService workspaceService,
             ApiWorkspaceScopeSupport workspaceScopeSupport
     ) {
         this.templateMapper = templateMapper;
         this.templateStepMapper = templateStepMapper;
+        this.elementMapper = elementMapper;
         this.caseDomainService = caseDomainService;
         this.workspaceService = workspaceService;
         this.workspaceScopeSupport = workspaceScopeSupport;
@@ -179,10 +182,12 @@ public class WebUiCaseTemplateDomainService {
         String locatorType = blankToNull(request.locatorType());
         String locatorValue = blankToNull(request.locatorValue());
         String inputValue = blankToNull(request.inputValue());
+        Long elementId = validateElementReference(templateId, request.elementId());
         validateStepRequirements(stepType, locatorType, locatorValue, inputValue);
         entity.setTemplateId(templateId);
         entity.setStepName(request.stepName().trim());
         entity.setStepType(stepType);
+        entity.setElementId(elementId);
         entity.setLocatorType(locatorType);
         entity.setLocatorValue(locatorValue);
         entity.setInputValue(inputValue);
@@ -197,6 +202,7 @@ public class WebUiCaseTemplateDomainService {
         return new SaveWebUiCaseStepRequest(
                 step.stepName(),
                 step.stepType(),
+                step.elementId(),
                 step.locatorType(),
                 step.locatorValue(),
                 step.inputValue(),
@@ -211,6 +217,18 @@ public class WebUiCaseTemplateDomainService {
     private void deleteSteps(Long templateId) {
         templateStepMapper.delete(new LambdaQueryWrapper<WebUiCaseTemplateStepEntity>()
                 .eq(WebUiCaseTemplateStepEntity::getTemplateId, templateId));
+    }
+
+    private Long validateElementReference(Long templateId, Long elementId) {
+        if (elementId == null) {
+            return null;
+        }
+        WebUiCaseTemplateEntity template = requireTemplate(templateId);
+        WebUiElementEntity element = elementMapper.selectById(elementId);
+        if (element == null || !element.getWorkspaceId().equals(template.getWorkspaceId())) {
+            throw new BadRequestException("Referenced web UI element does not exist in current workspace");
+        }
+        return elementId;
     }
 
     private WebUiCaseTemplateEntity requireTemplate(Long id) {
@@ -283,6 +301,8 @@ public class WebUiCaseTemplateDomainService {
                 entity.getTemplateId(),
                 entity.getStepName(),
                 entity.getStepType(),
+                entity.getElementId(),
+                getElementName(entity.getElementId()),
                 entity.getLocatorType(),
                 entity.getLocatorValue(),
                 entity.getInputValue(),
@@ -292,6 +312,14 @@ public class WebUiCaseTemplateDomainService {
                 entity.getEnabled(),
                 entity.getSortOrder()
         );
+    }
+
+    private String getElementName(Long elementId) {
+        if (elementId == null) {
+            return null;
+        }
+        WebUiElementEntity element = elementMapper.selectById(elementId);
+        return element == null ? null : element.getElementName();
     }
 
     private int safePageNo(Integer pageNo) {

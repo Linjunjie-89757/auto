@@ -294,6 +294,157 @@ public class ApiAutomationController {
         return ApiResponse.ok(null, "Scenario module deleted");
     }
 
+    @GetMapping("/execution-suite-modules")
+    public ApiResponse<List<ApiExecutionSuiteModuleItem>> listExecutionSuiteModules(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(apiAutomationService.listExecutionSuiteModules(workspaceCode));
+    }
+
+    @PostMapping("/execution-suite-modules")
+    public ApiResponse<ApiExecutionSuiteModuleItem> createExecutionSuiteModule(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody ApiExecutionSuiteModuleRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.createExecutionSuiteModule(workspaceCode, request), "Execution suite module created");
+    }
+
+    @PutMapping("/execution-suite-modules/{id}")
+    public ApiResponse<ApiExecutionSuiteModuleItem> updateExecutionSuiteModule(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody ApiExecutionSuiteModuleRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.updateExecutionSuiteModule(id, workspaceCode, request), "Execution suite module updated");
+    }
+
+    @PutMapping("/execution-suite-modules/{id}/move")
+    public ApiResponse<ApiExecutionSuiteModuleItem> moveExecutionSuiteModule(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestBody MoveApiExecutionSuiteModuleRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.moveExecutionSuiteModule(id, workspaceCode, request), "Execution suite module moved");
+    }
+
+    @DeleteMapping("/execution-suite-modules/{id}")
+    public ApiResponse<Void> deleteExecutionSuiteModule(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        apiAutomationService.deleteExecutionSuiteModule(id, workspaceCode);
+        return ApiResponse.ok(null, "Execution suite module deleted");
+    }
+
+    @GetMapping("/execution-suites")
+    public ApiResponse<PageResponse<ApiExecutionSuiteItem>> listExecutionSuites(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestParam(required = false) Long moduleId,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Integer pageNo,
+            @RequestParam(required = false) Integer pageSize
+    ) {
+        return ApiResponse.ok(apiAutomationService.listExecutionSuites(workspaceCode, moduleId, keyword, pageNo, pageSize));
+    }
+
+    @GetMapping("/execution-suites/{id}")
+    public ApiResponse<ApiExecutionSuiteDetail> getExecutionSuite(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(apiAutomationService.getExecutionSuite(id, workspaceCode));
+    }
+
+    @PostMapping("/execution-suites")
+    public ApiResponse<ApiExecutionSuiteDetail> createExecutionSuite(
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody SaveApiExecutionSuiteRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.createExecutionSuite(workspaceCode, request), "Execution suite created");
+    }
+
+    @PutMapping("/execution-suites/{id}")
+    public ApiResponse<ApiExecutionSuiteDetail> updateExecutionSuite(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody SaveApiExecutionSuiteRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.updateExecutionSuite(id, workspaceCode, request), "Execution suite updated");
+    }
+
+    @DeleteMapping("/execution-suites/{id}")
+    public ApiResponse<Void> deleteExecutionSuite(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        apiAutomationService.deleteExecutionSuite(id, workspaceCode);
+        return ApiResponse.ok(null, "Execution suite deleted");
+    }
+
+    @GetMapping("/execution-suites/{id}/items")
+    public ApiResponse<List<ApiExecutionSuiteItemDetail>> listExecutionSuiteItems(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(apiAutomationService.listExecutionSuiteItems(id, workspaceCode));
+    }
+
+    @PostMapping("/execution-suites/{id}/items")
+    public ApiResponse<ApiExecutionSuiteItemDetail> addExecutionSuiteItem(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @Valid @RequestBody ApiExecutionSuiteItemRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.addExecutionSuiteItem(id, workspaceCode, request), "Execution suite item added");
+    }
+
+    @PutMapping("/execution-suites/{id}/items/reorder")
+    public ApiResponse<List<ApiExecutionSuiteItemDetail>> reorderExecutionSuiteItems(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestBody ApiExecutionSuiteItemOrderRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.reorderExecutionSuiteItems(id, workspaceCode, request), "Execution suite items reordered");
+    }
+
+    @DeleteMapping("/execution-suites/{suiteId}/items/{itemId}")
+    public ApiResponse<Void> deleteExecutionSuiteItem(
+            @PathVariable Long suiteId,
+            @PathVariable Long itemId,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        apiAutomationService.deleteExecutionSuiteItem(suiteId, itemId, workspaceCode);
+        return ApiResponse.ok(null, "Execution suite item deleted");
+    }
+
+    @PostMapping("/execution-suites/{id}/run")
+    public ApiResponse<ApiRunResponse> runExecutionSuite(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestBody(required = false) ApiRunRequest request
+    ) {
+        return ApiResponse.ok(apiAutomationService.runExecutionSuite(id, workspaceCode,
+                request == null ? new ApiRunRequest(null, null, null) : request));
+    }
+
+    @GetMapping("/execution-suites/{id}/run-history")
+    public ApiResponse<PageResponse<ApiExecutionSuiteRunHistoryItem>> listExecutionSuiteRunHistory(
+            @PathVariable Long id,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode,
+            @RequestParam(required = false) Integer pageNo,
+            @RequestParam(required = false) Integer pageSize
+    ) {
+        return ApiResponse.ok(apiAutomationService.listExecutionSuiteRunHistory(id, workspaceCode, pageNo, pageSize));
+    }
+
+    @GetMapping("/execution-suites/run-history/{historyId}")
+    public ApiResponse<ApiExecutionSuiteRunHistoryDetail> getExecutionSuiteRunHistoryDetail(
+            @PathVariable Long historyId,
+            @RequestHeader(value = WorkspaceScope.HEADER, required = false) String workspaceCode
+    ) {
+        return ApiResponse.ok(apiAutomationService.getExecutionSuiteRunHistoryDetail(historyId, workspaceCode));
+    }
+
     @GetMapping("/scenarios/{id}")
     public ApiResponse<ApiScenarioDetail> getScenario(
             @PathVariable Long id,

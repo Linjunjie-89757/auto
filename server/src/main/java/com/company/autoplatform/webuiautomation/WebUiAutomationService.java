@@ -13,6 +13,7 @@ public class WebUiAutomationService {
 
     private final WebUiCaseDomainService caseDomainService;
     private final WebUiCaseTemplateDomainService templateDomainService;
+    private final WebUiElementDomainService elementDomainService;
     private final WebUiEnvironmentDomainService environmentDomainService;
     private final WebUiExecutionDomainService executionDomainService;
     private final WebUiCiTokenDomainService ciTokenDomainService;
@@ -22,6 +23,7 @@ public class WebUiAutomationService {
     public WebUiAutomationService(
             WebUiCaseDomainService caseDomainService,
             WebUiCaseTemplateDomainService templateDomainService,
+            WebUiElementDomainService elementDomainService,
             WebUiEnvironmentDomainService environmentDomainService,
             WebUiExecutionDomainService executionDomainService,
             WebUiCiTokenDomainService ciTokenDomainService,
@@ -30,6 +32,7 @@ public class WebUiAutomationService {
     ) {
         this.caseDomainService = caseDomainService;
         this.templateDomainService = templateDomainService;
+        this.elementDomainService = elementDomainService;
         this.environmentDomainService = environmentDomainService;
         this.executionDomainService = executionDomainService;
         this.ciTokenDomainService = ciTokenDomainService;
@@ -93,6 +96,124 @@ public class WebUiAutomationService {
 
     public void deleteTemplate(Long id, String workspaceCode) {
         templateDomainService.deleteTemplate(id, workspaceCode);
+    }
+
+    public PageResponse<WebUiElementItem> listElements(
+            String workspaceCode,
+            String keyword,
+            Long moduleId,
+            Long pageId,
+            Long groupId,
+            String pageName,
+            String groupName,
+            String status,
+            Integer pageNo,
+            Integer pageSize
+    ) {
+        return elementDomainService.listElements(workspaceCode, keyword, moduleId, pageId, groupId, pageName, groupName, status, pageNo, pageSize);
+    }
+
+    public WebUiElementQualityCheckResult checkElementQuality(
+            String workspaceCode,
+            String keyword,
+            Long moduleId,
+            Long pageId,
+            Long groupId,
+            String pageName,
+            String groupName,
+            String status,
+            Integer pageNo,
+            Integer pageSize
+    ) {
+        return elementDomainService.checkElementQuality(workspaceCode, keyword, moduleId, pageId, groupId, pageName, groupName, status, pageNo, pageSize);
+    }
+
+    public WebUiElementBatchResult batchUpdateElementStatus(String workspaceCode, BatchUpdateWebUiElementStatusRequest request) {
+        return elementDomainService.batchUpdateStatus(workspaceCode, request);
+    }
+
+    public WebUiElementBatchResult batchMoveElements(String workspaceCode, BatchMoveWebUiElementRequest request) {
+        return elementDomainService.batchMoveElements(workspaceCode, request);
+    }
+
+    public WebUiElementBatchResult batchDeleteElements(String workspaceCode, BatchDeleteWebUiElementRequest request) {
+        return elementDomainService.batchDeleteElements(workspaceCode, request);
+    }
+
+    public WebUiElementBatchValidateResult batchValidateElements(String workspaceCode, BatchValidateWebUiElementRequest request) {
+        return elementDomainService.batchValidateElements(workspaceCode, request);
+    }
+
+    public PageResponse<WebUiElementPageItem> listElementPages(String workspaceCode) {
+        return elementDomainService.listPages(workspaceCode);
+    }
+
+    public PageResponse<WebUiElementModuleItem> listElementModules(String workspaceCode) {
+        return elementDomainService.listModules(workspaceCode);
+    }
+
+    public PageResponse<WebUiElementGroupItem> listElementGroups(String workspaceCode, Long pageId) {
+        return elementDomainService.listGroups(workspaceCode, pageId);
+    }
+
+    public java.util.List<WebUiElementTreeNode> getElementTree(String workspaceCode) {
+        return elementDomainService.getElementTree(workspaceCode);
+    }
+
+    public WebUiElementPageItem createElementPage(String workspaceCode, SaveWebUiElementPageRequest request) {
+        return elementDomainService.createPage(workspaceCode, request);
+    }
+
+    public WebUiElementModuleItem createElementModule(String workspaceCode, SaveWebUiElementModuleRequest request) {
+        return elementDomainService.createModule(workspaceCode, request);
+    }
+
+    public WebUiElementPageItem updateElementPage(Long id, String workspaceCode, SaveWebUiElementPageRequest request) {
+        return elementDomainService.updatePage(id, workspaceCode, request);
+    }
+
+    public void deleteElementPage(Long id, String workspaceCode) {
+        elementDomainService.deletePage(id, workspaceCode);
+    }
+
+    public WebUiElementGroupItem createElementGroup(String workspaceCode, SaveWebUiElementGroupRequest request) {
+        return elementDomainService.createGroup(workspaceCode, request);
+    }
+
+    public WebUiElementGroupItem updateElementGroup(Long id, String workspaceCode, SaveWebUiElementGroupRequest request) {
+        return elementDomainService.updateGroup(id, workspaceCode, request);
+    }
+
+    public void deleteElementGroup(Long id, String workspaceCode) {
+        elementDomainService.deleteGroup(id, workspaceCode);
+    }
+
+    public WebUiElementItem getElement(Long id, String workspaceCode) {
+        return elementDomainService.getElement(id, workspaceCode);
+    }
+
+    public java.util.List<WebUiElementReferenceItem> listElementReferences(Long id, String workspaceCode) {
+        return elementDomainService.listElementReferences(id, workspaceCode);
+    }
+
+    public WebUiElementReferenceSyncResult syncElementReferenceLocators(Long id, String workspaceCode) {
+        return elementDomainService.syncElementReferenceLocators(id, workspaceCode);
+    }
+
+    public WebUiElementItem createElement(String workspaceCode, SaveWebUiElementRequest request) {
+        return elementDomainService.createElement(workspaceCode, request);
+    }
+
+    public WebUiElementItem updateElement(Long id, String workspaceCode, SaveWebUiElementRequest request) {
+        return elementDomainService.updateElement(id, workspaceCode, request);
+    }
+
+    public void deleteElement(Long id, String workspaceCode) {
+        elementDomainService.deleteElement(id, workspaceCode);
+    }
+
+    public ValidateWebUiLocatorResponse validateElement(Long id, String workspaceCode, ValidateWebUiElementRequest request) {
+        return elementDomainService.validateElement(id, workspaceCode, request);
     }
 
     public WebUiRunResponse runCase(Long id, String workspaceCode, WebUiRunRequest request) {
